@@ -1,0 +1,95 @@
+/* Dark Modern Theme - Kaggle Automation Dashboard */
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+  --bg-primary: #0a0d14;
+  --bg-secondary: #101522;
+  --bg-card: #151b2d;
+  --bg-card-hover: #1b233a;
+  --border-color: #242f49;
+  --accent-cyan: #00f2fe;
+  --accent-blue: #4facfe;
+  --accent-emerald: #10b981;
+  --accent-amber: #f59e0b;
+  --accent-rose: #f43f5e;
+  --accent-purple: #8b5cf6;
+}
+
+body {
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  background-color: var(--bg-primary);
+  color: #e2e8f0;
+}
+
+code, pre, .terminal-font {
+  font-family: 'JetBrains Mono', monospace;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #0d121f;
+}
+::-webkit-scrollbar-thumb {
+  background: #242f49;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3b4d75;
+}
+
+/* Glassmorphism Card */
+.glass-panel {
+  background: rgba(21, 27, 45, 0.85);
+  backdrop-filter: blur(12px);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+.glass-card {
+  background: #141a2c;
+  border: 1px solid #232c45;
+  transition: all 0.2s ease-in-out;
+}
+
+.glass-card:hover {
+  border-color: #3e4e7a;
+  box-shadow: 0 4px 20px rgba(0, 242, 254, 0.08);
+}
+
+/* Glowing text and borders */
+.glow-cyan {
+  box-shadow: 0 0 15px rgba(0, 242, 254, 0.3);
+}
+
+.glow-emerald {
+  box-shadow: 0 0 15px rgba(16, 185, 129, 0.3);
+}
+
+/* Pulse animation for active running badges */
+@keyframes pulse-ring {
+  0% { transform: scale(0.95); opacity: 0.8; }
+  50% { transform: scale(1.15); opacity: 0.4; }
+  100% { transform: scale(0.95); opacity: 0.8; }
+}
+
+.pulsing-dot {
+  animation: pulse-ring 2s infinite ease-in-out;
+}
+
+/* Log Terminal */
+.terminal-window {
+  background-color: #060911;
+  border: 1px solid #1e293b;
+  color: #38bdf8;
+}
+
+/* Tab Active State */
+.nav-tab.active {
+  background: linear-gradient(135deg, rgba(79, 172, 254, 0.15), rgba(0, 242, 254, 0.15));
+  border-color: #38bdf8;
+  color: #38bdf8;
+}
