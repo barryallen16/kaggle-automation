@@ -129,10 +129,23 @@ class KaggleService:
             status = "error" if is_error else "queued"
             status_msg = err_str if is_error else out_str.strip()
 
+            # Parse real Kaggle URL, username, and slug from push output if available
+            url_match = re.search(r'https?://(?:www\.)?kaggle\.com/code/([a-zA-Z0-9_\-]+)/([a-zA-Z0-9_\-]+)', out_str)
+            if url_match:
+                real_username = url_match.group(1)
+                real_slug = url_match.group(2)
+                kernel_ref = f"{real_username}/{real_slug}"
+                kaggle_url = f"https://www.kaggle.com/code/{kernel_ref}"
+                # Auto-correct account username in DB if it was mismatched
+                if real_username != account_username:
+                    logger.info(f"Auto-corrected account username from {account_username} to {real_username}")
+                    AccountManager.update_username(account_username, real_username)
+                    account_username = real_username
+
             run_record = {
                 "id": run_id,
                 "account_username": account_username,
-                "kernel_slug": slug,
+                "kernel_slug": slug if not url_match else real_slug,
                 "kernel_ref": kernel_ref,
                 "title": title,
                 "code_file": str(code_path),

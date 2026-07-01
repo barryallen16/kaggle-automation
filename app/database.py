@@ -129,6 +129,13 @@ def delete_account(username: str):
         conn.execute("DELETE FROM accounts WHERE username = ?", (username,))
     conn.close()
 
+def update_account_username(old_username: str, new_username: str):
+    conn = get_db_connection()
+    with conn:
+        conn.execute("UPDATE accounts SET username = ? WHERE username = ?", (new_username, old_username))
+        conn.execute("UPDATE runs SET account_username = ? WHERE account_username = ?", (new_username, old_username))
+    conn.close()
+
 def create_run_record(run_data: Dict[str, Any]):
     conn = get_db_connection()
     with conn:
