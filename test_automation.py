@@ -1,5 +1,6 @@
 import unittest
 import json
+import uuid
 import asyncio
 from pathlib import Path
 from app.config import DATA_DIR, NOTEBOOKS_DIR
@@ -27,7 +28,7 @@ class TestKaggleAutomation(unittest.TestCase):
         self.assertTrue(cfg_dir.exists())
 
     def test_run_crud(self):
-        run_id = "test_run_001"
+        run_id = f"test_run_{uuid.uuid4().hex[:6]}"
         create_run_record({
             "id": run_id,
             "account_username": "test_user_unit",

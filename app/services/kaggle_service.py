@@ -22,10 +22,13 @@ class KaggleService:
     _log_subscribers: Dict[str, List[asyncio.Queue]] = {}
 
     @classmethod
-    def sanitize_slug(cls, title: str) -> str:
+    def sanitize_slug(cls, title: str, unique_suffix: Optional[str] = None) -> str:
         slug = re.sub(r"[^a-zA-Z0-9\-]", "-", title.lower()).strip("-")
-        slug = re.sub(r"-+", "-", slug)
-        return slug or f"nb-{uuid.uuid4().hex[:6]}"
+        slug = re.sub(r"-+", "-", slug)[:40].rstrip("-")
+        suffix = unique_suffix or uuid.uuid4().hex[:4]
+        if not slug:
+            return f"nb-{suffix}"
+        return f"{slug}-{suffix}"
 
     @classmethod
     async def push_kernel(
@@ -43,8 +46,11 @@ class KaggleService:
         total_shards: Optional[int] = None
     ) -> Dict[str, Any]:
         """Prepares metadata, writes code, and executes `kaggle kernels push`."""
-        run_id = f"run_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-        slug = cls.sanitize_slug(title)
+        run_hash = uuid.uuid4().hex[:6]
+        run_id = f"run_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{run_hash}"
+        slug = cls.sanitize_slug(title, unique_suffix=run_hash[:4])
+        # Ensure title fits Kaggle's 50-character limit
+        clean_title = title[:50]
         kernel_ref = f"{account_username}/{slug}"
         kaggle_url = f"https://www.kaggle.com/code/{kernel_ref}"
         
@@ -67,7 +73,7 @@ class KaggleService:
         
         metadata = {
             "id": kernel_ref,
-            "title": title,
+            "title": clean_title,
             "code_file": filename,
             "language": "python",
             "kernel_type": kernel_type,
