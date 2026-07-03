@@ -3,11 +3,12 @@ import io
 import csv
 import json
 import uuid
+import sys
 import asyncio
 import logging
 from pathlib import Path
 from typing import Dict, List, Any, Optional
-from app.config import ACCOUNTS_DIR, KAGGLE_APIKEYS_RAW
+from app.config import ACCOUNTS_DIR, KAGGLE_APIKEYS_RAW, get_kaggle_cli_path
 from app.database import (
     save_account, get_all_accounts, get_account_by_username,
     delete_account as db_delete_account
@@ -55,6 +56,16 @@ class AccountManager:
         acc_dir = cls.get_account_config_dir(username)
         env = os.environ.copy()
         env["KAGGLE_CONFIG_DIR"] = str(acc_dir)
+        
+        # Ensure virtualenv Scripts/bin is at the front of PATH
+        bin_folder = "Scripts" if os.name == "nt" else "bin"
+        venv_bin = str(Path(sys.prefix) / bin_folder)
+        if venv_bin not in env.get("PATH", ""):
+            env["PATH"] = venv_bin + os.pathsep + env.get("PATH", "")
+
+        # Force UTF-8 output encoding for kaggle CLI (fixes Windows cp1252 errors)
+        env["PYTHONIOENCODING"] = "utf-8"
+        
         return env
 
     @classmethod
@@ -99,11 +110,13 @@ class AccountManager:
             f.write(key.strip())
 
         env = cls.get_account_env(temp_id)
+        cli = get_kaggle_cli_path()
         
-        # Try kernels list
-        for subcmd in [["kaggle", "kernels", "list", "-m", "-v"], ["kaggle", "datasets", "list", "-m", "-v"], ["kaggle", "models", "list", "-m", "-v"]]:
+        # Try kernels list, datasets list, models list
+        for subcmd in [["kernels", "list", "-m", "-v"], ["datasets", "list", "-m", "-v"], ["models", "list", "-m", "-v"]]:
             try:
                 proc = await asyncio.create_subprocess_exec(
+                    cli,
                     *subcmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
@@ -121,6 +134,17 @@ class AccountManager:
                 logger.error(f"Error querying {subcmd}: {e}")
 
         return f"kaggle_user_{uuid.uuid4().hex[:6]}"
+
+    @classmethod
+    def _cleanup_temp_dir(cls, temp_id: str):
+        """Removes the temporary config directory used during username resolution."""
+        import shutil
+        temp_dir = cls.get_account_config_dir(temp_id).parent
+        if temp_dir.exists():
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception:
+                pass
 
     @classmethod
     def update_username(cls, old_username: str, new_username: str):
@@ -144,7 +168,8 @@ class AccountManager:
     @classmethod
     async def fetch_quota(cls, username: str) -> Dict[str, Any]:
         """Runs `kaggle quota -v` and parses the output into structured quota info."""
-        cmd = ["kaggle", "quota", "-v"]
+        cli = get_kaggle_cli_path()
+        cmd = [cli, "quota", "-v"]
         env = cls.get_account_env(username)
         
         try:
@@ -156,12 +181,19 @@ class AccountManager:
             )
             stdout, stderr = await proc.communicate()
             out_str = stdout.decode("utf-8", errors="ignore")
+            err_str = stderr.decode("utf-8", errors="ignore")
+            
+            if proc.returncode != 0:
+                logger.warning(f"kaggle quota failed for {username} (rc={proc.returncode}): {err_str.strip()}")
             
             quotas = []
             if out_str:
-                csv_reader = csv.DictReader(io.StringIO(out_str))
-                for row in csv_reader:
-                    quotas.append(row)
+                try:
+                    csv_reader = csv.DictReader(io.StringIO(out_str))
+                    for row in csv_reader:
+                        quotas.append(row)
+                except Exception as e:
+                    logger.error(f"Failed to parse quota CSV for {username}: {e}")
             
             # Format summarized quota stats
             summary = {
@@ -215,6 +247,7 @@ class AccountManager:
             username = custom_username.strip()
         else:
             username = await cls.fetch_username_for_key(temp_id, api_key_or_token)
+            cls._cleanup_temp_dir(temp_id)
         
         # Setup config directory
         cls.setup_account_files(username, api_key_or_token)
