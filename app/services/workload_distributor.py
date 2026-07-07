@@ -2,10 +2,10 @@ import json
 import uuid
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from app.services.kaggle_service import KaggleService
-from app.database import create_distributed_workload
+from app.database import create_distributed_workload, update_workload_status, utcnow_iso
 
 logger = logging.getLogger("workload_distributor")
 
@@ -75,8 +75,10 @@ class WorkloadDistributor:
         num_accounts = len(accounts)
         if num_accounts == 0:
             return {"success": False, "error": "No Kaggle accounts selected for distribution."}
+        if total_items < num_accounts:
+            return {"success": False, "error": f"Cannot split {total_items} items across {num_accounts} accounts (fewer items than shards)."}
 
-        workload_id = f"workload_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        workload_id = f"workload_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         
         # Calculate shard partitions
         total_units = total_items
@@ -107,7 +109,7 @@ class WorkloadDistributor:
             "workload_type": "range",
             "total_units": total_units,
             "accounts_used": json.dumps(accounts),
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": utcnow_iso(),
             "status": "running"
         })
 
@@ -159,11 +161,26 @@ class WorkloadDistributor:
             else:
                 processed_results.append(r)
 
+        # Finalize workload status based on per-shard push outcomes
+        pushed_ok = sum(
+            1 for r in processed_results
+            if isinstance(r, dict) and r.get("push_result", {}).get("success")
+        )
+        if pushed_ok == num_accounts:
+            final_status = "dispatched"
+        elif pushed_ok > 0:
+            final_status = "partial"
+        else:
+            final_status = "failed"
+        update_workload_status(workload_id, final_status)
+
         return {
-            "success": True,
+            "success": pushed_ok > 0,
             "workload_id": workload_id,
             "base_title": base_title,
             "total_units": total_units,
             "total_shards": num_accounts,
+            "shards_pushed": pushed_ok,
+            "status": final_status,
             "shards": processed_results
         }

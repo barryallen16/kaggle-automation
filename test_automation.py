@@ -1,9 +1,18 @@
+import os
+import shutil
+import tempfile
+
+# Redirect ALL data (DB, account configs, logs) to a temp dir BEFORE app imports,
+# so tests never touch the production database or data/ directory.
+_TEST_TMP = tempfile.mkdtemp(prefix="kaggle_automation_test_")
+os.environ["AUTOMATION_DATA_DIR"] = _TEST_TMP
+
 import unittest
 import json
 import uuid
 import asyncio
 from pathlib import Path
-from app.config import DATA_DIR, NOTEBOOKS_DIR
+from app.config import DATA_DIR, NOTEBOOKS_DIR, DB_PATH
 from app.database import (
     init_db, save_account, get_all_accounts, create_run_record,
     get_all_runs, get_run_by_id, update_run_status
@@ -13,7 +22,14 @@ from app.services.account_manager import AccountManager
 
 class TestKaggleAutomation(unittest.TestCase):
     def setUp(self):
+        # Fresh DB per test
+        if DB_PATH.exists():
+            DB_PATH.unlink()
         init_db()
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(_TEST_TMP, ignore_errors=True)
 
     def test_database_and_account_crud(self):
         test_user = "test_user_unit"

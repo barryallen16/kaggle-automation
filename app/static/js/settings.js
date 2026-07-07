@@ -64,7 +64,7 @@ async function sendTestTelegramMessage() {
     const data = await res.json();
 
     if (res.ok && data.success) {
-      showToast('Telegram test alert sent successfully! Check your channel.', 'success');
+      showToast('Telegram test alert sent! Check your Telegram direct messages.', 'success');
     } else {
       showToast(data.detail || data.error || 'Failed to send Telegram test', 'error');
     }
@@ -91,7 +91,7 @@ function renderHistory() {
   tbody.innerHTML = runs.map(r => {
     const startStr = new Date(r.start_time).toLocaleString();
     const trialBadge = r.is_trial ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-900/60 text-amber-300 border border-amber-700/50 mr-1.5">TRIAL</span>' : '';
-    const shardBadge = r.workload_id ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-900/60 text-purple-300 border border-purple-700/50 mr-1.5">SHARD ${r.shard_index + 1}/${r.total_shards}</span>` : '';
+    const shardBadge = r.workload_id ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-900/60 text-purple-300 border border-purple-700/50 mr-1.5">SHARD ${(r.shard_index ?? 0) + 1}/${r.total_shards ?? '?'}</span>` : '';
 
     const statusBadges = {
       running: '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800">RUNNING</span>',
@@ -110,21 +110,21 @@ function renderHistory() {
     return `
       <tr class="hover:bg-slate-800/30 transition">
         <td class="px-6 py-4">
-          <div class="font-bold text-white flex items-center">${trialBadge}${shardBadge} ${r.title}</div>
-          <a href="${r.kaggle_url}" target="_blank" class="text-xs text-cyan-400 hover:underline flex items-center space-x-1 mt-0.5 font-mono">
-            <span>${r.kernel_ref}</span>
+          <div class="font-bold text-white flex items-center">${trialBadge}${shardBadge} ${esc(r.title)}</div>
+          <a href="${esc(r.kaggle_url)}" target="_blank" rel="noopener noreferrer" class="text-xs text-cyan-400 hover:underline flex items-center space-x-1 mt-0.5 font-mono">
+            <span>${esc(r.kernel_ref)}</span>
             <i data-lucide="external-link" class="w-3 h-3 inline"></i>
           </a>
         </td>
-        <td class="px-6 py-4 font-semibold text-slate-300">@${r.account_username}</td>
-        <td class="px-6 py-4 font-mono text-xs text-purple-300">${r.accelerator}</td>
+        <td class="px-6 py-4 font-semibold text-slate-300">@${esc(r.account_username)}</td>
+        <td class="px-6 py-4 font-mono text-xs text-purple-300">${esc(r.accelerator)}</td>
         <td class="px-6 py-4 text-xs text-slate-400 font-mono">${startStr}</td>
         <td class="px-6 py-4">${badge}</td>
         <td class="px-6 py-4 text-right space-x-2">
-          <button onclick="viewLogsForRun('${r.id}')" class="px-2.5 py-1 rounded text-xs font-semibold bg-slate-800 text-slate-300 hover:text-white transition">
+          <button onclick="viewLogsForRun('${esc(r.id)}')" class="px-2.5 py-1 rounded text-xs font-semibold bg-slate-800 text-slate-300 hover:text-white transition">
             Logs
           </button>
-          <button onclick="inspectFilesForRun('${r.id}'); switchTab('files');" class="px-2.5 py-1 rounded text-xs font-semibold bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 transition">
+          <button onclick="inspectFilesForRun('${esc(r.id)}'); switchTab('files');" class="px-2.5 py-1 rounded text-xs font-semibold bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 transition">
             Outputs
           </button>
           ${stopButton}

@@ -11,14 +11,16 @@ A centralized dashboard and FastAPI backend to orchestrate, monitor, and distrib
 - **Hardware Accelerators**: Select `Default / CPU`, `T4 GPU x 2`, `T4 GPU x 1`, or `TPU VM v3-8`.
 - **Pre-Flight Trial Run**: Run quick validation passes (e.g. 5-minute timeout) before committing 12-hour full runs.
 - **12-Hour Session Tracker & Telegram Alerts**:
-  - Auto-notifies Telegram channels when runs start.
+  - Auto-notifies your Telegram account (bot direct messages via User ID) when runs start.
   - Sends a 1-hour warning alert at the 11-hour mark.
   - Sends a cutoff alert at the 12-hour Kaggle runtime limit.
   - Sends immediate completion and error alerts.
 - **Distributed Workload Sharder**: Partition large tasks (e.g. 10,000,000 iterations or parameter batches) evenly across all registered Kaggle accounts, with auto-injected shard parameters (`SHARD_ID`, `TOTAL_SHARDS`, `START_INDEX`, `END_INDEX`) and parallel execution.
 - **Live Output Streaming**: Real-time streaming console over WebSockets with auto-scroll and full log downloads.
-- **Output Artifacts Explorer**: Browse generated files and download single files or full `.zip` archives with 1 click.
+- **Output Artifacts Explorer**: Browse generated files and download single files or full `.zip` archives (streamed from disk, never buffered in RAM) with 1 click.
 - **Run Catalog**: Full execution history with direct clickable Kaggle notebook URLs.
+- **Authentication**: Optional shared-secret login (`APP_AUTH_TOKEN`) with HMAC-signed HttpOnly cookies — protects every route including WebSockets.
+- **Branding**: Geist Pixel display font, Geist body / Geist Mono terminal fonts and favicon pack served fully locally (no CDN font dependencies).
 - **Modern Dark UI**: Responsive dashboard with dark cyberpunk/slate styling.
 
 ---
@@ -31,22 +33,38 @@ A centralized dashboard and FastAPI backend to orchestrate, monitor, and distrib
 pip install -r requirements.txt
 ```
 
-### 2. Configure `.env` (Optional)
+### 2. Configure `.env`
 ```env
+# Kaggle access tokens (comma-separated; auto-registered on startup)
 KAGGLE_APIKEYS=your_kaggle_access_token_1,your_kaggle_access_token_2
+
+# Dashboard login secret. Leave EMPTY to disable auth (local dev only).
+APP_AUTH_TOKEN=a-long-random-string
+
+# Telegram alerts: the bot DMs this account when runs start/warn/finish.
+# Get your numeric ID from @userinfobot, then press START on your bot once.
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
-TELEGRAM_CHAT_ID=-1001234567890
+TELEGRAM_CHAT_ID=123456789
 ```
-*(Accounts and Telegram keys can also be added dynamically directly from the UI!)*
+*(Accounts and Telegram credentials can also be managed directly from the UI — UI values override `.env`.)*
 
 ### 3. Start the Server
 ```bash
 python run.py
 ```
-*(Or with uvicorn directly: `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app`)*
+The server binds to `127.0.0.1:8000` by default (safe). Override with `APP_HOST=0.0.0.0` / `APP_PORT=8000` in `.env` **only if you understand the exposure** — set `APP_AUTH_TOKEN` first.
 
 ### 4. Open the Dashboard
-Navigate to [http://localhost:8000](http://localhost:8000) in your browser.
+Navigate to [http://localhost:8000](http://localhost:8000) in your browser and sign in with your `APP_AUTH_TOKEN`.
+
+---
+
+## Security Notes
+
+- The server binds to loopback unless you explicitly override `APP_HOST`.
+- With `APP_AUTH_TOKEN` set, every route — including the WebSocket log stream — requires a signed session cookie; sessions survive 7 days and are invalidated the moment you rotate the token.
+- API keys are stored locally in `data/kaggle_automation.db` and never returned by the API (masked as `KGAT_a...xyz`).
+- Tests run fully isolated (`AUTOMATION_DATA_DIR`) and never touch production data.
 
 ---
 

@@ -18,6 +18,7 @@ class LaunchRunJSONRequest(BaseModel):
 
 @router.get("")
 async def list_runs(limit: int = 100):
+    limit = max(1, min(limit, 500))
     runs = get_all_runs(limit=limit)
     return {"success": True, "runs": runs}
 
@@ -47,6 +48,8 @@ async def launch_run_json(payload: LaunchRunJSONRequest):
             timeout_seconds=payload.timeout_seconds
         )
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -76,6 +79,8 @@ async def upload_and_launch(
             timeout_seconds=timeout_seconds
         )
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -84,6 +89,8 @@ async def stop_run(run_id: str):
     try:
         result = await KaggleService.stop_kernel(run_id)
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

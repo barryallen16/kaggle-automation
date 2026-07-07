@@ -13,7 +13,8 @@ function updateTerminalRunDropdown() {
   runs.forEach(r => {
     const statusIcon = r.status === 'running' ? '🟢 ' : (r.status === 'complete' ? '✅ ' : (r.status === 'error' ? '❌ ' : '⏳ '));
     const selected = r.id === currentTerminalRunId ? 'selected' : '';
-    html += `<option value="${r.id}" ${selected}>${statusIcon} [${r.account_username}] ${r.title} (${r.status})</option>`;
+    const label = `${statusIcon} [${r.account_username}] ${r.title} (${r.status})`;
+    html += `<option value="${esc(r.id)}" ${selected}>${esc(label)}</option>`;
   });
 
   select.innerHTML = html;
@@ -37,7 +38,7 @@ function viewLogsForRun(runId) {
 
   const run = AppState.allRuns.find(r => r.id === runId);
   if (run) {
-    document.getElementById('terminal-run-info').innerHTML = `Kernel: <strong class="text-cyan-400 font-mono">${run.kernel_ref}</strong> | Accelerator: <span class="text-purple-300">${run.accelerator}</span>`;
+    document.getElementById('terminal-run-info').innerHTML = `Kernel: <strong class="text-cyan-400 font-mono">${esc(run.kernel_ref)}</strong> | Accelerator: <span class="text-purple-300">${esc(run.accelerator)}</span>`;
   }
 
   updateTerminalRunDropdown();

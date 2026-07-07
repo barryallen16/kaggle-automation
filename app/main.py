@@ -1,16 +1,21 @@
+import asyncio
 import logging
+import os
+import secrets
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from jinja2 import Environment, FileSystemLoader
 
-from app.config import BASE_DIR
+from app.config import BASE_DIR, APP_AUTH_TOKEN
 from app.database import init_db
 from app.services.account_manager import AccountManager
 from app.services.session_monitor import SessionMonitor
+from app import auth
 
 # Import routers
 from app.routers import accounts, runs, distributed, logs, files, settings
@@ -26,7 +31,13 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Initializing Kaggle Automation Backend...")
     init_db()
-    
+
+    if not APP_AUTH_TOKEN:
+        logger.warning(
+            "APP_AUTH_TOKEN is NOT set - the dashboard API is UNAUTHENTICATED. "
+            "Set it in .env before exposing this service beyond localhost."
+        )
+
     # Auto-initialize accounts from .env KAGGLE_APIKEYS on startup
     try:
         await AccountManager.initialize_from_env()
@@ -49,11 +60,12 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Enable CORS
+# Enable CORS (same-origin UI only; the dashboard is served from this server,
+# so cross-origin access is never needed. Web origins must match host:port.)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -78,8 +90,66 @@ jinja_env = Environment(loader=FileSystemLoader(str(templates_dir)))
 @app.get("/", response_class=HTMLResponse)
 async def serve_index(request: Request):
     template = jinja_env.get_template("index.html")
-    return template.render()
+    return template.render(auth_enabled=bool(APP_AUTH_TOKEN))
 
 @app.get("/api/health")
 async def health_check():
-    return {"status": "ok", "service": "kaggle-nb-automation"}
+    from app.config import KAGGLE_CLI_PATH
+    cli_available = os.path.exists(KAGGLE_CLI_PATH) or bool(shutil.which("kaggle"))
+    return {
+        "status": "ok",
+        "service": "kaggle-nb-automation",
+        "cli_available": cli_available,
+        "auth_enabled": bool(APP_AUTH_TOKEN)
+    }
+
+# ------------------------------------------------------------------
+# Authentication (shared secret -> signed HttpOnly cookie)
+# Enabled only when APP_AUTH_TOKEN is set in .env / environment.
+# ------------------------------------------------------------------
+@app.get("/login", response_class=HTMLResponse, include_in_schema=False)
+async def login_page(request: Request, error: str = ""):
+    if not APP_AUTH_TOKEN:
+        return RedirectResponse("/")
+    template = jinja_env.get_template("login.html")
+    return template.render(error=error)
+
+@app.post("/login", include_in_schema=False)
+async def login_submit(request: Request, access_token: str = Form(...)):
+    if not APP_AUTH_TOKEN:
+        return RedirectResponse("/")
+    if not secrets.compare_digest(access_token.strip(), APP_AUTH_TOKEN):
+        await asyncio.sleep(0.6)  # brute-force dampener
+        return RedirectResponse("/login?error=Invalid+access+token", status_code=303)
+    response = RedirectResponse("/", status_code=303)
+    response.set_cookie(
+        key=auth.SESSION_COOKIE_NAME,
+        value=auth.create_session_cookie_value(APP_AUTH_TOKEN),
+        max_age=auth.SESSION_TTL_SECONDS,
+        httponly=True,
+        samesite="strict",
+        path="/",
+    )
+    return response
+
+@app.post("/logout", include_in_schema=False)
+async def logout():
+    response = RedirectResponse("/login", status_code=303)
+    response.set_cookie(**auth.clear_session_cookie())
+    return response
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if not APP_AUTH_TOKEN or auth.should_skip_path(request.url.path):
+        return await call_next(request)
+
+    # WebSockets bypass HTTP middleware; guarded separately in the endpoint.
+    if request.url.path.startswith("/api/"):
+        if not auth.is_request_authenticated(request, APP_AUTH_TOKEN):
+            return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+        return await call_next(request)
+
+    if not auth.is_request_authenticated(request, APP_AUTH_TOKEN):
+        login_url = f"/login?next={request.url.path}"
+        return RedirectResponse(login_url, status_code=303)
+    return await call_next(request)

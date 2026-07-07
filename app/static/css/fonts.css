@@ -1,0 +1,65 @@
+/* Local fonts - no CDN dependency */
+/* Geist (body text) */
+@font-face {
+  font-family: 'Geist';
+  src: url('/static/fonts/Geist-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/static/fonts/Geist-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/static/fonts/Geist-SemiBold.ttf') format('truetype');
+  font-weight: 600;
+  font-style: normal;
+}
+@font-face {
+  font-family: 'Geist';
+  src: url('/static/fonts/Geist-Bold.ttf') format('truetype');
+  font-weight: 700;
+  font-style: normal;
+}
+
+/* Geist Mono (code & terminal) */
+@font-face {
+  font-family: 'Geist Mono';
+  src: url('/static/fonts/GeistMono-Regular.ttf') format('truetype');
+  font-weight: 400;
+  font-style: normal;
+}
+
+/* Geist Pixel (display / branding) - all five shape variants */
+@font-face {
+  font-family: 'Geist Pixel Square';
+  src: url('/static/fonts/GeistPixel-Square.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Geist Pixel Circle';
+  src: url('/static/fonts/GeistPixel-Circle.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Geist Pixel Grid';
+  src: url('/static/fonts/GeistPixel-Grid.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Geist Pixel Line';
+  src: url('/static/fonts/GeistPixel-Line.ttf') format('truetype');
+}
+@font-face {
+  font-family: 'Geist Pixel Triangle';
+  src: url('/static/fonts/GeistPixel-Triangle.ttf') format('truetype');
+}
+
+.font-pixel {
+  font-family: 'Geist Pixel Square', monospace;
+  letter-spacing: 0.05em;
+}
+.font-pixel-circle   { font-family: 'Geist Pixel Circle', monospace; }
+.font-pixel-grid     { font-family: 'Geist Pixel Grid', monospace; }
+.font-pixel-line     { font-family: 'Geist Pixel Line', monospace; }
+.font-pixel-triangle { font-family: 'Geist Pixel Triangle', monospace; }

@@ -2,11 +2,19 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from fastapi.responses import PlainTextResponse, FileResponse
 from pathlib import Path
 import asyncio
+import re
 from app.services.kaggle_service import KaggleService
 from app.database import get_run_by_id
 from app.config import LOGS_DIR
 
 router = APIRouter(tags=["Logs"])
+
+SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+def _safe_log_path(run_id: str) -> Path:
+    if not SAFE_ID_RE.match(run_id or ""):
+        raise HTTPException(status_code=400, detail="Invalid run id")
+    return LOGS_DIR / f"{run_id}.log"
 
 @router.get("/api/runs/{run_id}/logs")
 async def get_logs(run_id: str, fetch_remote: bool = False):
@@ -14,7 +22,7 @@ async def get_logs(run_id: str, fetch_remote: bool = False):
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    log_path = LOGS_DIR / f"{run_id}.log"
+    log_path = _safe_log_path(run_id)
     local_log = ""
     if log_path.exists():
         with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
@@ -31,16 +39,29 @@ async def get_logs(run_id: str, fetch_remote: bool = False):
 
 @router.get("/api/runs/{run_id}/logs/download")
 async def download_log_file(run_id: str):
-    log_path = LOGS_DIR / f"{run_id}.log"
+    log_path = _safe_log_path(run_id)
     if not log_path.exists():
         raise HTTPException(status_code=404, detail="Log file does not exist")
     return FileResponse(path=str(log_path), filename=f"{run_id}_logs.txt", media_type="text/plain")
 
 @router.websocket("/ws/runs/{run_id}/logs")
 async def websocket_logs(websocket: WebSocket, run_id: str):
+    # WebSockets bypass HTTP middleware - enforce the session cookie here
+    from app.config import APP_AUTH_TOKEN
+    from app import auth as auth_mod
+
+    if APP_AUTH_TOKEN:
+        cookie = websocket.cookies.get(auth_mod.SESSION_COOKIE_NAME)
+        if not auth_mod.verify_session_cookie(cookie, APP_AUTH_TOKEN):
+            await websocket.close(code=1008)  # policy violation (unauthenticated)
+            return
+
     await websocket.accept()
     
     # Send existing log file contents first
+    if not SAFE_ID_RE.match(run_id or ""):
+        await websocket.close(code=1008)
+        return
     log_path = LOGS_DIR / f"{run_id}.log"
     if log_path.exists():
         try:

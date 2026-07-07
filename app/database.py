@@ -1,17 +1,23 @@
 import sqlite3
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 from app.config import DB_PATH
 
+def utcnow_iso() -> str:
+    """Timezone-aware UTC timestamp (ISO-8601 with Z suffix, parseable by JS Date)."""
+    return datetime.now(timezone.utc).isoformat()
+
 def get_db_connection() -> sqlite3.Connection:
-    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
     
     # Accounts table
     cursor.execute("""
@@ -81,7 +87,7 @@ def init_db():
 # Database helper functions
 def save_account(account_id: str, username: str, api_key: str, last_quota: Optional[Dict] = None):
     conn = get_db_connection()
-    now = datetime.utcnow().isoformat()
+    now = utcnow_iso()
     quota_str = json.dumps(last_quota) if last_quota else None
     with conn:
         conn.execute("""
@@ -218,6 +224,12 @@ def get_all_workloads() -> List[Dict[str, Any]]:
         workloads.append(w)
     conn.close()
     return workloads
+
+def update_workload_status(workload_id: str, status: str):
+    conn = get_db_connection()
+    with conn:
+        conn.execute("UPDATE distributed_workloads SET status = ? WHERE id = ?", (status, workload_id))
+    conn.close()
 
 def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     conn = get_db_connection()

@@ -4,7 +4,6 @@ from fastapi import FastAPI
 import subprocess
 import csv
 from pathlib import Path
-import csv
 import json
 import io
 from collections import defaultdict
@@ -39,7 +38,9 @@ def get_usernames(key):
 
 load_dotenv()
 K_APIKEYS = {}
-APIKEYS = os.getenv("KAGGLE_APIKEYS").split(",")
+APIKEYS = [k.strip() for k in (os.getenv("KAGGLE_APIKEYS") or "").split(",") if k.strip()]
+if not APIKEYS:
+    raise SystemExit("KAGGLE_APIKEYS not set in environment or .env")
 for key in APIKEYS:
     usrname = get_usernames(key)
     K_APIKEYS[usrname]=key

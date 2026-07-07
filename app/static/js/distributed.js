@@ -14,9 +14,9 @@ function renderDistributedAccountCheckboxes() {
 
   container.innerHTML = AppState.accounts.map((acc, idx) => `
     <label class="flex items-center space-x-2.5 p-2.5 rounded-lg bg-[#080b12] border border-[#1e293b] hover:border-purple-500/50 cursor-pointer transition">
-      <input type="checkbox" name="dist-acc" value="${acc.username}" checked onchange="updateShardsPreview()" class="w-4 h-4 text-purple-500 rounded bg-slate-900 border-slate-700 focus:ring-0">
+      <input type="checkbox" name="dist-acc" value="${esc(acc.username)}" checked onchange="updateShardsPreview()" class="w-4 h-4 text-purple-500 rounded bg-slate-900 border-slate-700 focus:ring-0">
       <div class="truncate">
-        <span class="text-xs font-bold text-white block truncate">@${acc.username}</span>
+        <span class="text-xs font-bold text-white block truncate">@${esc(acc.username)}</span>
         <span class="text-[10px] text-slate-400 font-mono">${acc.last_quota?.gpu?.limit ? acc.last_quota.gpu.limit - acc.last_quota.gpu.used + 'h GPU left' : 'Active'}</span>
       </div>
     </label>
@@ -55,7 +55,7 @@ function updateShardsPreview() {
 
     html += `
       <div class="flex items-center justify-between p-1.5 rounded bg-purple-950/40 border border-purple-900/40">
-        <span><strong>Shard ${idx + 1}/${numAccounts}</strong> (@${acc}):</span>
+        <span><strong>Shard ${idx + 1}/${numAccounts}</strong> (@${esc(acc)}):</span>
         <span class="text-cyan-300 font-mono">[${currentStart.toLocaleString()} ➔ ${currentEnd.toLocaleString()}] (${currentChunk.toLocaleString()} items)</span>
       </div>
     `;
