@@ -111,6 +111,14 @@ async def health_check():
 async def login_page(request: Request, error: str = ""):
     if not APP_AUTH_TOKEN:
         return RedirectResponse("/")
+    # Already signed in? Never show the form again - otherwise the browser's
+    # back button lands on the stale /login entry and demands re-auth.
+    if auth.is_request_authenticated(request, APP_AUTH_TOKEN):
+        next_url = request.query_params.get("next") or "/"
+        # Only allow relative, same-site paths ("/x" ok, "//evil" or URLs not)
+        if not next_url.startswith("/") or next_url.startswith("//"):
+            next_url = "/"
+        return RedirectResponse(next_url, status_code=303)
     template = jinja_env.get_template("login.html")
     return template.render(error=error)
 
@@ -121,7 +129,13 @@ async def login_submit(request: Request, access_token: str = Form(...)):
     if not secrets.compare_digest(access_token.strip(), APP_AUTH_TOKEN):
         await asyncio.sleep(0.6)  # brute-force dampener
         return RedirectResponse("/login?error=Invalid+access+token", status_code=303)
-    response = RedirectResponse("/", status_code=303)
+
+    # Land the user on the page they originally wanted (?next=...), not always "/"
+    next_url = request.query_params.get("next") or "/"
+    if not next_url.startswith("/") or next_url.startswith("//"):
+        next_url = "/"
+
+    response = RedirectResponse(next_url, status_code=303)
     response.set_cookie(
         key=auth.SESSION_COOKIE_NAME,
         value=auth.create_session_cookie_value(APP_AUTH_TOKEN),
@@ -140,16 +154,24 @@ async def logout():
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
+    response = await call_next(request)
+
+    # Auth pages/API must never be served from browser cache - a cached login
+    # page (or cached 303 to it) makes the back button feel like a forced
+    # re-login. Static assets keep normal caching.
+    if not request.url.path.startswith("/static"):
+        response.headers.setdefault("Cache-Control", "no-store")
+
     if not APP_AUTH_TOKEN or auth.should_skip_path(request.url.path):
-        return await call_next(request)
+        return response
 
     # WebSockets bypass HTTP middleware; guarded separately in the endpoint.
     if request.url.path.startswith("/api/"):
         if not auth.is_request_authenticated(request, APP_AUTH_TOKEN):
             return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
-        return await call_next(request)
+        return response
 
     if not auth.is_request_authenticated(request, APP_AUTH_TOKEN):
         login_url = f"/login?next={request.url.path}"
         return RedirectResponse(login_url, status_code=303)
-    return await call_next(request)
+    return response

@@ -20,7 +20,7 @@ function renderDashboard() {
         </button>
       </div>
     `;
-    lucide.createIcons();
+    refreshIcons();
     return;
   }
 
@@ -59,7 +59,7 @@ function renderDashboard() {
         <!-- Account Header -->
         <div class="flex items-start justify-between">
           <div class="flex items-center space-x-3">
-            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/20 to-blue-600/20 border border-cyan-500/30 flex items-center justify-center font-bold text-cyan-400">
+            <div class="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center font-bold text-cyan-400">
               ${esc(acc.username.charAt(0).toUpperCase())}
             </div>
             <div>
@@ -87,7 +87,7 @@ function renderDashboard() {
               <span class="text-white font-mono text-[11px]">${gpuRemaining}h left / ${gpu.limit}h</span>
             </div>
             <div class="w-full bg-[#0a0d14] rounded-full h-2 overflow-hidden border border-slate-800">
-              <div class="bg-gradient-to-r from-cyan-500 to-blue-500 h-2 rounded-full transition-all duration-500" style="width: ${gpuPercent}%"></div>
+              <div class="bg-cyan-400 h-2 rounded-full transition-all duration-500" style="width: ${gpuPercent}%"></div>
             </div>
           </div>
 
@@ -101,7 +101,7 @@ function renderDashboard() {
               <span class="text-white font-mono text-[11px]">${tpuRemaining}h left / ${tpu.limit}h</span>
             </div>
             <div class="w-full bg-[#0a0d14] rounded-full h-2 overflow-hidden border border-slate-800">
-              <div class="bg-gradient-to-r from-purple-500 to-indigo-500 h-2 rounded-full transition-all duration-500" style="width: ${tpuPercent}%"></div>
+              <div class="bg-purple-400 h-2 rounded-full transition-all duration-500" style="width: ${tpuPercent}%"></div>
             </div>
           </div>
         </div>
@@ -125,7 +125,7 @@ function renderDashboard() {
   }).join('');
 
   renderActiveRunsTable();
-  lucide.createIcons();
+  refreshIcons();
 }
 
 function formatMaxRuntime(run) {
@@ -170,13 +170,15 @@ function renderActiveRunsTable() {
             <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 pulsing-dot"></span> ${esc(run.status.toUpperCase())}
           </span>
         </td>
-        <td class="px-6 py-4 text-right space-x-2">
-          <button onclick="viewLogsForRun('${esc(run.id)}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 transition">
-            Live Stream
-          </button>
-          <button onclick="stopRun('${esc(run.id)}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 border border-rose-500/30 transition">
-            Stop
-          </button>
+        <td class="px-6 py-4">
+          <div class="flex items-center justify-end flex-wrap gap-2">
+            <button onclick="viewLogsForRun('${esc(run.id)}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 transition">
+              Live Stream
+            </button>
+            <button onclick="stopRun('${esc(run.id)}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 border border-rose-500/30 transition">
+              Stop
+            </button>
+          </div>
         </td>
       </tr>
     `;

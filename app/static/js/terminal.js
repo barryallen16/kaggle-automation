@@ -32,7 +32,13 @@ function handleTerminalRunSelect(e) {
   }
 }
 
-function viewLogsForRun(runId) {
+async function viewLogsForRun(runId) {
+  // Always surface the terminal - callers may be on any tab (Run Catalog,
+  // launch success, dashboard). Without this the stream connected invisibly.
+  if (AppState.activeTab !== 'terminal') {
+    switchTab('terminal');
+  }
+
   currentTerminalRunId = runId;
   AppState.selectedTerminalRunId = runId;
 
@@ -42,20 +48,60 @@ function viewLogsForRun(runId) {
   }
 
   updateTerminalRunDropdown();
-  connectTerminalSocket(runId);
+  disconnectTerminalSocket();
+
+  const statusEl = document.getElementById('terminal-stream-status');
+  if (statusEl) {
+    statusEl.innerText = "Loading logs...";
+    statusEl.className = "ml-2 font-mono text-[11px] text-amber-400";
+  }
+
+  // 1. Load the stored log file over plain HTTP first - this ALWAYS works,
+  //    even behind proxies that block or mangle WebSockets.
+  await loadStoredLogs(runId);
+  if (currentTerminalRunId !== runId) return; // user switched runs meanwhile
+
+  // 2. Only attach a live stream while the run can still produce output.
+  const isActive = run && (run.status === 'queued' || run.status === 'running');
+  if (isActive) {
+    connectTerminalSocket(runId, true); // stored logs already on screen
+  } else if (statusEl) {
+    statusEl.innerText = "● Stored Log Output";
+    statusEl.className = "ml-2 font-mono text-[11px] text-slate-400";
+  }
 }
 
-function connectTerminalSocket(runId) {
+async function loadStoredLogs(runId) {
+  const terminalBody = document.getElementById('terminal-body');
+  if (!terminalBody) return;
+
+  try {
+    const res = await fetch(`/api/runs/${runId}/logs`);
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    const text = await res.text();
+    // Ignore stale responses if the user switched runs meanwhile
+    if (currentTerminalRunId !== runId) return;
+    terminalBody.textContent = text || '(log file is empty)';
+    terminalBody.scrollTop = terminalBody.scrollHeight;
+  } catch (err) {
+    terminalBody.textContent = `Failed to load stored logs: ${err.message}\nUse "Fetch Full Kaggle Log" to pull them straight from Kaggle.`;
+  }
+}
+
+function connectTerminalSocket(runId, skipInitial = false) {
   disconnectTerminalSocket();
 
   const terminalBody = document.getElementById('terminal-body');
   const statusEl = document.getElementById('terminal-stream-status');
-  terminalBody.innerText = `Connecting live stream for run ${runId}...\n`;
-  statusEl.innerText = "Connecting...";
-  statusEl.className = "ml-2 font-mono text-[11px] text-amber-400";
+  // Append a separator - never wipe logs already loaded over HTTP
+  if (terminalBody) terminalBody.textContent += `\n--- Attaching live stream ---\n`;
+  if (statusEl) {
+    statusEl.innerText = "Connecting...";
+    statusEl.className = "ml-2 font-mono text-[11px] text-amber-400";
+  }
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  const wsUrl = `${protocol}//${window.location.host}/ws/runs/${runId}/logs`;
+  const wsUrl = `${protocol}//${window.location.host}/ws/runs/${runId}/logs${skipInitial ? '?skip_initial=1' : ''}`;
 
   terminalSocket = new WebSocket(wsUrl);
 
@@ -77,13 +123,20 @@ function connectTerminalSocket(runId) {
   };
 
   terminalSocket.onclose = () => {
-    statusEl.innerText = "Stream Offline / Finished";
-    statusEl.className = "ml-2 font-mono text-[11px] text-slate-500";
+    // Only report offline if we're still the active stream
+    if (currentTerminalRunId === runId) {
+      statusEl.innerText = "Stream Offline / Finished";
+      statusEl.className = "ml-2 font-mono text-[11px] text-slate-500";
+    }
   };
 
-  terminalSocket.onerror = (err) => {
-    statusEl.innerText = "Stream Error";
-    statusEl.className = "ml-2 font-mono text-[11px] text-rose-400";
+  terminalSocket.onerror = () => {
+    // Common cause: reverse proxy without WebSocket forwarding.
+    // Stored logs are already on screen; remote fetch is the fallback.
+    if (currentTerminalRunId === runId) {
+      statusEl.innerText = "Live stream unavailable - use Fetch Full Kaggle Log";
+      statusEl.className = "ml-2 font-mono text-[11px] text-rose-400";
+    }
   };
 }
 

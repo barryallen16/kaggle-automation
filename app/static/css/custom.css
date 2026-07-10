@@ -16,7 +16,8 @@
 }
 
 body {
-  font-family: 'Geist', 'Plus Jakarta Sans', sans-serif;
+  font-family: 'Geist Pixel Square', 'Geist', monospace;
+  letter-spacing: 0.02em;
   background-color: var(--bg-primary);
   color: #e2e8f0;
 }
@@ -60,13 +61,18 @@ code, pre, .terminal-font {
   box-shadow: 0 4px 20px rgba(0, 242, 254, 0.08);
 }
 
-/* Glowing text and borders */
+/* Glowing text and borders (kept minimal - flat theme) */
 .glow-cyan {
   box-shadow: 0 0 15px rgba(0, 242, 254, 0.3);
 }
 
 .glow-emerald {
   box-shadow: 0 0 15px rgba(16, 185, 129, 0.3);
+}
+
+/* Pixel icons render crisp */
+svg[data-pixel-icon], .pixel-icon-svg {
+  shape-rendering: crispEdges;
 }
 
 /* Pulse animation for active running badges */
@@ -89,7 +95,7 @@ code, pre, .terminal-font {
 
 /* Tab Active State */
 .nav-tab.active {
-  background: linear-gradient(135deg, rgba(79, 172, 254, 0.15), rgba(0, 242, 254, 0.15));
-  border-color: #38bdf8;
-  color: #38bdf8;
+  background: rgba(0, 242, 254, 0.08);
+  border-color: var(--accent-cyan);
+  color: var(--accent-cyan);
 }

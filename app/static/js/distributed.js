@@ -124,7 +124,7 @@ async function handleDistributedSubmit(e) {
   const btn = document.getElementById('btn-launch-dist');
   btn.disabled = true;
   btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Deploying Shards to ${selectedAccounts.length} Accounts...</span>`;
-  lucide.createIcons();
+  refreshIcons();
 
   try {
     showToast(`Distributing workload across ${selectedAccounts.length} Kaggle accounts...`, 'info');
@@ -151,7 +151,7 @@ async function handleDistributedSubmit(e) {
   } finally {
     btn.disabled = false;
     btn.innerHTML = `<i data-lucide="cpu" class="w-4 h-4"></i><span>Distribute & Launch Across Accounts</span>`;
-    lucide.createIcons();
+    refreshIcons();
   }
 }
 

@@ -120,17 +120,19 @@ function renderHistory() {
         <td class="px-6 py-4 font-mono text-xs text-purple-300">${esc(r.accelerator)}</td>
         <td class="px-6 py-4 text-xs text-slate-400 font-mono">${startStr}</td>
         <td class="px-6 py-4">${badge}</td>
-        <td class="px-6 py-4 text-right space-x-2">
-          <button onclick="viewLogsForRun('${esc(r.id)}')" class="px-2.5 py-1 rounded text-xs font-semibold bg-slate-800 text-slate-300 hover:text-white transition">
-            Logs
-          </button>
-          <button onclick="inspectFilesForRun('${esc(r.id)}'); switchTab('files');" class="px-2.5 py-1 rounded text-xs font-semibold bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 transition">
-            Outputs
-          </button>
-          ${stopButton}
+        <td class="px-6 py-4">
+          <div class="flex items-center justify-end flex-wrap gap-2">
+            <button onclick="viewLogsForRun('${esc(r.id)}')" class="px-2.5 py-1 rounded text-xs font-semibold bg-slate-800 text-slate-300 hover:text-white transition">
+              Logs
+            </button>
+            <button onclick="inspectFilesForRun('${esc(r.id)}'); switchTab('files');" class="px-2.5 py-1 rounded text-xs font-semibold bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 transition">
+              Outputs
+            </button>
+            ${stopButton}
+          </div>
         </td>
       </tr>
     `;
   }).join('');
-  lucide.createIcons();
+  refreshIcons();
 }

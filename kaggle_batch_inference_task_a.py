@@ -12,6 +12,18 @@ from PIL import Image
 from tqdm.auto import tqdm
 import torch
 
+# ------------------------------------------------------------------------------
+# LOG VISIBILITY FIX: when piped (Kaggle/papermill), stdout is block-buffered
+# (~4-8KB) and tqdm's carriage-return updates never terminate a line - so a slow
+# loop (~90s/item) can go HOURS without producing enough bytes to flush a single
+# log entry. Line-buffering forces every print() to hit the log immediately.
+try:
+    sys.stdout.reconfigure(line_buffering=True)
+    sys.stderr.reconfigure(line_buffering=True)
+except Exception:
+    pass  # older Pythons / exotic streams - per-item flush=True below still helps
+
+
 # %% [code]
 # ==============================================================================
 # AUTO-INJECTED WORKLOAD SHARD CONFIGURATION (Defaults for Standalone Run)
@@ -289,7 +301,16 @@ failed_count = 0
 start_time = time.time()
 
 try:
-    for item in tqdm(items_to_process, desc=f"Shard {SHARD_ID} [{MODEL_ID}]"):
+    total_on_shard = len(items_to_process)
+    for idx, item in enumerate(tqdm(items_to_process, desc=f"Shard {SHARD_ID} [{MODEL_ID}]"), start=1):
+        # One newline-terminated line per item: this is what keeps Kaggle's log
+        # viewer alive during slow (~90s) iterations - tqdm's \r-only updates
+        # never flush a log entry on their own.
+        print(
+            f"[PROGRESS {idx}/{total_on_shard}] starting id={item.get('id')} "
+            f"| ok={success_count} fail={failed_count} | {time.strftime('%H:%M:%S')}",
+            flush=True
+        )
         item_id = item["id"]
         img_urls = item.get("images", [])
         prompt_text = item.get("prompt", "")

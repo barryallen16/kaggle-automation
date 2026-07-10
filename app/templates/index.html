@@ -27,13 +27,17 @@
               card: '#161e33',
               border: '#222d4a',
             }
+          },
+          fontFamily: {
+            sans: ['Geist Pixel Square', 'Geist', 'monospace'],
+            mono: ['Geist Mono', 'monospace']
           }
         }
       }
     }
   </script>
   <!-- Lucide Icons -->
-  <script src="https://unpkg.com/lucide@1.33.0/dist/umd/lucide.js"></script>
+  <script src="/static/js/pixel-icons.js"></script>
   <!-- Local fonts (Geist / Geist Mono / Geist Pixel) -->
   <link rel="stylesheet" href="/static/css/fonts.css">
   <link rel="stylesheet" href="/static/css/custom.css">
@@ -50,7 +54,7 @@
     <aside class="w-64 bg-[#0d121f] border-r border-[#1e293b] flex flex-col flex-shrink-0">
       <!-- App Header / Logo -->
       <div class="h-16 flex items-center px-6 border-b border-[#1e293b] space-x-3">
-        <img src="/static/icons/android-chrome-192x192.png" alt="Logo" class="w-9 h-9 rounded-xl shadow-lg shadow-cyan-500/20 border border-cyan-500/30">
+        <img src="/static/icons/android-chrome-192x192.png" alt="Logo" class="w-9 h-9 rounded-xl">
         <div>
           <h1 class="font-pixel text-sm text-white">KAGGLE AUTO</h1>
           <p class="text-[10px] text-cyan-400 font-medium uppercase tracking-wider">Multi-Account Hub</p>
@@ -326,7 +330,7 @@
 
               <!-- Submit Button -->
               <div class="flex justify-end space-x-4 pt-2">
-                <button type="submit" id="btn-launch-run" class="inline-flex items-center space-x-2 px-6 py-3 rounded-xl text-sm font-bold bg-gradient-to-r from-cyan-500 to-blue-600 text-white hover:from-cyan-400 hover:to-blue-500 shadow-lg shadow-cyan-500/25 transition">
+                <button type="submit" id="btn-launch-run" class="inline-flex items-center space-x-2 px-6 py-3 rounded-xl text-sm font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition">
                   <i data-lucide="rocket" class="w-4 h-4"></i>
                   <span>Deploy & Launch to Kaggle</span>
                 </button>
@@ -417,7 +421,7 @@
 
               <!-- Submit -->
               <div class="flex justify-end space-x-4 pt-2">
-                <button type="submit" id="btn-launch-dist" class="inline-flex items-center space-x-2 px-6 py-3 rounded-xl text-sm font-bold bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:from-purple-500 hover:to-indigo-500 shadow-lg shadow-purple-500/25 transition">
+                <button type="submit" id="btn-launch-dist" class="inline-flex items-center space-x-2 px-6 py-3 rounded-xl text-sm font-bold bg-purple-600 hover:bg-purple-500 text-white transition">
                   <i data-lucide="cpu" class="w-4 h-4"></i>
                   <span>Distribute & Launch Across Accounts</span>
                 </button>
@@ -646,7 +650,7 @@
   <script>
     // Initialize Lucide icons on page load
     document.addEventListener('DOMContentLoaded', () => {
-      lucide.createIcons();
+      refreshIcons();
       // ESC closes the Add Account modal
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') closeAddAccountModal();

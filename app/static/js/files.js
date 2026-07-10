@@ -35,7 +35,7 @@ async function inspectFilesForRun(runId) {
 
   const tbody = document.getElementById('files-table-body');
   tbody.innerHTML = `<tr><td colspan="4" class="px-6 py-8 text-center text-slate-400"><i data-lucide="loader-2" class="w-5 h-5 animate-spin mx-auto mb-2 text-cyan-400"></i> Querying Kaggle for output files...</td></tr>`;
-  lucide.createIcons();
+  refreshIcons();
 
   try {
     const res = await fetch(`/api/runs/${runId}/files`);
@@ -111,7 +111,7 @@ function renderFilesTable(data) {
       </tr>
     `;
   }).join('');
-  lucide.createIcons();
+  refreshIcons();
 }
 
 async function pullRemoteFiles() {
