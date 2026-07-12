@@ -62,8 +62,10 @@ Navigate to [http://localhost:8000](http://localhost:8000) in your browser and s
 ## How Dispatch Works (Kaggle CLI 2.x)
 
 - **Auth**: each account's access token is exported to its own subprocess via the `KAGGLE_API_TOKEN` env var — the modern kaggle CLI does not read `$KAGGLE_CONFIG_DIR/access_token`. `~/.kaggle` is never touched, so accounts stay fully isolated.
-- **Kernel identity**: Kaggle keys notebooks by the slugified *title*. Relaunching a run with the same title on the same account creates a new **version** of that kernel; use a different title for a fresh kernel.
+- **Kernel identity**: Kaggle keys notebooks by the slugified *title*. Relaunching a run with the same title on the same account creates a new **version** of that kernel; use a different title for a fresh kernel. The launcher blocks duplicate same-title launches while one is still active.
 - **Notebooks are normalized before push**: missing `kernelspec` is injected (python3) and raw Python pasted as `.ipynb` is wrapped into a valid notebook cell automatically.
+- **Multi-session distribution**: the Distributed Runner defaults to **2 GPU sessions per account** (Kaggle's cap). It live-checks each account's active GPU sessions and silently reduces runners when slots are busy; the whole launch is validated atomically before anything is dispatched. A Recent Workloads panel shows progress with a Stop-All button per workload.
+- **Secrets**: keys in `.env` (`HF_TOKEN`, …) are injected into every kernel as an environment preamble before user code — a READ-scoped HF token is enough for faster public-artifact downloads.
 
 ---
 

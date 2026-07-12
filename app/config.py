@@ -59,3 +59,21 @@ KAGGLE_CLI_PATH = get_kaggle_cli_path()
 MAX_KAGGLE_SESSION_SECONDS = 12 * 3600  # 12 hours
 WARNING_BEFORE_EXPIRY_SECONDS = 3600   # 1 hour warning
 TRIAL_RUN_DEFAULT_TIMEOUT = 300        # 5 minutes
+
+def get_kernel_env_defaults() -> dict:
+    """Secrets to inject into every pushed kernel's environment.
+
+    Read lazily (re-reading .env) so adding/updating keys takes effect on the
+    NEXT launch without a server restart. Only HF_TOKEN today - extend here.
+    A READ-scoped token suffices: kernels only download public artifacts.
+    """
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()  # picks up newly added keys; never overrides existing env
+    except Exception:
+        pass
+    out = {}
+    hf_token = (os.getenv("HF_TOKEN") or "").strip()
+    if hf_token:
+        out["HF_TOKEN"] = hf_token
+    return out

@@ -33,6 +33,7 @@ function getSelectedDistributedAccounts() {
 function updateShardsPreview() {
   const selectedAccounts = getSelectedDistributedAccounts();
   const totalItems = parseInt(document.getElementById('dist-total-items')?.value || '10000000', 10);
+  const chosen = parseInt(document.getElementById('dist-sessions-per-account')?.value || '2', 10);
   const preview = document.getElementById('dist-shards-preview');
   if (!preview) return;
 
@@ -41,25 +42,62 @@ function updateShardsPreview() {
     return;
   }
 
-  const numAccounts = selectedAccounts.length;
-  const chunkSize = Math.floor(totalItems / numAccounts);
-  const remainder = totalItems % numAccounts;
+  // Mirror of the server-side runner plan: each account gets min(chosen, free
+  // GPU slots) runners. GPU = anything that isn't none/default/cpu.
+  const isGpuAcc = (acc) => {
+    const info = (AppState.accounts || []).find(a => a.username === acc);
+    if (!info) return { busy: 0 };
+    const gpuRuns = (info.active_runs || []).filter(r => {
+      const a = (r.accelerator || 'none').toLowerCase();
+      return a !== 'none' && a !== 'default' && a !== 'cpu';
+    });
+    return { busy: gpuRuns.length, active: info.active_runs.length };
+  };
+
+  const runnerList = [];
+  const perAccount = [];
+  selectedAccounts.forEach(acc => {
+    const { busy } = isGpuAcc(acc);
+    let slots = Math.max(0, chosen - busy);
+    perAccount.push({ acc, chosen, busy, slots });
+    for (let i = 0; i < slots; i++) runnerList.push(acc);
+  });
+
+  const R = runnerList.length;
+  if (R === 0) {
+    preview.innerHTML = `<span class="text-rose-400">No free GPU session slots on the selected accounts - stop existing runs first.</span>`;
+    return;
+  }
+
+  const chunkSize = Math.floor(totalItems / R);
+  const remainder = totalItems % R;
 
   let currentStart = 0;
-  let html = `<div class="mb-2 text-purple-300 font-bold">Partitioning ${totalItems.toLocaleString()} units across ${numAccounts} accounts (~${chunkSize.toLocaleString()} units/shard):</div>`;
+  let html = `<div class="mb-2 text-purple-300 font-bold">${totalItems.toLocaleString()} units across ${R} runner${R > 1 ? 's' : ''} (${chosen} session${chosen > 1 ? 's' : ''}/account requested):</div>`;
 
-  selectedAccounts.forEach((acc, idx) => {
-    const extra = idx < remainder ? 1 : 0;
-    const currentChunk = chunkSize + extra;
-    const currentEnd = currentStart + currentChunk;
-
+  perAccount.forEach(p => {
+    const reduced = p.slots < p.chosen;
     html += `
-      <div class="flex items-center justify-between p-1.5 rounded bg-purple-950/40 border border-purple-900/40">
-        <span><strong>Shard ${idx + 1}/${numAccounts}</strong> (@${esc(acc)}):</span>
-        <span class="text-cyan-300 font-mono">[${currentStart.toLocaleString()} ➔ ${currentEnd.toLocaleString()}] (${currentChunk.toLocaleString()} items)</span>
-      </div>
-    `;
-    currentStart = currentEnd;
+      <div class="flex items-center justify-between text-[11px] px-1">
+        <span>@${esc(p.acc)}: ${p.slots} runner${p.slots !== 1 ? 's' : ''}</span>
+        <span class="${reduced ? 'text-amber-400' : 'text-purple-400/70'}">${reduced ? `capped - ${p.busy} GPU session(s) already active` : `${p.busy} active`}</span>
+      </div>`;
+  });
+
+  let shardIdx = 0;
+  perAccount.forEach(p => {
+    for (let k = 0; k < p.slots; k++) {
+      const extra = shardIdx < remainder ? 1 : 0;
+      const currentChunk = chunkSize + extra;
+      const currentEnd = currentStart + currentChunk;
+      html += `
+        <div class="flex items-center justify-between p-1.5 rounded bg-purple-950/40 border border-purple-900/40">
+          <span><strong>Shard ${shardIdx + 1}/${R}</strong> (@${esc(p.acc)}):</span>
+          <span class="text-cyan-300 font-mono">[${currentStart.toLocaleString()} ➔ ${currentEnd.toLocaleString()}] (${currentChunk.toLocaleString()} items)</span>
+        </div>`;
+      currentStart = currentEnd;
+      shardIdx++;
+    }
   });
 
   preview.innerHTML = html;
@@ -118,6 +156,7 @@ async function handleDistributedSubmit(e) {
     accelerator: accelerator,
     enable_internet: enableInternet,
     is_trial: false,
+    sessions_per_account: parseInt(document.getElementById('dist-sessions-per-account')?.value || '2', 10),
     timeout_seconds: 43200
   };
 
@@ -161,5 +200,83 @@ window.switchTab = function(tabId) {
   if (originalSwitchTab) originalSwitchTab(tabId);
   if (tabId === 'distributed') {
     renderDistributedAccountCheckboxes();
+    loadWorkloadsData();
   }
 };
+
+function updateQuotaHint() {
+  const hint = document.getElementById('dist-quota-hint');
+  const sel = document.getElementById('dist-sessions-per-account');
+  if (!hint || !sel) return;
+  hint.classList.toggle('hidden', sel.value !== '2');
+}
+
+// ------------------------------------------------------------------
+// Recent Workloads panel + Stop-Workload
+// ------------------------------------------------------------------
+async function loadWorkloadsData() {
+  const tbody = document.getElementById('workloads-table-body');
+  if (!tbody) return;
+  try {
+    const res = await fetch('/api/distributed');
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    const data = await res.json();
+    const workloads = data.workloads || [];
+
+    if (workloads.length === 0) {
+      tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-6 text-center text-slate-500">No distributed workloads dispatched yet.</td></tr>`;
+      return;
+    }
+
+    const badges = {
+      running: 'bg-cyan-950 text-cyan-400 border-cyan-800',
+      dispatched: 'bg-emerald-950 text-emerald-400 border-emerald-800',
+      partial: 'bg-amber-950 text-amber-400 border-amber-800',
+      failed: 'bg-rose-950 text-rose-400 border-rose-800',
+      stopped: 'bg-slate-800 text-slate-400 border-slate-700'
+    };
+
+    tbody.innerHTML = workloads.map(w => {
+      const shards = w.shards || [];
+      const activeShards = shards.filter(s => s.status === 'queued' || s.status === 'running').length;
+      const badge = badges[w.status] || 'bg-slate-800 text-slate-300 border-slate-700';
+      const stopBtn = activeShards > 0
+        ? `<button onclick="stopWorkload('${esc(w.id)}')" class="px-2.5 py-1 rounded text-xs font-semibold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 border border-rose-500/30 transition">Stop All</button>`
+        : '';
+      const accounts = Array.isArray(w.accounts_used)
+        ? w.accounts_used.join(', ')
+        : (w.accounts_used?.accounts || []).join(', ');
+      return `
+        <tr class="hover:bg-slate-800/30 transition">
+          <td class="px-6 py-3.5">
+            <div class="font-bold text-white">${esc(w.title)}</div>
+            <div class="text-[10px] text-slate-500 font-mono mt-0.5">@ ${esc(accounts)} · ${shards.length} shard${shards.length !== 1 ? 's' : ''}</div>
+          </td>
+          <td class="px-6 py-3.5"><span class="px-2 py-0.5 rounded-full text-xs font-semibold border ${badge}">${esc(String(w.status).toUpperCase())}</span></td>
+          <td class="px-6 py-3.5 font-mono text-xs text-slate-400">${shards.filter(s => s.status === 'complete').length}/${shards.length} done</td>
+          <td class="px-6 py-3.5 text-xs text-amber-300 font-mono">${activeShards} active</td>
+          <td class="px-6 py-3.5 text-right">${stopBtn}</td>
+        </tr>`;
+    }).join('');
+  } catch (err) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-6 text-center text-rose-400">Failed to load workloads: ${esc(err.message)}</td></tr>`;
+  }
+}
+
+async function stopWorkload(workloadId) {
+  if (!confirm('Stop ALL active shards of this workload on Kaggle?')) return;
+  showToast('Stopping all workload shards...', 'warning');
+  try {
+    const res = await fetch(`/api/distributed/${workloadId}/stop`, { method: 'POST' });
+    const data = await res.json();
+    if (data.success) {
+      showToast(data.message, 'success');
+    } else {
+      showToast(data.detail || 'Failed to stop workload', 'error');
+    }
+    refreshGlobalData();
+    loadWorkloadsData();
+  } catch (err) {
+    showToast('Error stopping workload: ' + err.message, 'error');
+  }
+}

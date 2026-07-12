@@ -15,6 +15,7 @@ class LaunchRunJSONRequest(BaseModel):
     enable_internet: bool = True
     is_trial: bool = False
     timeout_seconds: Optional[int] = None
+    env_vars: Optional[Dict[str, str]] = None  # injected as os.environ before user code
 
 @router.get("")
 async def list_runs(limit: int = 100):
@@ -45,7 +46,8 @@ async def launch_run_json(payload: LaunchRunJSONRequest):
             accelerator=payload.accelerator,
             enable_internet=payload.enable_internet,
             is_trial=payload.is_trial,
-            timeout_seconds=payload.timeout_seconds
+            timeout_seconds=payload.timeout_seconds,
+            env_vars=payload.env_vars
         )
         return result
     except HTTPException:

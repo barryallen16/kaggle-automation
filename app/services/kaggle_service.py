@@ -9,9 +9,9 @@ import re
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, AsyncGenerator
-from app.config import NOTEBOOKS_DIR, LOGS_DIR, OUTPUTS_DIR, get_kaggle_cli_path
+from app.config import NOTEBOOKS_DIR, LOGS_DIR, OUTPUTS_DIR, get_kaggle_cli_path, get_kernel_env_defaults
 from app.services.account_manager import AccountManager
-from app.database import create_run_record, update_run_status, get_run_by_id, utcnow_iso
+from app.database import create_run_record, update_run_status, get_run_by_id, get_active_runs, utcnow_iso
 
 logger = logging.getLogger("kaggle_service")
 
@@ -64,6 +64,40 @@ class KaggleService:
         "tpu-v6e-8": "TpuV6E8",
         "tpu-v6e8": "TpuV6E8",
     }
+
+    @classmethod
+    def build_env_preamble(cls, env_vars: Dict[str, str], is_notebook: bool) -> str:
+        """Renders os.environ assignments for kernel injection.
+
+        Note: values become part of the private kernel's source on Kaggle.
+        Fine for single-operator dashboards; don't inject shared-write secrets.
+        """
+        if not env_vars:
+            return ""
+        lines = [
+            "# ==========================================",
+            "# AUTO-INJECTED ENVIRONMENT (Kaggle Automation Dashboard)",
+            "# ==========================================",
+            "import os",
+        ]
+        for key in sorted(env_vars):
+            lines.append(f"os.environ[{key!r}] = {env_vars[key]!r}")
+        lines.append("")
+        text = "\n".join(lines)
+        if is_notebook:
+            nb = json.loads(cls.ensure_executable_notebook(text))
+            cell_src = nb["cells"][0]["source"]
+            if isinstance(cell_src, list):
+                cell_src = "".join(cell_src)
+            nb["cells"] = [{
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {"tags": ["kaggle-automation-env"]},
+                "outputs": [],
+                "source": cell_src
+            }] + nb["cells"]
+            return json.dumps(nb)
+        return text + "\n"
 
     @classmethod
     def resolve_accelerator(cls, accelerator: str) -> str:
@@ -146,6 +180,7 @@ class KaggleService:
         enable_internet: bool = True,
         is_trial: bool = False,
         timeout_seconds: Optional[int] = None,
+        env_vars: Optional[Dict[str, str]] = None,
         workload_id: Optional[str] = None,
         shard_index: Optional[int] = None,
         total_shards: Optional[int] = None
@@ -160,6 +195,23 @@ class KaggleService:
         slug = cls.sanitize_slug(clean_title)
         kernel_ref = f"{account_username}/{slug}"
         kaggle_url = f"https://www.kaggle.com/code/{kernel_ref}"
+
+        # Guard: Kaggle keys notebooks by title, so launching while another run
+        # of the SAME kernel is queued/running would silently replace it - and
+        # stopping one row would kill both. Block with an actionable error.
+        for r in get_active_runs():
+            if r["kernel_ref"] == kernel_ref:
+                return {
+                    "success": False,
+                    "status": "conflict",
+                    "error": (
+                        f"'{clean_title}' is already {r['status']} on this account "
+                        f"(run {r['id']}). Stop it first, wait for it to finish, "
+                        "or use a different title."
+                    ),
+                    "conflict_run_id": r["id"],
+                    "run_id": None
+                }
         
         # Working folder for this run
         run_dir = NOTEBOOKS_DIR / run_id
@@ -168,8 +220,22 @@ class KaggleService:
         # Write notebook / script file
         is_notebook = filename.endswith(".ipynb")
         kernel_type = "notebook" if is_notebook else "script"
+
+        # Inject environment secrets: explicit per-request vars override the
+        # .env defaults (HF_TOKEN etc.). Applied before any user code runs.
+        effective_env = {**get_kernel_env_defaults(), **(env_vars or {})}
+        preamble = cls.build_env_preamble(effective_env, is_notebook)
+
         if is_notebook:
             code_content = cls.ensure_executable_notebook(code_content)
+            if preamble:
+                nb = json.loads(code_content)
+                env_nb = json.loads(preamble)
+                nb["cells"] = env_nb["cells"] + nb["cells"]
+                code_content = json.dumps(nb)
+        elif preamble:
+            code_content = preamble + code_content
+
         code_path = run_dir / filename
         with open(code_path, "w", encoding="utf-8") as f:
             f.write(code_content)
@@ -218,6 +284,7 @@ class KaggleService:
             cmd.extend(["-t", str(effective_timeout)])
 
         log_file_path = LOGS_DIR / f"{run_id}.log"
+        log_file_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_file_path, "w", encoding="utf-8") as f:
             f.write(f"=== Kaggle Run Initialized: {utcnow_iso()} ===\n")
             f.write(f"Kernel: {kernel_ref}\n")
@@ -229,16 +296,20 @@ class KaggleService:
         env = AccountManager.get_account_env(account_username)
         
         # Retry logic for 409 Conflict errors (Kaggle rate-limits when a kernel
-        # is still starting/running on the same account)
+        # is still starting/running on the same account) and transient batch-GPU session caps.
         MAX_RETRIES = 4
         RETRY_BASE_DELAY = 5  # seconds
+        # Session teardown after a stop can hold the batch-GPU slot for a few
+        # minutes (CANCEL_ACKNOWLEDGED). Total coverage ~= 6 min backoff.
+        SESSION_CAP_RETRY_DELAYS = [15, 30, 45, 60, 90, 120]
+        total_attempts = max(MAX_RETRIES, len(SESSION_CAP_RETRY_DELAYS) + 1)
         
         out_str = ""
         err_str = ""
         proc = None
         
         try:
-            for attempt in range(MAX_RETRIES):
+            for attempt in range(total_attempts):
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.PIPE,
@@ -249,12 +320,24 @@ class KaggleService:
                 out_str = stdout.decode("utf-8", errors="ignore")
                 err_str = stderr.decode("utf-8", errors="ignore")
 
-                # Check for 409 Conflict — retry with exponential backoff
-                if proc.returncode != 0 and "409" in err_str and attempt < MAX_RETRIES - 1:
-                    delay = RETRY_BASE_DELAY * (2 ** attempt)
-                    logger.warning(f"Kaggle 409 Conflict on attempt {attempt + 1}/{MAX_RETRIES}, retrying in {delay}s...")
+                # Retryable push failures: 409 Conflict (kernel transitioning)
+                # and the transient batch-GPU-session cap while old sessions reap.
+                # The CLI prints "Kernel push error: ..." on STDOUT - scan BOTH streams.
+                combined_out = out_str + "\n" + err_str
+                low = combined_out.lower()
+                session_cap_hit = "maximum batch gpu session count" in low
+                is_409 = "409" in combined_out or "conflict" in low
+                is_push_err = proc.returncode != 0 or "kernel push error" in low
+                retryable = is_push_err and (is_409 or session_cap_hit)
+                if retryable and attempt < total_attempts - 1:
+                    if session_cap_hit:
+                        delay = SESSION_CAP_RETRY_DELAYS[min(attempt, len(SESSION_CAP_RETRY_DELAYS) - 1)]
+                    else:
+                        delay = RETRY_BASE_DELAY * (2 ** attempt)
+                    reason = "session cap" if session_cap_hit else "409 conflict"
+                    logger.warning(f"Kaggle push attempt {attempt + 1}/{total_attempts} hit {reason}, backing off {delay}s...")
                     with open(log_file_path, "a", encoding="utf-8") as f:
-                        f.write(f"[RETRY] 409 Conflict on attempt {attempt + 1}, retrying in {delay}s...\n")
+                        f.write(f"[RETRY] attempt {attempt + 1} failed ({reason}), backing off {delay}s...\n")
                     await asyncio.sleep(delay)
                     continue
                 break
@@ -654,13 +737,16 @@ class KaggleService:
                     stderr=asyncio.subprocess.PIPE,
                     env=env
                 )
-                _, stderr = await proc.communicate()
+                stdout, stderr = await proc.communicate()
+                out_str = stdout.decode("utf-8", errors="ignore")
                 err_str = stderr.decode("utf-8", errors="ignore")
-                last_err = err_str.strip()[-500:]
-                if proc.returncode == 0:
+                combined = (out_str + "\n" + err_str).strip()
+                last_err = combined[-500:]
+                is_push_err = "kernel push error" in combined.lower()
+                if proc.returncode == 0 and not is_push_err:
                     push_ok = True
                     break
-                if "409" in err_str and attempt < 2:
+                if ("409" in combined or "conflict" in combined.lower()) and attempt < 2:
                     logger.warning(f"Stop push 409 Conflict, retry {attempt + 1}/3 in 5s...")
                     await asyncio.sleep(5)
                     continue
@@ -672,6 +758,15 @@ class KaggleService:
 
         if push_ok:
             update_run_status(run_id, "stopped", "Explicitly stopped by user", utcnow_iso())
+            # Sibling runs sharing this kernel died with the same push - stamp
+            # them too so reap-grace windows are measured correctly.
+            for r in get_active_runs():
+                if r["kernel_ref"] == kernel_ref and r["id"] != run_id:
+                    update_run_status(
+                        r["id"], "stopped",
+                        "Stopped: shared kernel received the stop push",
+                        utcnow_iso()
+                    )
             return {"success": True, "message": f"Run {run_id} ({kernel_ref}) stopped successfully."}
 
         update_run_status(run_id, run["status"], f"Stop failed: {last_err}")

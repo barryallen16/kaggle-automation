@@ -1,3 +1,4 @@
+import os
 import json
 import uuid
 import asyncio
@@ -57,6 +58,143 @@ class WorkloadDistributor:
         else:
             return header_code + "\n" + code_content
 
+    # ------------------------------------------------------------------
+    # Availability / runner-plan helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _is_gpu(accelerator: Optional[str]) -> bool:
+        return bool(accelerator) and str(accelerator).lower() not in ("none", "default", "cpu")
+
+    @classmethod
+    async def _busy_gpu_sessions(cls, accounts: List[str], launch_is_gpu: bool) -> Dict[str, int]:
+        """Counts busy GPU session slots per account.
+
+        Queries live Kaggle status for active (queued/running) GPU runs in the DB.
+        If a kernel is complete, error, or stopped, its DB record is reaped
+        and its slot freed immediately. Genuinely active (running/queued)
+        kernels consume 1 slot per distinct kernel_ref.
+        """
+        from datetime import datetime, timezone
+        from app.database import get_active_runs, update_run_status, utcnow_iso
+
+        busy: Dict[str, Set[str]] = {a: set() for a in accounts}
+        if not launch_is_gpu:
+            return {a: 0 for a in accounts}
+
+        account_set = set(accounts)
+
+        # Active rows: verify against live status so genuinely-finished kernels
+        # (complete/error/stopped confirmed by CLI) release their slot immediately.
+        for r in get_active_runs():
+            acc = r.get("account_username")
+            if acc not in account_set:
+                continue
+            if not cls._is_gpu(r.get("accelerator")):
+                continue
+            resp = await KaggleService.get_kernel_status(acc, r["kernel_ref"])
+            st = resp.get("status", "unknown")
+            if st in ("complete", "error", "stopped", "cancelacknowledged"):
+                update_run_status(r["id"], "stopped" if "cancel" in st else st, "auto-reaped by availability check", utcnow_iso())
+                continue
+            busy[acc].add(r["kernel_ref"])
+
+        return {a: len(busy[a]) for a in accounts}
+
+    MAX_GPU_SESSIONS_PER_ACCOUNT = 2  # Kaggle's batch GPU session cap
+
+    @classmethod
+    def _build_runner_plan(
+        cls,
+        accounts: List[str],
+        sessions_per_account: int,
+        accelerator: str,
+        busy: Dict[str, int]
+    ) -> List[Dict[str, Any]]:
+        """Expands accounts into runners based on free slots (silent reduction).
+
+        Account capacity is Kaggle's hard limit of 2 concurrent GPU sessions:
+        free = max(0, 2 - busy); effective = min(chosen, free). CPU launches
+        aren't capped by that limit at all.
+        """
+        chosen = max(1, min(2, int(sessions_per_account or 2)))
+        gpu_launch = cls._is_gpu(accelerator)
+        plan = []
+        for a in accounts:
+            b = busy.get(a, 0)
+            if gpu_launch:
+                free = max(0, cls.MAX_GPU_SESSIONS_PER_ACCOUNT - b)
+                effective = min(chosen, free)
+            else:
+                effective = chosen
+            plan.append({
+                "account": a,
+                "requested": chosen,
+                "busy": b,
+                "slots": effective
+            })
+        return plan
+
+    RECLAIM_WINDOW_MINUTES = 30  # how far back we look for slot-holding kernels
+
+    @classmethod
+    async def reclaim_slots(cls, accounts: List[str]) -> Dict[str, Any]:
+        """Actively hunts GPU slot-holders on the given accounts and cancels them.
+
+        Kaggle keeps a stopped session's slot occupied while the worker tears
+        down (CANCEL_ACKNOWLEDGED can persist for many minutes). Instead of
+        waiting passively, we find dashboard-managed kernels that are still
+        RUNNING/QUEUED and push a cancel stub to each one.
+
+        Safety: only kernel_refs that exist in our DB are touched - foreign
+        kernels are reported as warnings, never auto-cancelled.
+        """
+        from datetime import datetime, timedelta
+        from app.database import get_all_runs, get_run_by_id
+        from app.services.kaggle_service import KaggleService
+
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=cls.RECLAIM_WINDOW_MINUTES)
+        candidates: Dict[str, List[Dict[str, Any]]] = {a: [] for a in accounts}
+        seen_refs = set()
+
+        for r in get_all_runs(limit=200):
+            acc = r.get("account_username")
+            if acc not in candidates:
+                continue
+            if not cls._is_gpu(r.get("accelerator")):
+                continue
+            if r["id"] in seen_refs:
+                continue
+            stamp = r.get("end_time") or r.get("start_time") or ""
+            try:
+                when = datetime.fromisoformat(str(stamp))
+                if when.tzinfo is None:
+                    when = when.replace(tzinfo=timezone.utc)
+                if when < cutoff:
+                    continue
+            except Exception:
+                pass  # unparsable stamp - keep as candidate rather than miss it
+            seen_refs.add(r["id"])
+            candidates[acc].append(r)
+
+        cancelled, already_gone, warnings = [], [], []
+        for acc in accounts:
+            for row in candidates[acc]:
+                ref = row["kernel_ref"]
+                resp = await KaggleService.get_kernel_status(acc, ref)
+                st = resp.get("status", "unknown")
+                if st in ("complete", "error", "stopped", "cancelacknowledged"):
+                    already_gone.append({"ref": ref, "status": st})
+                    continue
+                # RUNNING / QUEUED / unknown -> actively cancel via stop stub
+                run_row = get_run_by_id(row["id"])
+                stop = await KaggleService.stop_kernel(row["id"]) if run_row else {"success": False}
+                if stop.get("success"):
+                    cancelled.append({"ref": ref, "was": st})
+                else:
+                    warnings.append({"ref": ref, "status": st, "error": stop.get("error", "stop failed")})
+
+        return {"cancelled": cancelled, "already_free": already_gone, "warnings": warnings}
+
     @classmethod
     async def distribute_and_launch(
         cls,
@@ -69,62 +207,124 @@ class WorkloadDistributor:
         accelerator: str = "none",
         enable_internet: bool = True,
         is_trial: bool = False,
-        timeout_seconds: Optional[int] = None
+        timeout_seconds: Optional[int] = None,
+        env_vars: Optional[Dict[str, Any]] = None,
+        sessions_per_account: int = 2
     ) -> Dict[str, Any]:
-        """Calculates workload partitions across accounts and dispatches them concurrently."""
-        num_accounts = len(accounts)
-        if num_accounts == 0:
+        """Partitions the workload across expanded per-account GPU runners.
+
+        Each account may run up to `sessions_per_account` (<=2) concurrent GPU
+        sessions; availability is checked live and reduced silently when fewer
+        slots are free. The whole launch is validated atomically BEFORE any
+        workload record is created.
+        """
+        accounts = [a for a in accounts if a]
+        if not accounts:
             return {"success": False, "error": "No Kaggle accounts selected for distribution."}
-        if total_items < num_accounts:
-            return {"success": False, "error": f"Cannot split {total_items} items across {num_accounts} accounts (fewer items than shards)."}
+        sessions_per_account = max(1, min(2, int(sessions_per_account or 2)))
+
+        # 0. Actively reclaim GPU slots: find lingering dashboard-managed
+        #    kernels (RUNNING/QUEUED long after their run "ended") and cancel
+        #    them instead of failing with Kaggle's session-cap error.
+        if cls._is_gpu(accelerator):
+            try:
+                reclaim = await cls.reclaim_slots(accounts)
+                if reclaim["cancelled"]:
+                    logger.warning(
+                        f"Reclaimed {len(reclaim['cancelled'])} lingering GPU "
+                        f"session(s): {[c['ref'] for c in reclaim['cancelled']]}"
+                    )
+                    await asyncio.sleep(15)  # give cancellations a moment to propagate
+            except Exception as e:
+                logger.warning(f"Slot reclamation skipped: {e}")
+
+        # 1. Live availability -> runner plan (silent reduction per account)
+        busy = await cls._busy_gpu_sessions(accounts, cls._is_gpu(accelerator))
+        plan = cls._build_runner_plan(accounts, sessions_per_account, accelerator, busy)
+        runners: List[Dict[str, Any]] = []
+        for p in plan:
+            for _ in range(p["slots"]):
+                runners.append({"account": p["account"]})
+
+        R = len(runners)
+        if R == 0:
+            detail = ", ".join(f"@{p['account']}: {p['busy']} active" for p in plan)
+            return {
+                "success": False,
+                "error": f"No free GPU session slots. Active sessions - {detail}. "
+                         "Stop existing runs or wait for them to finish."
+            }
+
+        if total_items < R:
+            return {"success": False, "error": f"Cannot split {total_items} items across {R} runners (fewer items than shards)."}
 
         workload_id = f"workload_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-        
-        # Calculate shard partitions
+
+        # 2. Shard partitions over R runners (remainder to the first shards)
         total_units = total_items
-        chunk_size = total_units // num_accounts
-        remainder = total_units % num_accounts
+        chunk_size = total_units // R
+        remainder = total_units % R
 
         shards_info = []
         current_start = start_offset
-
-        for i in range(num_accounts):
+        for i, runner in enumerate(runners):
             extra = 1 if i < remainder else 0
             current_chunk = chunk_size + extra
             current_end = current_start + current_chunk
-            
             shards_info.append({
                 "shard_index": i,
-                "account_username": accounts[i],
+                "account_username": runner["account"],
                 "start_index": current_start,
                 "end_index": current_end,
                 "count": current_chunk
             })
             current_start = current_end
 
-        # Save workload to database
+        # 3. Atomic pre-flight: every planned kernel_ref must be free BEFORE
+        #    the workload row exists (zero side effects on rejection).
+        from app.database import get_active_runs as db_active_runs
+        active_refs = {r["kernel_ref"] for r in db_active_runs()}
+        planned_conflicts = []
+        for s in shards_info:
+            shard_title = f"{base_title} [Shard {s['shard_index'] + 1}/{R}]"
+            ref = f"{s['account_username']}/{KaggleService.sanitize_slug(shard_title[:50])}"
+            if ref in active_refs:
+                planned_conflicts.append(ref)
+        if planned_conflicts:
+            return {
+                "success": False,
+                "status": "conflict",
+                "error": ("Kernel(s) already active with the same title: "
+                          + ", ".join(sorted(set(planned_conflicts)))
+                          + ". Use a different base title or stop those runs first.")
+            }
+
+        # 4. Commit workload row only after validation passed
         create_distributed_workload({
             "id": workload_id,
             "title": base_title,
             "workload_type": "range",
             "total_units": total_units,
-            "accounts_used": json.dumps(accounts),
+            "accounts_used": json.dumps({
+                "accounts": list(dict.fromkeys(accounts)),
+                "runners": [{"account": s["account_username"], "shard_index": s["shard_index"]} for s in shards_info],
+                "sessions_per_account": sessions_per_account
+            }),
             "created_at": utcnow_iso(),
             "status": "running"
         })
 
-        # Launch all shards in parallel
+        # 5. Launch: parallel across accounts, staggered within an account
         async def launch_shard(shard: Dict[str, Any]):
             idx = shard["shard_index"]
             account = shard["account_username"]
-            shard_title = f"{base_title} [Shard {idx + 1}/{num_accounts}]"
-            
-            # Inject shard variables
+            shard_title = f"{base_title} [Shard {idx + 1}/{R}]"
+
             injected_code = cls.inject_shard_config_into_notebook(
                 code_content=code_content,
                 filename=filename,
                 shard_id=idx,
-                total_shards=num_accounts,
+                total_shards=R,
                 start_index=shard["start_index"],
                 end_index=shard["end_index"],
                 total_items=total_units
@@ -139,9 +339,10 @@ class WorkloadDistributor:
                 enable_internet=enable_internet,
                 is_trial=is_trial,
                 timeout_seconds=timeout_seconds,
+                env_vars=env_vars,
                 workload_id=workload_id,
                 shard_index=idx,
-                total_shards=num_accounts
+                total_shards=R
             )
             return {
                 "shard_index": idx,
@@ -151,22 +352,38 @@ class WorkloadDistributor:
                 "push_result": result
             }
 
-        launch_tasks = [launch_shard(s) for s in shards_info]
-        shard_results = await asyncio.gather(*launch_tasks, return_exceptions=True)
+        by_account: Dict[str, List[Dict[str, Any]]] = {}
+        for s in shards_info:
+            by_account.setdefault(s["account_username"], []).append(s)
+
+        stagger_seconds = int(os.getenv("INTER_PUSH_STAGGER_SECONDS", "20"))
+
+        async def launch_account_group(acc: str, group: List[Dict[str, Any]]):
+            out = []
+            for j, s in enumerate(group):
+                if j > 0 and stagger_seconds > 0:
+                    await asyncio.sleep(stagger_seconds)  # stagger same-account pushes - Kaggle session cap needs time to settle between pushes
+                out.append(await launch_shard(s))
+            return out
+
+        grouped = await asyncio.gather(
+            *[launch_account_group(acc, group) for acc, group in by_account.items()],
+            return_exceptions=True
+        )
 
         processed_results = []
-        for r in shard_results:
-            if isinstance(r, Exception):
-                processed_results.append({"error": str(r)})
-            else:
-                processed_results.append(r)
+        for group_result in grouped:
+            if isinstance(group_result, Exception):
+                processed_results.append({"error": str(group_result)})
+                continue
+            for r in group_result:
+                processed_results.append(r if not isinstance(r, Exception) else {"error": str(r)})
 
-        # Finalize workload status based on per-shard push outcomes
         pushed_ok = sum(
             1 for r in processed_results
             if isinstance(r, dict) and r.get("push_result", {}).get("success")
         )
-        if pushed_ok == num_accounts:
+        if pushed_ok == R:
             final_status = "dispatched"
         elif pushed_ok > 0:
             final_status = "partial"
@@ -179,7 +396,9 @@ class WorkloadDistributor:
             "workload_id": workload_id,
             "base_title": base_title,
             "total_units": total_units,
-            "total_shards": num_accounts,
+            "total_shards": R,
+            "sessions_per_account_requested": sessions_per_account,
+            "runner_plan": plan,
             "shards_pushed": pushed_ok,
             "status": final_status,
             "shards": processed_results

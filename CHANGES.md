@@ -812,3 +812,143 @@ than raw recall:
 - Harness updated to the new contract (unparseable = skipped) + new regression
   test: valid-JSON-but-truncated generations never reach the output file.
   Suites: 9/9 inference + 3/3 automation green.
+
+## 41. Same-Title Collision Guards (Stop Killed Two Runs)
+
+**Incident:** two dashboard runs pointed at ONE Kaggle kernel (same title ->
+title-keyed slug). Stopping one row pushed the exit stub to the shared kernel,
+killing BOTH sessions - including a freshly launched rerun. Two rapid relaunch
+attempts then errored in the post-stop 409 window.
+
+**Fixes (`app/services/kaggle_service.py`):**
+1. **Duplicate-launch guard**: `push_kernel` rejects launches while another
+   queued/running row shares the same `kernel_ref`, with an actionable error
+   ("already running - stop it first or use a different title") plus the
+   conflicting run id. Verified live: second identical push now returns
+   `status: conflict` instead of silently replacing the running version.
+2. **Honest catalog on stop**: after a successful stop push, ALL other active
+   runs sharing that kernel ref are marked `stopped` ("shared kernel received
+   the stop push") so the UI can't show ghosts that are actually dead.
+3. Integration-tested hermetically (stub CLI): dup blocked w/ correct conflict id;
+   stopping one sibling marks the other stopped; target marked stopped.
+
+## 42. HF_TOKEN / Kernel Environment Injection
+
+Kernels now receive secrets from the server's .env automatically:
+
+- `app/config.py:get_kernel_env_defaults()` - lazy loader (re-reads .env on every
+  launch, so adding/updating keys needs NO server restart). Today: HF_TOKEN.
+  A READ-scoped token is sufficient - kernels only download public artifacts;
+  it unlocks higher HF Hub rate limits + faster hf_transfer downloads.
+- `push_kernel(..., env_vars=None)` merges explicit per-request vars over .env
+  defaults and prepends them as an `os.environ[...]` preamble cell/header before
+  any user code (`kaggle-automation-env` tag on notebooks).
+- API: `LaunchRunJSONRequest.env_vars` optional dict.
+- NOTE: injected values are visible in the private kernel's source on Kaggle -
+  fine for single-operator use; don't inject shared write secrets.
+- Verified live end-to-end: probe kernel printed the injected token prefix from
+  real Kaggle execution; probe deleted afterwards.
+
+Also noted: Kaggle enforces "Maximum batch GPU session count of 2" per account;
+recently stopped sessions linger in CANCEL_ACKNOWLEDGED for several minutes
+before the slot frees. Relaunch after the status clears.
+
+## 43. Throughput Timing Runs (Single vs Distributed)
+
+Setup: MAX_ITEMS_PER_RUN env injection (script exits cleanly after N items);
+HF_TOKEN read token injected via .env -> kernel preamble (0 anonymous-HF warnings,
+downloads faster). Both runs T4 x2.
+
+| Metric | Single (darkzone16) | Distributed shard (jayadithyx16) |
+|---|---|---|
+| Items processed | 10 | 5 |
+| Inference loop time | 11.34 min | 4.91 min |
+| Per-item pace | ~68 s | ~59-66 s |
+| Startup to first item | ~19.3 min | ~19.9 min |
+| Completion tokens | avg 81 / max 92 | avg 79 / max 86 |
+
+Conclusions:
+- Steady-state throughput ~65 s/item per account (item-to-item variance 29-92s
+  driven by output length + image count).
+- Token cap 384 has huge headroom (max seen 92); lowering further yields NO gain
+  because generations stop at EOS naturally.
+- Startup overhead ~19-20 min per session (queue + installs + model download/load).
+- Projection for 33,772 items @ ~65s: ~169h compute. With Kaggle's 30h weekly GPU
+  quota per account: ~5.6 weeks per account of pure quota-limited grinding;
+  2 accounts ~= 2.8 weeks; N accounts ~= 5.6/N weeks. More accounts is the only
+  linear lever without engine changes (micro-batching rewrite remains an option
+  for ~2-4x within each session).
+
+## 44. Multi-Session Distributed Runner (2 GPU Sessions per Account)
+
+Kaggle allows 2 concurrent batch GPU sessions per account - the distributor now
+exploits that:
+
+**Runner plan (`workload_distributor.py`):**
+- `sessions_per_account` (default 2, clamped 1..2) on JSON + form APIs.
+- Per-account availability: active DB runs filtered to GPU accelerators (CPU
+  runs never consume the cap), each refreshed via live `kernels status` so
+  crashed/unpolled sessions don't leak slots.
+- `effective = min(chosen, 2 - busy)` per account - silent reduction when fewer
+  slots are free; zero free slots across all accounts -> clean rejection naming
+  busy accounts.
+- Runner expansion over R runners with existing remainder-aware chunking;
+  shard titles stay unique per runner (no §41 ref collisions).
+- **Atomic pre-flight**: every planned kernel_ref verified free BEFORE the
+  workload row is created - conflicts reject the whole launch with zero side
+  effects.
+- Launches parallel across accounts, staggered ~4s within an account (409-safe).
+- `accounts_used` now stores {accounts, runners[], sessions_per_account}.
+
+**Stop-Workload**: `POST /api/distributed/{id}/stop` stops every active shard in
+one call and marks the workload stopped/partial. UI: new Recent Workloads panel
+(Distributed tab) with status badges, progress, and Stop All buttons.
+
+**Retry hardening (`kaggle_service.py`)**: pushes now also retry on Kaggle's
+transient "Maximum batch GPU session count" error (15s+ backoff) - old sessions
+linger in CANCEL_ACKNOWLEDGED for minutes after a stop, which previously caused
+immediate dispatch failures.
+
+**Verified live**: 2 accounts x 2 runners dispatched simultaneously (4 GPU
+sessions); one darkzone16 runner hit the lingering-session cap (now retryable),
+the other 3 ran; Stop-Workload cleanly terminated 3/3 across both accounts.
+Hermetic suite: 8 distributor tests (expansion, silent reduction, full
+rejection, CPU filter, remainder split, atomic conflict, stop endpoint, 404)
+plus existing suites all green.
+
+## 45. 4-Shard Distributed Test COMPLETE (200 items, zero overlap)
+
+Launch #5 (workload_20260823_152851_7d1d4f, ~15:28 UTC) is the first fully
+successful 2-account x 2-session dispatch after the §44 session-cap fixes:
+
+**Result:** all 4 shards KernelWorkerStatus.COMPLETE, 50 items each.
+- Aggregate `task_a_labeled.jsonl` check: 200 lines, 200 UNIQUE ids,
+  0 unparseable (truncation guard never tripped).
+- Token stats: avg 89 / max 102 completion tokens per item; fail=0 throughout.
+
+| Shard | Account | Window (UTC) | Duration |
+|---|---|---|---|
+| 0 | darkzone16 | 15:28:55 -> 17:00:29 | 91.6 min |
+| 1 | darkzone16 | 15:29:18 -> 16:44:20 | 75.0 min |
+| 2 | jayadithyx16 | 15:28:55 -> 16:55:34 | 86.7 min |
+| 3 | jayadithyx16 | 15:29:17 -> 16:55:34 | 86.3 min |
+
+Wall time for 200 items across 4 T4x2 sessions: **~92 min** (~27.6 s/item
+effective aggregate throughput vs ~65-90 s/item single-session).
+
+**What made it work (vs launches #1/#3):**
+- 30s stagger between same-account pushes (was 4s) - Kaggle needs >10s to
+  settle the session cap between kernel pushes.
+- DISTINCT kernel_ref counting in `_busy_gpu_sessions` - duplicate rows from
+  failed-attempt + relaunch no longer inflate busy counts (launch blocker).
+- 20-min reap-grace window keeps recently-stopped GPU rows counted busy so
+  pre-flight doesn't double-book a slot Kaggle hasn't freed yet.
+
+**Operational notes:**
+- `kernels logs -f` followers can die silently mid-run while the kernel keeps
+  producing output; the Logs API `?fetch_remote=true` backfill + WS-open
+  `ensure_log_stream()` self-heal recover full history. Remote log API itself
+  may lag minutes behind the running kernel - empty remote output on a RUNNING
+  kernel is not evidence of a stalled job; verify via `kernels status`.
+- Server restart at ~15:51 was required (process had died); runs and monitor
+  loop are resilient to it since state lives in DB/files.

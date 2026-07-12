@@ -100,11 +100,11 @@ class SessionMonitor:
                 await TelegramService.notify_12h_limit_reached(run)
                 update_run_telegram_flag(run_id, "telegram_notified_12h", 1)
 
-        # 5. Handle completion or error
-        if remote_status in ["complete", "error"]:
+        # 5. Handle completion, error, or stop
+        if remote_status in ["complete", "error", "stopped", "canceled"]:
             update_run_status(
                 run_id=run_id,
-                status=remote_status,
+                status="stopped" if remote_status in ("stopped", "canceled") else remote_status,
                 status_message=status_resp.get("raw", ""),
                 end_time=now.isoformat()
             )
