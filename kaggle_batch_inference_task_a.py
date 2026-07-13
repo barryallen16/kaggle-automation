@@ -102,6 +102,21 @@ except ImportError:
 run_cmd("wget -q -N https://huggingface.co/datasets/barryallen16/fitcheck-annotate-dataset/resolve/main/task_a_dataset.jsonl",
         "Downloading Task A dataset from HuggingFace")
 
+# Prior teacher labels published to the hub by earlier sessions. Any id present
+# in this file was already labeled successfully - the resume logic in section 5
+# folds these into the skip-set so reruns never redo paid work. Distinct target
+# name avoids clashing with our own OUTPUT_FILE (task_a_labeled*.jsonl).
+# Tolerated failure: 404 on first-ever run (nothing pushed yet) -> start fresh.
+PRIOR_LABELED_URL = ("https://huggingface.co/datasets/barryallen16/"
+                     "fitcheck-annotate-dataset/resolve/main/task_a_labeled.jsonl")
+_prior = subprocess.run(f"wget -q -O task_a_labeled_prior.jsonl '{PRIOR_LABELED_URL}'",
+                        shell=True, capture_output=True, text=True)
+if _prior.returncode == 0:
+    _n_prior = sum(1 for l in open("task_a_labeled_prior.jsonl", encoding="utf-8") if l.strip())
+    print(f"Downloaded prior labels from HuggingFace ({_n_prior} items) - will skip them.")
+else:
+    print("No prior labels on the hub yet (404) - starting fresh.")
+
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 from qwen_vl_utils import process_vision_info
 
@@ -300,6 +315,22 @@ if os.path.exists(OUTPUT_FILE):
                 pass
 
 print(f"Found {len(processed_ids)} already processed items in {OUTPUT_FILE}.")
+
+# Fold in ids from the hub-published label file (downloaded in section 1) so
+# items completed by ANY previous session are skipped, not just this shard's.
+_prior_path = os.path.join(WORKING_DIR, "task_a_labeled_prior.jsonl")
+if not os.path.exists(_prior_path):
+    _prior_path = "task_a_labeled_prior.jsonl"
+if os.path.exists(_prior_path):
+    with open(_prior_path, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                data = json.loads(line)
+                if data.get("id"):
+                    processed_ids.add(data["id"])
+            except Exception:
+                pass
+    print(f"Total unique skip-set after merging prior hub labels: {len(processed_ids)}")
 
 items_to_process = [item for item in shard_items if item.get("id") not in processed_ids]
 print(f"Remaining items to process on this shard: {len(items_to_process)}")
