@@ -29,8 +29,9 @@ A centralized dashboard and FastAPI backend to orchestrate, monitor, and distrib
 
 ### 1. Activate Environment & Install Dependencies
 ```bash
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
+uv venv
+.venv\Scripts\activate
+uv pip install -r requirements.txt
 ```
 
 ### 2. Configure `.env`
