@@ -99,8 +99,19 @@ try:
 except ImportError:
     print("hf_transfer unavailable - using standard HF downloads")
 
-run_cmd("wget -q -N https://huggingface.co/datasets/barryallen16/fitcheck-annotate-dataset/resolve/main/task_a_dataset.jsonl",
-        "Downloading Task A dataset from HuggingFace")
+# Scratch dir for large INPUT artifacts: /kaggle/working is synced verbatim
+# into the notebook's published output files, so a multi-hundred-MB dataset
+# would bloat every shard's output listing. /kaggle/tmp is ephemeral scratch
+# that is NEVER collected as output; fall back to CWD off-Kaggle.
+SCRATCH_DIR = "/kaggle/tmp"
+if not os.path.exists(SCRATCH_DIR):
+    SCRATCH_DIR = os.getcwd()
+
+DATASET_URL = ("https://huggingface.co/datasets/barryallen16/"
+               "fitcheck-annotate-dataset/resolve/main/task_a_dataset.jsonl")
+DATASET_PATH = os.path.join(SCRATCH_DIR, "task_a_dataset.jsonl")
+run_cmd(f"wget -q -O '{DATASET_PATH}' '{DATASET_URL}'",
+        "Downloading Task A dataset from HuggingFace (to scratch, excluded from output)")
 
 # Prior teacher labels published to the hub by earlier sessions. Any id present
 # in this file was already labeled successfully - the resume logic in section 5
@@ -109,10 +120,11 @@ run_cmd("wget -q -N https://huggingface.co/datasets/barryallen16/fitcheck-annota
 # Tolerated failure: 404 on first-ever run (nothing pushed yet) -> start fresh.
 PRIOR_LABELED_URL = ("https://huggingface.co/datasets/barryallen16/"
                      "fitcheck-annotate-dataset/resolve/main/task_a_labeled.jsonl")
-_prior = subprocess.run(f"wget -q -O task_a_labeled_prior.jsonl '{PRIOR_LABELED_URL}'",
+PRIOR_LABELED_PATH = os.path.join(SCRATCH_DIR, "task_a_labeled_prior.jsonl")
+_prior = subprocess.run(f"wget -q -O '{PRIOR_LABELED_PATH}' '{PRIOR_LABELED_URL}'",
                         shell=True, capture_output=True, text=True)
-if _prior.returncode == 0:
-    _n_prior = sum(1 for l in open("task_a_labeled_prior.jsonl", encoding="utf-8") if l.strip())
+if _prior.returncode == 0 and os.path.exists(PRIOR_LABELED_PATH):
+    _n_prior = sum(1 for l in open(PRIOR_LABELED_PATH, encoding="utf-8") if l.strip())
     print(f"Downloaded prior labels from HuggingFace ({_n_prior} items) - will skip them.")
 else:
     print("No prior labels on the hub yet (404) - starting fresh.")
@@ -127,17 +139,20 @@ MODEL_ID = "Qwen/Qwen3.6-27B"
 # /kaggle/working only exists on Kaggle; fall back to CWD elsewhere
 WORKING_DIR = "/kaggle/working" if os.path.exists("/kaggle/working") else os.getcwd()
 
-# Automatically detect input dataset path
-INPUT_FILE = os.path.join(WORKING_DIR, "task_a_dataset.jsonl")
-if not os.path.exists(INPUT_FILE):
-    INPUT_FILE = "task_a_dataset.jsonl"
-if not os.path.exists(INPUT_FILE):
+# Automatically detect input dataset path: scratch copy downloaded above
+# first, then CWD, then a read-only mount under /kaggle/input.
+INPUT_FILE = DATASET_PATH if os.path.exists(DATASET_PATH) else None
+if not INPUT_FILE:
+    _cwd_candidate = os.path.join(os.getcwd(), "task_a_dataset.jsonl")
+    if os.path.exists(_cwd_candidate):
+        INPUT_FILE = _cwd_candidate
+if not INPUT_FILE:
     for root, _, files in os.walk("/kaggle/input"):
         for file in files:
             if file.endswith("task_a_dataset.jsonl"):
                 INPUT_FILE = os.path.join(root, file)
                 break
-        if os.path.exists(INPUT_FILE):
+        if INPUT_FILE:
             break
 
 # Dynamic output file naming per shard for clean parallel aggregation
@@ -318,9 +333,9 @@ print(f"Found {len(processed_ids)} already processed items in {OUTPUT_FILE}.")
 
 # Fold in ids from the hub-published label file (downloaded in section 1) so
 # items completed by ANY previous session are skipped, not just this shard's.
-_prior_path = os.path.join(WORKING_DIR, "task_a_labeled_prior.jsonl")
+_prior_path = PRIOR_LABELED_PATH
 if not os.path.exists(_prior_path):
-    _prior_path = "task_a_labeled_prior.jsonl"
+    _prior_path = os.path.join(os.getcwd(), "task_a_labeled_prior.jsonl")
 if os.path.exists(_prior_path):
     with open(_prior_path, "r", encoding="utf-8") as f:
         for line in f:

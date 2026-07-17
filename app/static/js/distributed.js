@@ -12,17 +12,43 @@ function renderDistributedAccountCheckboxes() {
     return;
   }
 
+  const globalSessions = document.getElementById('dist-sessions-per-account')?.value || '2';
+
   container.innerHTML = AppState.accounts.map((acc, idx) => `
     <label class="flex items-center space-x-2.5 p-2.5 rounded-lg bg-[#080b12] border border-[#1e293b] hover:border-purple-500/50 cursor-pointer transition">
       <input type="checkbox" name="dist-acc" value="${esc(acc.username)}" checked onchange="updateShardsPreview()" class="w-4 h-4 text-purple-500 rounded bg-slate-900 border-slate-700 focus:ring-0">
-      <div class="truncate">
+      <div class="truncate flex-1">
         <span class="text-xs font-bold text-white block truncate">@${esc(acc.username)}</span>
         <span class="text-[10px] text-slate-400 font-mono">${acc.last_quota?.gpu?.limit ? acc.last_quota.gpu.limit - acc.last_quota.gpu.used + 'h GPU left' : 'Active'}</span>
       </div>
+      <select onchange="event.stopPropagation(); updateShardsPreview();" onclick="event.stopPropagation()"
+              class="dist-session-select bg-[#0d121f] border border-[#222d4a] rounded-md px-1.5 py-1 text-[10px] text-purple-300 focus:outline-none focus:border-purple-500"
+              title="GPU sessions for this account (overrides the global setting)"
+              data-acc="${esc(acc.username)}">
+        <option value="1" ${globalSessions !== '2' ? 'selected' : ''}>1x</option>
+        <option value="2" ${globalSessions === '2' ? 'selected' : ''}>2x</option>
+      </select>
     </label>
   `).join('');
 
   updateShardsPreview();
+}
+
+// Global "GPU Sessions / Account" applies to every account row at once;
+// individual rows can then be tweaked independently afterwards.
+function applyGlobalSessionsToAll() {
+  const globalVal = document.getElementById('dist-sessions-per-account')?.value || '2';
+  document.querySelectorAll('.dist-session-select').forEach(sel => { sel.value = globalVal; });
+}
+
+function getPerAccountSessions() {
+  const map = {};
+  const checked = new Set(getSelectedDistributedAccounts());
+  document.querySelectorAll('.dist-session-select').forEach(sel => {
+    const acc = sel.dataset.acc;
+    if (checked.has(acc)) map[acc] = parseInt(sel.value, 10) || 1;
+  });
+  return map;
 }
 
 function getSelectedDistributedAccounts() {
@@ -33,7 +59,6 @@ function getSelectedDistributedAccounts() {
 function updateShardsPreview() {
   const selectedAccounts = getSelectedDistributedAccounts();
   const totalItems = parseInt(document.getElementById('dist-total-items')?.value || '10000000', 10);
-  const chosen = parseInt(document.getElementById('dist-sessions-per-account')?.value || '2', 10);
   const preview = document.getElementById('dist-shards-preview');
   if (!preview) return;
 
@@ -41,6 +66,8 @@ function updateShardsPreview() {
     preview.innerHTML = `<span class="text-amber-400">Please select at least 1 Kaggle account to partition workload.</span>`;
     return;
   }
+
+  const sessionsMap = getPerAccountSessions();
 
   // Mirror of the server-side runner plan: each account gets min(chosen, free
   // GPU slots) runners. GPU = anything that isn't none/default/cpu.
@@ -51,13 +78,14 @@ function updateShardsPreview() {
       const a = (r.accelerator || 'none').toLowerCase();
       return a !== 'none' && a !== 'default' && a !== 'cpu';
     });
-    return { busy: gpuRuns.length, active: info.active_runs.length };
+    return { busy: gpuRuns.length };
   };
 
   const runnerList = [];
   const perAccount = [];
   selectedAccounts.forEach(acc => {
     const { busy } = isGpuAcc(acc);
+    const chosen = sessionsMap[acc] || 1;
     let slots = Math.max(0, chosen - busy);
     perAccount.push({ acc, chosen, busy, slots });
     for (let i = 0; i < slots; i++) runnerList.push(acc);
@@ -73,13 +101,13 @@ function updateShardsPreview() {
   const remainder = totalItems % R;
 
   let currentStart = 0;
-  let html = `<div class="mb-2 text-purple-300 font-bold">${totalItems.toLocaleString()} units across ${R} runner${R > 1 ? 's' : ''} (${chosen} session${chosen > 1 ? 's' : ''}/account requested):</div>`;
+  let html = `<div class="mb-2 text-purple-300 font-bold">${totalItems.toLocaleString()} units across ${R} runner${R > 1 ? 's' : ''}:</div>`;
 
   perAccount.forEach(p => {
     const reduced = p.slots < p.chosen;
     html += `
       <div class="flex items-center justify-between text-[11px] px-1">
-        <span>@${esc(p.acc)}: ${p.slots} runner${p.slots !== 1 ? 's' : ''}</span>
+        <span>@${esc(p.acc)}: ${p.slots} runner${p.slots !== 1 ? 's' : ''} (${p.chosen}x requested)</span>
         <span class="${reduced ? 'text-amber-400' : 'text-purple-400/70'}">${reduced ? `capped - ${p.busy} GPU session(s) already active` : `${p.busy} active`}</span>
       </div>`;
   });
@@ -156,7 +184,7 @@ async function handleDistributedSubmit(e) {
     accelerator: accelerator,
     enable_internet: enableInternet,
     is_trial: false,
-    sessions_per_account: parseInt(document.getElementById('dist-sessions-per-account')?.value || '2', 10),
+    sessions_per_account: getPerAccountSessions(), // per-account overrides {username: 1|2}
     timeout_seconds: 43200
   };
 
@@ -206,9 +234,10 @@ window.switchTab = function(tabId) {
 
 function updateQuotaHint() {
   const hint = document.getElementById('dist-quota-hint');
-  const sel = document.getElementById('dist-sessions-per-account');
-  if (!hint || !sel) return;
-  hint.classList.toggle('hidden', sel.value !== '2');
+  if (!hint) return;
+  // Warn whenever ANY selected account is set to 2 sessions (global or override)
+  const anyDouble = Object.values(getPerAccountSessions()).some(v => v >= 2);
+  hint.classList.toggle('hidden', !anyDouble);
 }
 
 // ------------------------------------------------------------------

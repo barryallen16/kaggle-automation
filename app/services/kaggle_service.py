@@ -3,6 +3,7 @@ import io
 import csv
 import json
 import uuid
+import shutil
 import asyncio
 import logging
 import re
@@ -170,6 +171,26 @@ class KaggleService:
         return json.dumps(nb)
 
     @classmethod
+    def _purge_previous_logs(cls) -> None:
+        """Wipes data/logs/ so each new launch starts with a clean log directory.
+
+        Best-effort per file: a log currently held open by a live follower
+        (Windows locks open files) is simply skipped and will age out later.
+        """
+        try:
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            for f in LOGS_DIR.iterdir():
+                try:
+                    if f.is_file():
+                        f.unlink()
+                    elif f.is_dir():
+                        shutil.rmtree(f, ignore_errors=True)
+                except OSError:
+                    continue
+        except Exception as e:
+            logger.warning(f"Could not purge old logs: {e}")
+
+    @classmethod
     async def push_kernel(
         cls,
         account_username: str,
@@ -282,6 +303,10 @@ class KaggleService:
         effective_timeout = timeout_seconds or (300 if is_trial else 43200)
         if effective_timeout:
             cmd.extend(["-t", str(effective_timeout)])
+
+        # A fresh launch clears the log directory - history lives in the runs
+        # catalog, and stale logs from previous sessions must not linger.
+        cls._purge_previous_logs()
 
         log_file_path = LOGS_DIR / f"{run_id}.log"
         log_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -680,6 +705,19 @@ class KaggleService:
             except Exception:
                 pass
             del cls._active_stream_processes[run_id]
+
+        # CRITICAL: snapshot outputs BEFORE stopping. The stop mechanism pushes
+        # a new (stub) version of the kernel, and Kaggle publishes output per
+        # VERSION - once the stub lands, pulling outputs returns only the stub's
+        # log. Downloading whatever exists right now preserves the real
+        # artifacts locally under data/outputs/{run_id}. Best-effort: a kernel
+        # with no completed version yet simply has nothing to save.
+        try:
+            saved_dir = await cls.download_outputs(account_username, kernel_ref, run_id)
+            n_saved = sum(1 for p in saved_dir.rglob("*") if p.is_file())
+            logger.info(f"Pre-stop output snapshot for {run_id}: {n_saved} file(s) preserved.")
+        except Exception as e:
+            logger.warning(f"Pre-stop output snapshot failed for {run_id} (continuing): {e}")
 
         # Push an immediate-exit stub as a new version to stop the Kaggle worker.
         # Preserve the original kernel type so we don't corrupt the notebook.

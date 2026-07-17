@@ -4,7 +4,7 @@ import uuid
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 from app.services.kaggle_service import KaggleService
 from app.database import create_distributed_workload, update_workload_status, utcnow_iso
 
@@ -103,10 +103,38 @@ class WorkloadDistributor:
     MAX_GPU_SESSIONS_PER_ACCOUNT = 2  # Kaggle's batch GPU session cap
 
     @classmethod
+    def _normalize_sessions_map(
+        cls,
+        sessions_per_account: Union[int, Dict[str, int], None],
+        accounts: List[str]
+    ) -> Dict[str, int]:
+        """Accepts a global count OR per-account overrides {username: 1|2}.
+
+        Per-account values are clamped to Kaggle's 1..2 batch-GPU range;
+        accounts missing from the map fall back to the global default of 2.
+        """
+        if isinstance(sessions_per_account, dict):
+            default = max(1, min(cls.MAX_GPU_SESSIONS_PER_ACCOUNT, 2))
+            out = {a: default for a in accounts}
+            for acc, val in sessions_per_account.items():
+                if acc in out:
+                    try:
+                        out[acc] = max(1, min(cls.MAX_GPU_SESSIONS_PER_ACCOUNT, int(val)))
+                    except (TypeError, ValueError):
+                        continue
+            return out
+        try:
+            n = int(sessions_per_account if sessions_per_account is not None else 2)
+        except (TypeError, ValueError):
+            n = 2
+        n = max(1, min(cls.MAX_GPU_SESSIONS_PER_ACCOUNT, n))
+        return {a: n for a in accounts}
+
+    @classmethod
     def _build_runner_plan(
         cls,
         accounts: List[str],
-        sessions_per_account: int,
+        sessions_map: Dict[str, int],
         accelerator: str,
         busy: Dict[str, int]
     ) -> List[Dict[str, Any]]:
@@ -114,12 +142,13 @@ class WorkloadDistributor:
 
         Account capacity is Kaggle's hard limit of 2 concurrent GPU sessions:
         free = max(0, 2 - busy); effective = min(chosen, free). CPU launches
-        aren't capped by that limit at all.
+        aren't capped by that limit at all. `chosen` comes from the per-account
+        sessions map (which may itself be a uniform global value).
         """
-        chosen = max(1, min(2, int(sessions_per_account or 2)))
         gpu_launch = cls._is_gpu(accelerator)
         plan = []
         for a in accounts:
+            chosen = sessions_map.get(a, 2)
             b = busy.get(a, 0)
             if gpu_launch:
                 free = max(0, cls.MAX_GPU_SESSIONS_PER_ACCOUNT - b)
@@ -209,19 +238,20 @@ class WorkloadDistributor:
         is_trial: bool = False,
         timeout_seconds: Optional[int] = None,
         env_vars: Optional[Dict[str, Any]] = None,
-        sessions_per_account: int = 2
+        sessions_per_account: Union[int, Dict[str, int]] = 2
     ) -> Dict[str, Any]:
         """Partitions the workload across expanded per-account GPU runners.
 
-        Each account may run up to `sessions_per_account` (<=2) concurrent GPU
-        sessions; availability is checked live and reduced silently when fewer
-        slots are free. The whole launch is validated atomically BEFORE any
-        workload record is created.
+        Each account may run up to its `sessions_per_account` value (1..2)
+        concurrent GPU sessions - pass an int for a uniform setting or a dict
+        {username: count} for per-account control. Availability is checked live
+        and reduced silently when fewer slots are free. The whole launch is
+        validated atomically BEFORE any workload record is created.
         """
         accounts = [a for a in accounts if a]
         if not accounts:
             return {"success": False, "error": "No Kaggle accounts selected for distribution."}
-        sessions_per_account = max(1, min(2, int(sessions_per_account or 2)))
+        sessions_map = cls._normalize_sessions_map(sessions_per_account, accounts)
 
         # 0. Actively reclaim GPU slots: find lingering dashboard-managed
         #    kernels (RUNNING/QUEUED long after their run "ended") and cancel
@@ -240,7 +270,7 @@ class WorkloadDistributor:
 
         # 1. Live availability -> runner plan (silent reduction per account)
         busy = await cls._busy_gpu_sessions(accounts, cls._is_gpu(accelerator))
-        plan = cls._build_runner_plan(accounts, sessions_per_account, accelerator, busy)
+        plan = cls._build_runner_plan(accounts, sessions_map, accelerator, busy)
         runners: List[Dict[str, Any]] = []
         for p in plan:
             for _ in range(p["slots"]):
@@ -308,7 +338,7 @@ class WorkloadDistributor:
             "accounts_used": json.dumps({
                 "accounts": list(dict.fromkeys(accounts)),
                 "runners": [{"account": s["account_username"], "shard_index": s["shard_index"]} for s in shards_info],
-                "sessions_per_account": sessions_per_account
+                "sessions_per_account": sessions_map
             }),
             "created_at": utcnow_iso(),
             "status": "running"
@@ -397,7 +427,7 @@ class WorkloadDistributor:
             "base_title": base_title,
             "total_units": total_units,
             "total_shards": R,
-            "sessions_per_account_requested": sessions_per_account,
+            "sessions_per_account": sessions_map,
             "runner_plan": plan,
             "shards_pushed": pushed_ok,
             "status": final_status,

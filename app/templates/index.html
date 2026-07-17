@@ -399,7 +399,7 @@
                   </label>
                   <label class="flex items-center space-x-2.5 cursor-pointer">
                     <span class="text-sm font-medium text-slate-300">GPU Sessions / Account</span>
-                    <select id="dist-sessions-per-account" onchange="updateShardsPreview(); updateQuotaHint();" class="bg-[#0d121f] border border-[#222d4a] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500">
+                    <select id="dist-sessions-per-account" onchange="applyGlobalSessionsToAll(); updateShardsPreview(); updateQuotaHint();" class="bg-[#0d121f] border border-[#222d4a] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500" title="Global default - override individually next to each account">
                       <option value="1">1</option>
                       <option value="2" selected>2</option>
                     </select>
@@ -407,6 +407,7 @@
                 </div>
               </div>
               <p id="dist-quota-hint" class="hidden text-[11px] text-amber-300/80 mt-2">⚠ 2 sessions halve wall-clock time but burn each account's weekly GPU quota 2× faster — total items/week stays the same.</p>
+              <p class="text-[11px] text-slate-500 mt-1">Each account row above has its own GPU-session selector — tweak it there to override the global value for that account only.</p>
 
               <!-- Shard Partition Preview Box -->
               <div class="p-4 rounded-xl bg-purple-950/30 border border-purple-800/50">
@@ -521,45 +522,83 @@
         <!-- TAB 5: OUTPUT FILES EXPLORER                  -->
         <!-- ============================================== -->
         <section id="tab-files" class="hidden space-y-6">
-          <div class="glass-card rounded-2xl p-6 border border-[#222d4a] space-y-4">
-            <div class="flex flex-wrap items-center justify-between gap-4">
-              <div class="flex items-center space-x-4 flex-1 min-w-[300px]">
-                <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Select Run:</label>
-                <select id="files-run-select" onchange="handleFilesRunSelect(event)" class="bg-[#0d121f] border border-[#222d4a] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 flex-1">
-                  <option value="">-- Select run to inspect output files --</option>
-                </select>
-              </div>
+          <div class="glass-card rounded-2xl p-6 border border-[#222d4a] space-y-5">
+            <!-- Run selector row -->
+            <div class="flex flex-wrap items-center gap-x-4 gap-y-3 w-full">
+              <label for="files-run-select" class="text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Select Run:</label>
+              <select id="files-run-select" onchange="handleFilesRunSelect(event)" class="flex-1 min-w-[240px] max-w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500">
+                <option value="">-- Select run to inspect output files --</option>
+              </select>
+            </div>
 
-              <div class="flex items-center space-x-3">
-                <button onclick="pullRemoteFiles()" id="btn-pull-files" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 border border-amber-500/40 transition">
-                  <i data-lucide="cloud-download" class="w-4 h-4"></i>
-                  <span>Pull Output Files from Kaggle</span>
-                </button>
-                <button onclick="downloadAllFilesZip()" id="btn-zip-files" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/40 transition">
-                  <i data-lucide="archive" class="w-4 h-4"></i>
-                  <span>Download All as ZIP</span>
-                </button>
-              </div>
+            <!-- Action buttons row -->
+            <div class="flex flex-wrap items-center gap-3 w-full">
+              <button onclick="pullRemoteFiles()" id="btn-pull-files" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 border border-amber-500/40 transition">
+                <i data-lucide="cloud-download" class="w-4 h-4"></i>
+                <span>Pull Output Files from Kaggle</span>
+              </button>
+              <button onclick="downloadAllFilesZip()" id="btn-zip-files" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/40 transition">
+                <i data-lucide="archive" class="w-4 h-4"></i>
+                <span>Download All as ZIP</span>
+              </button>
+              <button onclick="deleteAllLocalFiles()" id="btn-delete-all-files" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 border border-rose-500/40 transition ml-auto">
+                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                <span>Delete All Local Files</span>
+              </button>
             </div>
 
             <!-- Output Files Table -->
-            <div class="glass-panel rounded-xl overflow-hidden mt-4">
+            <div class="glass-panel rounded-xl overflow-hidden mt-1">
               <div class="overflow-x-auto">
-                <table class="w-full text-left text-sm text-slate-300 min-w-[640px]">
+                <table class="w-full text-left text-sm text-slate-300 min-w-[720px]">
                 <thead class="bg-[#0e1424] text-xs uppercase font-semibold text-slate-400 border-b border-[#222d4a]">
                   <tr>
+                    <th class="px-4 py-3.5 w-10"><input type="checkbox" id="files-select-all" onchange="toggleSelectAllFiles(this.checked)" class="w-4 h-4 text-amber-500 rounded bg-slate-900 border-slate-700 align-middle" title="Add all listed files to Merge Cart"></th>
                     <th class="px-6 py-3.5">Filename</th>
                     <th class="px-6 py-3.5">Size</th>
                     <th class="px-6 py-3.5">Type</th>
-                    <th class="px-6 py-3.5 text-right">Download</th>
+                    <th class="px-6 py-3.5 text-right">Actions</th>
                   </tr>
                 </thead>
                 <tbody id="files-table-body" class="divide-y divide-[#1e293b]">
                   <tr>
-                    <td colspan="4" class="px-6 py-8 text-center text-slate-500">Select a notebook run to view generated output artifacts and files.</td>
+                    <td colspan="5" class="px-6 py-8 text-center text-slate-500">Select a notebook run to view generated output artifacts and files.</td>
                   </tr>
                 </tbody>
               </table>
+              </div>
+            </div>
+          </div>
+
+          <!-- Merge Cart: collect files across finished notebooks -> single merged download -->
+          <div id="merge-cart-panel" class="glass-card rounded-2xl border border-emerald-800/50 bg-gradient-to-br from-emerald-950/20 to-transparent p-0 overflow-hidden">
+            <div class="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-[#1e293b]">
+              <h3 class="text-sm font-bold text-white flex items-center space-x-2">
+                <i data-lucide="shopping-cart" class="w-4 h-4 text-emerald-400"></i>
+                <span>Merge Cart</span>
+                <span id="cart-count-badge" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-700/50">0 files</span>
+              </h3>
+              <p class="text-[11px] text-slate-400">Tick files from any finished notebooks above - they are collected here across runs.</p>
+            </div>
+
+            <div id="cart-items-list" class="px-6 py-4 space-y-2 max-h-64 overflow-y-auto">
+              <p class="text-xs text-slate-500 text-center py-4">Cart is empty. Select files from the table above to build your merged download.</p>
+            </div>
+
+            <div class="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-t border-[#1e293b] bg-[#0a0d14]/40">
+              <label class="flex items-center space-x-2 cursor-pointer text-xs text-slate-300">
+                <input type="checkbox" id="cart-dedupe-ids" checked class="w-3.5 h-3.5 text-emerald-500 rounded bg-slate-900 border-slate-700">
+                <span>Deduplicate JSONL records by id</span>
+              </label>
+              <div class="flex items-center space-x-3">
+                <button onclick="clearMergeCart()" class="inline-flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-800 text-slate-400 hover:text-white border border-slate-700 transition">
+                  <i data-lucide="x-circle" class="w-3.5 h-3.5"></i>
+                  <span>Clear Cart</span>
+                </button>
+                <button onclick="downloadMergedCart()" id="btn-download-merged" class="inline-flex items-center space-x-2 px-5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition shadow-lg shadow-emerald-600/25 disabled:opacity-40 disabled:cursor-not-allowed">
+                  <i data-lucide="package-check" class="w-4 h-4"></i>
+                  <span>Download Merged File</span>
+                </button>
               </div>
             </div>
           </div>

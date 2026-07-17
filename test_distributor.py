@@ -19,20 +19,32 @@ sys.path.insert(0, TEST_DIR)
 DATA_TMP = None
 
 
+def _make_stub_cli() -> str:
+    """Writes a zero-exit stub CLI executable for the host OS.
+
+    Windows cannot exec '#!/bin/bash' scripts via CreateProcess (WinError 193),
+    so a .bat stub is used there; POSIX keeps the shell script.
+    """
+    if os.name == "nt":
+        stub = os.path.join(DATA_TMP, "fake_kaggle.bat")
+        with open(stub, "w") as f:
+            f.write("@echo off\r\nexit /b 0\r\n")
+    else:
+        stub = os.path.join(DATA_TMP, "fake_kaggle")
+        with open(stub, "w") as f:
+            f.write("#!/bin/bash\nexit 0\n")
+        os.chmod(stub, 0o755)
+    return stub
+
+
 def setUpModule():
     global DATA_TMP
     DATA_TMP = tempfile.mkdtemp(prefix="dist_harness_")
     os.environ["AUTOMATION_DATA_DIR"] = DATA_TMP
     os.environ["INTER_PUSH_STAGGER_SECONDS"] = "0"
 
-    # Stub kaggle CLI: every push/status succeeds instantly.
-    stub = os.path.join(DATA_TMP, "fake_kaggle")
-    with open(stub, "w") as f:
-        f.write("#!/bin/bash\nexit 0\n")
-    os.chmod(stub, 0o755)
-
     import app.services.kaggle_service as ks
-    ks.get_kaggle_cli_path = lambda: stub
+    ks.get_kaggle_cli_path = lambda: _make_stub_cli()
 
     # Neutralize background log followers: with a silent stub CLI they would
     # treat every poll as 'unknown' and reconnect forever during tests.
@@ -64,8 +76,7 @@ def _fresh():
     importlib.reload(cfg)
     importlib.reload(db)
     importlib.reload(ks)
-    stub = os.path.join(DATA_TMP, "fake_kaggle")
-    ks.get_kaggle_cli_path = lambda: stub
+    ks.get_kaggle_cli_path = lambda: _make_stub_cli()
     async def _noop_stream(*a, **k):
         return
     ks.KaggleService.start_background_log_stream = staticmethod(_noop_stream)
@@ -235,6 +246,41 @@ class TestMultiSessionDistributor(unittest.TestCase):
         with self.assertRaises(HTTPException) as cm:
             asyncio_run(stop_workload("workload_does_not_exist"))
         self.assertEqual(cm.exception.status_code, 404)
+
+    def test_9_per_account_sessions_map(self):
+        """sessions_per_account as {accA:1, accB:2} expands 3 runners total."""
+        db = _fresh()
+        WD, _ = self._dist()
+        res = asyncio_run(WD.distribute_and_launch(
+            base_title="MapTest", code_content=CODE, filename="main.py",
+            accounts=["accA", "accB"], total_items=10,
+            accelerator="nvidia-tesla-t4-x2",
+            sessions_per_account={"accA": 1, "accB": 2}))
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["total_shards"], 3)
+        plan = {p["account"]: p for p in res["runner_plan"]}
+        self.assertEqual(plan["accA"]["requested"], 1)
+        self.assertEqual(plan["accA"]["slots"], 1)
+        self.assertEqual(plan["accB"]["requested"], 2)
+        self.assertEqual(plan["accB"]["slots"], 2)
+        # workload metadata stores the per-account map
+        meta = db.get_all_workloads()[0]["accounts_used"]
+        self.assertEqual(meta["sessions_per_account"], {"accA": 1, "accB": 2})
+
+    def test_10_per_account_map_clamped_and_missing_defaults(self):
+        """Out-of-range values clamp to 1..2; accounts absent from map default to 2."""
+        db = _fresh()
+        WD, _ = self._dist()
+        res = asyncio_run(WD.distribute_and_launch(
+            base_title="ClampTest", code_content=CODE, filename="main.py",
+            accounts=["accA", "accB"], total_items=12,
+            accelerator="nvidia-tesla-t4-x2",
+            sessions_per_account={"accA": 99}))  # accB missing -> default 2
+        self.assertTrue(res["success"])
+        plan = {p["account"]: p for p in res["runner_plan"]}
+        self.assertEqual(plan["accA"]["requested"], 2)   # clamped from 99
+        self.assertEqual(plan["accB"]["requested"], 2)   # defaulted
+        self.assertEqual(res["total_shards"], 4)
 
 
 def asyncio_run(coro):
