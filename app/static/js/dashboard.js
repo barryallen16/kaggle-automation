@@ -55,19 +55,19 @@ function renderDashboard() {
     `).join('');
 
     return `
-      <div class="glass-card rounded-2xl p-5 border border-[#222d4a] relative flex flex-col justify-between space-y-4">
+      <div class="glass-card rounded-2xl p-5 border border-[#222d4a] relative flex flex-col justify-between space-y-4 min-w-0">
         <!-- Account Header -->
-        <div class="flex items-start justify-between">
-          <div class="flex items-center space-x-3">
-            <div class="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center font-bold text-cyan-400">
+        <div class="flex items-start justify-between gap-2">
+          <div class="flex items-center space-x-3 min-w-0">
+            <div class="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center font-bold text-cyan-400 flex-shrink-0">
               ${esc(acc.username.charAt(0).toUpperCase())}
             </div>
-            <div>
-              <h4 class="text-sm font-bold text-white">@${esc(acc.username)}</h4>
-              <p class="text-[10px] text-slate-500 font-mono">Key: ${esc(acc.api_key_masked)}</p>
+            <div class="min-w-0">
+              <h4 class="text-sm font-bold text-white truncate">@${esc(acc.username)}</h4>
+              <p class="text-[10px] text-slate-500 font-mono truncate">Key: ${esc(acc.api_key_masked)}</p>
             </div>
           </div>
-          <div class="flex items-center space-x-2">
+          <div class="flex items-center space-x-2 flex-shrink-0">
             ${activeBadge}
             <button onclick="deleteAccount('${esc(acc.username)}')" title="Delete Account" class="text-slate-600 hover:text-rose-400 transition p-1">
               <i data-lucide="trash" class="w-3.5 h-3.5"></i>

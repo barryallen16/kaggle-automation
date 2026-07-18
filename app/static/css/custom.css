@@ -99,3 +99,33 @@ svg[data-pixel-icon], .pixel-icon-svg {
   border-color: var(--accent-cyan);
   color: var(--accent-cyan);
 }
+
+/* ------------------------------------------------------------------
+   Mobile responsiveness helpers
+   ------------------------------------------------------------------ */
+
+/* Compact table cells on phones - the px-6 utilities used by dynamically
+   rendered rows are too wide for ~360px screens. Tables themselves keep
+   horizontal scrolling via their overflow-x-auto wrappers. */
+@media (max-width: 640px) {
+  table th,
+  table td {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+    padding-top: 0.65rem !important;
+    padding-bottom: 0.65rem !important;
+  }
+
+  /* iOS Safari auto-zooms when focusing inputs smaller than 16px */
+  input,
+  select,
+  textarea {
+    font-size: 16px;
+  }
+}
+
+/* Keep long unbroken tokens (kernel refs, file names, log lines) from
+   stretching layouts sideways on narrow screens */
+pre, code, .terminal-font, .font-mono {
+  overflow-wrap: anywhere;
+}
