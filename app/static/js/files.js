@@ -117,7 +117,9 @@ function renderFilesTable(data) {
           <div class="flex items-center space-x-2 min-w-0">
             <i data-lucide="file" class="w-4 h-4 text-amber-400 flex-shrink-0"></i>
             <span class="truncate">${esc(f.name)}</span>
-            ${!f.isLocal ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-sky-900/60 text-sky-300 border border-sky-800 flex-shrink-0">REMOTE</span>' : ''}
+            ${!f.isLocal
+              ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-sky-900/60 text-sky-300 border border-sky-800 flex-shrink-0" title="Listed on Kaggle - not downloaded yet">REMOTE</span>'
+              : '<span class="text-[9px] px-1.5 py-0.5 rounded bg-emerald-900/60 text-emerald-300 border border-emerald-800 flex-shrink-0" title="Stored on this server (auto-synced at completion or snapshotted at stop)">LOCAL</span>'}
           </div>
         </td>
         <td class="px-6 py-3.5 text-xs text-slate-400 font-mono whitespace-nowrap">${f.size}</td>
@@ -295,16 +297,15 @@ async function downloadMergedCart() {
     return;
   }
 
-  const dedupe = document.getElementById('cart-dedupe-ids')?.checked ?? true;
   const btn = document.getElementById('btn-download-merged');
   btn.disabled = true;
-  showToast(`Merging ${cart.length} file(s)...`, 'info');
+  showToast(`Concatenating ${cart.length} file(s)...`, 'info');
 
   try {
     const res = await fetch('/api/runs/files/merge-download', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: cart.map(i => ({ run_id: i.run_id, filename: i.filename })), dedupe_by_id: dedupe })
+      body: JSON.stringify({ items: cart.map(i => ({ run_id: i.run_id, filename: i.filename })) })
     });
 
     if (!res.ok) {
@@ -314,11 +315,10 @@ async function downloadMergedCart() {
       return;
     }
 
-    const summary = res.headers.get('X-Merge-Summary');
     const blob = await res.blob();
     const disposition = res.headers.get('Content-Disposition') || '';
     const match = disposition.match(/filename="?([^";]+)"?/);
-    const filename = match ? match[1] : 'merged_outputs.bin';
+    const filename = match ? match[1] : 'merged.bin';
 
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -329,7 +329,7 @@ async function downloadMergedCart() {
     a.remove();
     URL.revokeObjectURL(url);
 
-    showToast(`Merged file downloaded${summary ? ` - ${summary}` : ''}`, 'success');
+    showToast(`Merged file downloaded (${filename})`, 'success');
   } catch (err) {
     showToast('Error merging files: ' + err.message, 'error');
   } finally {

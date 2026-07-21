@@ -599,10 +599,7 @@
             </div>
 
             <div class="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-t border-[#1e293b] bg-[#0a0d14]/40">
-              <label class="flex items-center space-x-2 cursor-pointer text-xs text-slate-300">
-                <input type="checkbox" id="cart-dedupe-ids" checked class="w-3.5 h-3.5 text-emerald-500 rounded bg-slate-900 border-slate-700">
-                <span>Deduplicate JSONL records by id</span>
-              </label>
+              <p class="text-[11px] text-slate-500">Files are concatenated raw (<code class="text-cyan-400">cat shard/* &gt; merged.jsonl</code>), top to bottom in the order listed above.</p>
               <div class="flex items-center space-x-3">
                 <button onclick="clearMergeCart()" class="inline-flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-800 text-slate-400 hover:text-white border border-slate-700 transition">
                   <i data-lucide="x-circle" class="w-3.5 h-3.5"></i>

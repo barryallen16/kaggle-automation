@@ -174,6 +174,15 @@ class SessionMonitor:
                 status_message=status_resp.get("raw", ""),
                 end_time=now.isoformat()
             )
+            # Auto-sync output artifacts the moment a run ends, so the Files
+            # tab shows the real files without a manual "Pull from Kaggle".
+            # Version-aware: pulls THIS run's exact version snapshot (which is
+            # what Kaggle finalizes on completion/error/cancel) rather than
+            # whatever version happens to be latest later on.
+            try:
+                await KaggleService.download_latest_outputs(account_username, kernel_ref, run_id)
+            except Exception as e:
+                logger.info(f"Auto-pull of outputs skipped for {run_id}: {e}")
             if run.get("telegram_notified_end") == 0:
                 await TelegramService.notify_run_completed(run, remote_status)
                 update_run_telegram_flag(run_id, "telegram_notified_end", 1)

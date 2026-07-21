@@ -1,6 +1,5 @@
 import os
 import re
-import json
 import shutil
 import zipfile
 import tempfile
@@ -178,8 +177,8 @@ async def delete_all_output_files(run_id: str):
     return {"success": True, "message": f"Deleted all local output files for run {run_id}."}
 
 # ------------------------------------------------------------------
-# Cart-style cross-run merge: pick individual files from many finished
-# notebooks and download a single merged artifact.
+# Cross-run merge: pick individual files from many finished notebooks
+# and download them concatenated into one file.
 # ------------------------------------------------------------------
 class MergeItem(BaseModel):
     run_id: str
@@ -187,12 +186,15 @@ class MergeItem(BaseModel):
 
 class MergeRequest(BaseModel):
     items: List[MergeItem]
-    # JSONL shards are deduped by their record 'id' so overlapping shard
-    # outputs never double-count the same labeled item.
-    dedupe_by_id: bool = True
 
 @router.post("/files/merge-download")
 async def merge_selected_files(request: MergeRequest):
+    """Cat-style merge: raw byte concatenation of selected files in cart order.
+
+    Exactly `cat shard/* > merged.jsonl` - no parsing, no dedupe, no
+    re-encoding, so it is instant even for hundreds of MB of shards.
+    The output extension follows the most common suffix among inputs.
+    """
     if not request.items:
         raise HTTPException(status_code=400, detail="Cart is empty - select at least one file.")
 
@@ -214,57 +216,32 @@ async def merge_selected_files(request: MergeRequest):
             raise HTTPException(status_code=404, detail=f"File '{item.filename}' not found in run {item.run_id}")
         resolved.append(path)
 
-    # 2. Merge. Homogeneous JSONL selection -> single merged .jsonl stream with
-    #    optional id-dedup; anything else (mixed types/binary) -> one ZIP.
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix="")
-    tmp.close()
-    all_jsonl = all(p.suffix.lower() in (".jsonl", ".ndjson") for p in resolved)
+    # 2. Output name: most common input suffix (sanitized), else .bin
+    suffixes = [p.suffix.lower() for p in resolved if p.suffix]
+    ext = max(set(suffixes), key=suffixes.count) if suffixes else ".bin"
+    if not re.fullmatch(r"\.[A-Za-z0-9_]{1,10}", ext):
+        ext = ".bin"
 
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+    tmp.close()
     try:
-        if all_jsonl:
-            out_path = Path(tmp.name)
-            unique_ids: set = set()
-            written = 0
-            with open(out_path, "w", encoding="utf-8") as out:
-                for p in resolved:
-                    with open(p, "r", encoding="utf-8") as src:
-                        for line in src:
-                            stripped = line.strip()
-                            if not stripped:
-                                continue
-                            if request.dedupe_by_id:
-                                try:
-                                    obj = json.loads(stripped)
-                                except Exception:
-                                    obj = None
-                                if isinstance(obj, dict) and obj.get("id") is not None:
-                                    key = str(obj["id"])
-                                    if key in unique_ids:
-                                        continue
-                                    unique_ids.add(key)
-                            out.write(stripped + "\n")
-                            written += 1
-            merged_name = "merged_shard_outputs.jsonl"
-            summary = f"{written} records ({len(unique_ids)} unique ids)"
-        else:
-            with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
-                used_names: set = set()
-                for idx, p in enumerate(resolved):
-                    arcname = p.name or f"file_{idx}"
-                    while arcname in used_names:
-                        arcname = f"{p.stem}_{idx}{p.suffix}"
-                    used_names.add(arcname)
-                    zf.write(p, arcname)
-            merged_name = "merged_outputs.zip"
-            summary = f"{len(resolved)} files archived"
+        with open(tmp.name, "wb") as out:
+            for p in resolved:
+                with open(p, "rb") as src:
+                    shutil.copyfileobj(src, out, length=1024 * 1024)
     except Exception:
         os.unlink(tmp.name)
         raise
 
+    media_type = "application/octet-stream"
+    if ext in (".jsonl", ".ndjson"):
+        media_type = "application/x-ndjson"
+    elif ext in (".txt", ".csv", ".log"):
+        media_type = "text/plain"
+
     return FileResponse(
         path=tmp.name,
-        filename=merged_name,
-        media_type="application/zip" if not all_jsonl else "application/x-ndjson",
-        headers={"X-Merge-Summary": summary},
+        filename=f"merged{ext}",
+        media_type=media_type,
         background=BackgroundTask(os.unlink, tmp.name)
     )

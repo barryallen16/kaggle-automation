@@ -2,6 +2,7 @@ import os
 import io
 import csv
 import json
+import sys
 import uuid
 import shutil
 import asyncio
@@ -16,7 +17,15 @@ from app.database import create_run_record, update_run_status, get_run_by_id, ge
 
 logger = logging.getLogger("kaggle_service")
 
+# Helper that talks to kagglesdk with version_label set - the plain CLI
+# downloads only the LATEST kernel output and silently drops the version.
+VERSIONED_OUTPUT_HELPER = Path(__file__).resolve().parent / "kaggle_versioned_output.py"
+VERSIONED_FETCH_TIMEOUT_SECONDS = int(os.getenv("VERSIONED_FETCH_TIMEOUT_SECONDS", "600"))
+
 class KaggleService:
+    # Seconds to wait before each attempt to fetch the cancelled version's
+    # output after a stop push (Kaggle finalizes the version asynchronously).
+    STOP_CAPTURE_RETRY_DELAYS = (6, 12, 20)
     # Active log stream processes: run_id -> asyncio.subprocess.Process
     _active_stream_processes: Dict[str, asyncio.subprocess.Process] = {}
     # Subscribers for live log broadcasting: run_id -> List[asyncio.Queue]
@@ -663,6 +672,91 @@ class KaggleService:
             return []
 
     @classmethod
+    async def _run_versioned_helper(cls, account_username: str, args: List[str], timeout: int = VERSIONED_FETCH_TIMEOUT_SECONDS) -> Optional[str]:
+        """Runs the versioned-output helper under the account's credentials.
+
+        Returns parsed stdout (JSON) or None on any failure - the helper is a
+        best-effort enhancement, never a hard dependency.
+        """
+        env = AccountManager.get_account_env(account_username)
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                sys.executable, str(VERSIONED_OUTPUT_HELPER), *args,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env
+            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+        except asyncio.TimeoutError:
+            logger.warning("Versioned-output helper timed out for @%s (%s)", account_username, args)
+            return None
+        except Exception as e:
+            logger.warning(f"Versioned-output helper could not start: {e}")
+            return None
+
+        if proc.returncode != 0:
+            tail = stderr.decode("utf-8", errors="ignore").strip()[-300:]
+            logger.info(f"Versioned-output helper failed (rc={proc.returncode}): {tail}")
+            return None
+        return stdout.decode("utf-8", errors="ignore").strip()
+
+    @classmethod
+    async def get_kernel_current_version(cls, account_username: str, kernel_ref: str) -> Optional[int]:
+        """Latest pushed version number of the kernel, or None if unknown."""
+        owner, _, slug = kernel_ref.partition("/")
+        if not owner or not slug:
+            return None
+        out = await cls._run_versioned_helper(account_username, ["meta", owner, slug], timeout=120)
+        if not out:
+            return None
+        try:
+            v = json.loads(out).get("current_version_number")
+            return int(v) if v else None
+        except Exception:
+            return None
+
+    @classmethod
+    async def download_outputs_of_version(cls, account_username: str, kernel_ref: str, version: int, run_id: str) -> Optional[Path]:
+        """Downloads a SPECIFIC version's output snapshot into data/outputs/{run_id}.
+
+        This recovers the partial /kaggle/working contents of cancelled or
+        errored versions - which latest-only pulls miss once a stop-stub or a
+        newer push becomes the kernel's latest version.
+        """
+        owner, _, slug = kernel_ref.partition("/")
+        if not owner or not slug:
+            return None
+        target_dir = OUTPUTS_DIR / str(run_id)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        out = await cls._run_versioned_helper(
+            account_username, ["fetch", owner, slug, str(version), str(target_dir)]
+        )
+        if not out:
+            return None
+        try:
+            saved = json.loads(out).get("saved", [])
+        except Exception:
+            saved = []
+        if not saved:
+            return None
+        logger.info(f"Version {version} output for {run_id}: saved {len(saved)} file(s).")
+        return target_dir
+
+    @classmethod
+    async def download_latest_outputs(cls, account_username: str, kernel_ref: str, run_id: str) -> Optional[Path]:
+        """Best-effort output sync: exact current version first, plain pull fallback."""
+        version = await cls.get_kernel_current_version(account_username, kernel_ref)
+        if version:
+            got = await cls.download_outputs_of_version(account_username, kernel_ref, version, run_id)
+            if got:
+                return got
+        try:
+            return await cls.download_outputs(account_username, kernel_ref, run_id)
+        except Exception as e:
+            logger.info(f"Output sync skipped for {run_id}: {e}")
+            return None
+
+    @classmethod
     async def download_outputs(cls, account_username: str, kernel_ref: str, run_id: str) -> Path:
         """Downloads all output files to `data/outputs/{run_id}`."""
         target_dir = OUTPUTS_DIR / run_id
@@ -706,18 +800,24 @@ class KaggleService:
                 pass
             del cls._active_stream_processes[run_id]
 
-        # CRITICAL: snapshot outputs BEFORE stopping. The stop mechanism pushes
-        # a new (stub) version of the kernel, and Kaggle publishes output per
-        # VERSION - once the stub lands, pulling outputs returns only the stub's
-        # log. Downloading whatever exists right now preserves the real
-        # artifacts locally under data/outputs/{run_id}. Best-effort: a kernel
-        # with no completed version yet simply has nothing to save.
+        # CRITICAL: snapshot outputs around stopping. The stop mechanism pushes
+        # a new (stub) VERSION, and Kaggle publishes output per VERSION - once
+        # the stub lands it is the latest version, so latest-only pulls return
+        # just the stub's log. Two saves happen here:
+        #   1. BEFORE the stub: whatever is currently published (last completed
+        #      version's artifacts) - plain latest pull.
+        #   2. AFTER the stub cancels the running version N: Kaggle finalizes
+        #      N with its PARTIAL /kaggle/working contents - we fetch exactly
+        #      version N via version_label, recovering in-progress shard data.
         try:
             saved_dir = await cls.download_outputs(account_username, kernel_ref, run_id)
             n_saved = sum(1 for p in saved_dir.rglob("*") if p.is_file())
             logger.info(f"Pre-stop output snapshot for {run_id}: {n_saved} file(s) preserved.")
         except Exception as e:
             logger.warning(f"Pre-stop output snapshot failed for {run_id} (continuing): {e}")
+
+        # The version that is current right now is the one the stub will cancel.
+        cancelled_version = await cls.get_kernel_current_version(account_username, kernel_ref)
 
         # Push an immediate-exit stub as a new version to stop the Kaggle worker.
         # Preserve the original kernel type so we don't corrupt the notebook.
@@ -805,6 +905,28 @@ class KaggleService:
                         "Stopped: shared kernel received the stop push",
                         utcnow_iso()
                     )
+
+            # Recover the CANCELLED version's partial output. Kaggle needs a
+            # few seconds to finalize it after the cancel; retry briefly.
+            if cancelled_version:
+                got = None
+                for delay in cls.STOP_CAPTURE_RETRY_DELAYS:
+                    await asyncio.sleep(delay)
+                    got = await cls.download_outputs_of_version(
+                        account_username, kernel_ref, cancelled_version, run_id
+                    )
+                    if got:
+                        logger.info(
+                            f"Recovered cancelled version {cancelled_version} output "
+                            f"of {kernel_ref} into data/outputs/{run_id}"
+                        )
+                        break
+                if not got:
+                    logger.info(
+                        f"Cancelled version {cancelled_version} of {kernel_ref} had no "
+                        f"recoverable output (run may have published nothing yet)."
+                    )
+
             return {"success": True, "message": f"Run {run_id} ({kernel_ref}) stopped successfully."}
 
         update_run_status(run_id, run["status"], f"Stop failed: {last_err}")
