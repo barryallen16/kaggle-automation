@@ -104,7 +104,7 @@ class TestStopOutputCapture(unittest.TestCase):
             # Latest pull before the stub: creates empty dir, no files
             d = os.path.join(cfg.OUTPUTS_DIR, run_id)
             os.makedirs(d, exist_ok=True)
-            return d
+            from pathlib import Path as _P; return _P(d)
 
         async def fake_versioned_download(account, ref, version, run_id):
             d = os.path.join(cfg.OUTPUTS_DIR, run_id)
@@ -112,7 +112,7 @@ class TestStopOutputCapture(unittest.TestCase):
             with open(os.path.join(d, "task_a_labeled_shard_0.jsonl"), "w") as f:
                 f.write('{"id": "recovered"}\n')
             captured["versioned"] = (account, ref, version, run_id)
-            return d
+            from pathlib import Path as _P; return _P(d)
 
         KS.get_kernel_current_version = staticmethod(fake_version)
         KS.download_outputs = staticmethod(fake_plain_download)
@@ -126,6 +126,8 @@ class TestStopOutputCapture(unittest.TestCase):
         marker = os.path.join(cfg.OUTPUTS_DIR, "runX", "task_a_labeled_shard_0.jsonl")
         self.assertTrue(os.path.isfile(marker))
         self.assertEqual(db.get_run_by_id("runX")["status"], "stopped")
+        # The recovered version must be PINNED so later manual pulls skip the stub
+        self.assertEqual(db.get_run_by_id("runX")["output_version"], 7)
 
     def test_2_unknown_version_still_stops_cleanly(self):
         cfg, db, KS = _fresh()
@@ -137,7 +139,7 @@ class TestStopOutputCapture(unittest.TestCase):
         async def plain(account, ref, run_id):
             d = os.path.join(cfg.OUTPUTS_DIR, run_id)
             os.makedirs(d, exist_ok=True)
-            return d
+            from pathlib import Path as _P; return _P(d)
 
         calls = {"versioned": 0}
 
