@@ -445,6 +445,29 @@ class KaggleService:
                 "error": str(e)
             }
 
+    @staticmethod
+    def _normalize_kernel_status(raw: str) -> str:
+        """Maps every observed CLI/SDK spelling onto our five statuses.
+
+        Newer CLIs emit enum names like 'kernelworkerstatus.cancel_acknowledged'
+        which previously leaked into the DB verbatim and defeated terminal-state
+        detection (runs looked neither complete nor stopped forever).
+        """
+        s = (raw or "").strip().lower()
+        if not s:
+            return "unknown"
+        if "cancel" in s:          # canceled / cancelled / cancel_acknowledged
+            return "stopped"
+        if "complete" in s:
+            return "complete"
+        if "error" in s or "fail" in s:
+            return "error"
+        if "running" in s:
+            return "running"
+        if "queued" in s:
+            return "queued"
+        return "unknown"
+
     @classmethod
     async def get_kernel_status(cls, account_username: str, kernel_ref: str) -> Dict[str, Any]:
         """Queries `kaggle kernels status <kernel_ref>`."""
@@ -461,21 +484,11 @@ class KaggleService:
             )
             stdout, stderr = await proc.communicate()
             out_str = stdout.decode("utf-8", errors="ignore").strip()
-            
-            # Status parsing: e.g. 'username/slug has status "running"' or 'complete' or 'error'
+
+            # Status parsing: e.g. 'username/slug has status "running"'
             status_match = re.search(r'status "(.*?)"', out_str, re.IGNORECASE)
-            status = status_match.group(1).lower() if status_match else "unknown"
-            
-            if "complete" in out_str.lower():
-                status = "complete"
-            elif "running" in out_str.lower():
-                status = "running"
-            elif "queued" in out_str.lower():
-                status = "queued"
-            elif "error" in out_str.lower():
-                status = "error"
-            elif "cancelAck" in out_str.lower() or "canceled" in out_str.lower():
-                status = "stopped"
+            captured = status_match.group(1) if status_match else out_str
+            status = cls._normalize_kernel_status(captured)
 
             return {
                 "success": True,
@@ -672,7 +685,9 @@ class KaggleService:
             return []
 
     @classmethod
-    async def _run_versioned_helper(cls, account_username: str, args: List[str], timeout: int = VERSIONED_FETCH_TIMEOUT_SECONDS) -> Optional[str]:
+    async def _run_versioned_helper(cls, account_username: str, args: List[str],
+                                    timeout: int = VERSIONED_FETCH_TIMEOUT_SECONDS,
+                                    ok_codes: tuple = (0,)) -> Optional[str]:
         """Runs the versioned-output helper under the account's credentials.
 
         Returns parsed stdout (JSON) or None on any failure - the helper is a
@@ -694,7 +709,7 @@ class KaggleService:
             logger.warning(f"Versioned-output helper could not start: {e}")
             return None
 
-        if proc.returncode != 0:
+        if proc.returncode not in ok_codes:
             tail = stderr.decode("utf-8", errors="ignore").strip()[-300:]
             logger.info(f"Versioned-output helper failed (rc={proc.returncode}): {tail}")
             return None
@@ -728,13 +743,20 @@ class KaggleService:
             return None
         target_dir = OUTPUTS_DIR / str(run_id)
         target_dir.mkdir(parents=True, exist_ok=True)
+        # rc 0 = files saved; rc 3 = version finalized but published nothing
         out = await cls._run_versioned_helper(
-            account_username, ["fetch", owner, slug, str(version), str(target_dir)]
+            account_username,
+            ["fetch", owner, slug, str(version), str(target_dir)],
+            ok_codes=(0, 3)
         )
         if not out:
             return None
         try:
-            saved = json.loads(out).get("saved", [])
+            parsed = json.loads(out)
+            saved = parsed.get("saved", [])
+            notes = parsed.get("tried") or []
+            if notes:
+                logger.info(f"Version {version} output probe for {run_id}: " + "; ".join(notes))
         except Exception:
             saved = []
         if not saved:
@@ -960,8 +982,15 @@ class KaggleService:
                         f"Cancelled version {cancelled_version} of {kernel_ref} had no "
                         f"recoverable output (run may have published nothing yet)."
                     )
+                    extra = (f" Cancelled version {cancelled_version} published no output "
+                             f"files yet - only its log.")
+                else:
+                    extra = f" Recovered {len(list(got.glob('*')))} file(s) from cancelled version {cancelled_version}."
+            else:
+                extra = " (Could not determine the cancelled version number - pull may return the stub log.)"
 
-            return {"success": True, "message": f"Run {run_id} ({kernel_ref}) stopped successfully."}
+            return {"success": True,
+                    "message": f"Run {run_id} ({kernel_ref}) stopped successfully.{extra}"}
 
         update_run_status(run_id, run["status"], f"Stop failed: {last_err}")
         return {"success": False, "error": f"Failed to stop run {run_id}: {last_err or 'unknown CLI error'}"}

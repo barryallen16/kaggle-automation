@@ -70,6 +70,8 @@ def init_db():
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
 
     _ensure_column("runs", "output_version INTEGER")
+    # Repair rows written before enum-style CLI statuses were normalized
+    cursor.execute("UPDATE runs SET status = 'stopped' WHERE lower(status) LIKE '%cancel%'")
 
     # Distributed workloads table
     cursor.execute("""
