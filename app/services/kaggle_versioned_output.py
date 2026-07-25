@@ -59,7 +59,7 @@ def _token() -> str:
 def _post(client: httpx.Client, path: str, payload: dict):
     r = client.post(f"{KAGGLE_BASE}{path}", json=payload)
     if r.status_code >= 400:
-        raise KaggleError(f"{path} -> HTTP {r.status_code}: {r.text[:200]}")
+        raise KaggleError(f"{path} -> HTTP {r.status_code}: {r.text[:300]}")
     data = r.json()
     if isinstance(data, dict) and isinstance(data.get("code"), int) and data["code"] >= 400:
         raise KaggleError(f"{path} -> API error {data['code']}: {str(data.get('message'))[:200]}")
@@ -73,6 +73,12 @@ def _download_files(client: httpx.Client, files: list, out_dir: str) -> list:
         name = item.get("fileName") or item.get("name")
         if not url or not name:
             continue
+        
+        # THE FIX: Kaggle returns relative URLs for file downloads 
+        # (e.g. /api/v1/kernels/output/download/...). We must prepend the base.
+        if url.startswith("/"):
+            url = f"{KAGGLE_BASE}{url}"
+            
         dest = os.path.join(out_dir, name)
         parent = os.path.dirname(dest)
         if parent:
