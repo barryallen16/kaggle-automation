@@ -74,12 +74,14 @@ class TestVersionedHelper(unittest.TestCase):
     def test_1_log_only_pages_rejected_files_accepted(self):
         out_dir = tempfile.mkdtemp(prefix="vh_out_")
         seen_labels = []
+        seen_urls = []
 
         def handler(request: "httpx.Request") -> "httpx.Response":
             body = json.loads(request.content or b"{}")
+            seen_urls.append(str(request.url))
             if request.url.path.startswith("/f/"):
                 return httpx.Response(200, content=b"REALDATA")
-            if request.url.path == "/api/v1/kernels/output":
+            if request.url.path == "/v1/kernels.KernelsApiService/ListKernelSessionOutput":
                 label = body.get("versionLabel", "")
                 seen_labels.append(label)
                 if label == "7":
@@ -100,6 +102,11 @@ class TestVersionedHelper(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("7", seen_labels)          # plain spelling tried first
         self.assertIn("version-7", seen_labels)  # fallback spelling accepted
+        # Regression guard: must hit api.kaggle.com, not www.kaggle.com
+        for u in seen_urls:
+            if u.startswith("http://test/"):
+                continue
+            self.assertIn("api.kaggle.com", u, f"URL routed to wrong host: {u}")
         saved_file = os.path.join(out_dir, "task_a_labeled_shard_0.jsonl")
         self.assertTrue(os.path.isfile(saved_file))
         self.assertTrue(os.path.isfile(os.path.join(out_dir, "my-slug.log")))
@@ -112,7 +119,7 @@ class TestVersionedHelper(unittest.TestCase):
 
         def handler(request):
             body = json.loads(request.content or b"{}")
-            if request.url.path == "/api/v1/kernels/output":
+            if request.url.path == "/v1/kernels.KernelsApiService/ListKernelSessionOutput":
                 return httpx.Response(200, json={"files": [], "log": ""})
             return httpx.Response(404)
 
@@ -125,7 +132,7 @@ class TestVersionedHelper(unittest.TestCase):
         import app.services.kaggle_versioned_output as helper
 
         def handler(request):
-            if request.url.path == "/api/v1/kernels/list":
+            if request.url.path == "/v1/kernels.KernelsApiService/ListKernels":
                 return httpx.Response(200, json={"kernels": [
                     {"ref": "owner/other", "currentVersionNumber": 2},
                     {"ref": "owner/my-slug", "currentVersionNumber": 11},
@@ -148,7 +155,7 @@ class TestVersionedHelper(unittest.TestCase):
 
         def handler(request):
             headers_seen.update(dict(request.headers))
-            if request.url.path == "/api/v1/kernels/list":
+            if request.url.path == "/v1/kernels.KernelsApiService/ListKernels":
                 return httpx.Response(200, json={"kernels": [
                     {"ref": "owner/my-slug", "currentVersionNumber": 5}]})
             return httpx.Response(404)

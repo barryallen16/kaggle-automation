@@ -4,12 +4,19 @@ Talks straight to Kaggle's kagglesdk HTTP routes (POST + camelCase JSON +
 Bearer access_token) so we depend ONLY on httpx - not on the `kaggle`
 python package being installed in this environment.
 
-Routes replicated from kagglesdk serializers:
-  POST /api/v1/kernels/list    {user, search, page, pageSize}
+Routes replicated from kagglesdk 2.2.4 (kaggle_http_client.py
+KaggleEnv.PROD + kagglesdk/kernels/services/kernels_api_service.py):
+  POST https://api.kaggle.com/v1/kernels.KernelsApiService/ListKernels
+       body {user, search, page, pageSize}
        -> {kernels: [{ref, currentVersionNumber, ...}]}
-  POST /api/v1/kernels/output  {userName, kernelSlug, pageSize,
-                                versionLabel?, pageToken?}
+  POST https://api.kaggle.com/v1/kernels.KernelsApiService/ListKernelSessionOutput
+       body {userName, kernelSlug, pageSize, versionLabel?, pageToken?}
        -> {files: [{url, fileName}], log, nextPageToken}
+
+(The earlier draft hit www.kaggle.com/api/v1/... - Kaggle redirects
+that to its marketing HTML site, which is why the helper returned a
+"failed (rc=1)" with an HTML body. The actual API base is
+api.kaggle.com and the path embeds the gRPC-style service+method name.)
 
 Kaggle finalizes EVERY version (complete/error/cancelled) with its own
 output snapshot; version_label selects which snapshot we get. A result
@@ -31,7 +38,10 @@ import sys
 
 import httpx
 
-KAGGLE_BASE = os.getenv("KAGGLE_API_BASE", "https://www.kaggle.com")
+# Production API base. The kagglesdk resolves this to
+# https://api.kaggle.com in KaggleEnv.PROD (see kagglesdk/kaggle_env.py).
+KAGGLE_BASE = os.getenv("KAGGLE_API_BASE", "https://api.kaggle.com")
+KERNELS_SERVICE = "kernels.KernelsApiService"
 TIMEOUT = float(os.getenv("VERSIONED_HTTP_TIMEOUT_SECONDS", "60"))
 
 
@@ -56,13 +66,22 @@ def _token() -> str:
     raise KaggleError("no KAGGLE_API_TOKEN / access_token found in environment")
 
 
-def _post(client: httpx.Client, path: str, payload: dict):
-    r = client.post(f"{KAGGLE_BASE}{path}", json=payload)
+def _post(client: httpx.Client, method: str, payload: dict):
+    """POST to https://api.kaggle.com/v1/<service>/<method> with Bearer auth."""
+    url = f"{KAGGLE_BASE}/v1/{KERNELS_SERVICE}/{method}"
+    r = client.post(url, json=payload)
     if r.status_code >= 400:
-        raise KaggleError(f"{path} -> HTTP {r.status_code}: {r.text[:300]}")
-    data = r.json()
+        # Truncate the body: a 200-OK HTML page is the signature of being
+        # routed to the marketing site (wrong host or wrong path).
+        snippet = r.text[:200].replace("\n", " ")
+        raise KaggleError(f"{method} -> HTTP {r.status_code}: {snippet}")
+    try:
+        data = r.json()
+    except Exception as e:
+        snippet = r.text[:200].replace("\n", " ")
+        raise KaggleError(f"{method} -> non-JSON response (HTML?): {snippet}")
     if isinstance(data, dict) and isinstance(data.get("code"), int) and data["code"] >= 400:
-        raise KaggleError(f"{path} -> API error {data['code']}: {str(data.get('message'))[:200]}")
+        raise KaggleError(f"{method} -> API error {data['code']}: {str(data.get('message'))[:200]}")
     return data
 
 
@@ -73,12 +92,12 @@ def _download_files(client: httpx.Client, files: list, out_dir: str) -> list:
         name = item.get("fileName") or item.get("name")
         if not url or not name:
             continue
-        
-        # THE FIX: Kaggle returns relative URLs for file downloads 
-        # (e.g. /api/v1/kernels/output/download/...). We must prepend the base.
+
+        # Kaggle normally returns absolute URLs for the download endpoint, but
+        # if it ever returns a relative one, prepend the prod base.
         if url.startswith("/"):
             url = f"{KAGGLE_BASE}{url}"
-            
+
         dest = os.path.join(out_dir, name)
         parent = os.path.dirname(dest)
         if parent:
@@ -99,7 +118,7 @@ def _list_output_page(client: httpx.Client, owner: str, slug: str,
         payload["versionLabel"] = label
     if page_token:
         payload["pageToken"] = page_token
-    return _post(client, "/api/v1/kernels/output", payload)
+    return _post(client, "ListKernelSessionOutput", payload)
 
 
 def current_version(owner: str, slug: str):
@@ -111,7 +130,7 @@ def current_version(owner: str, slug: str):
     want_ref = f"{owner}/{slug}"
     with httpx.Client(timeout=TIMEOUT,
                       headers={"Authorization": f"Bearer {_token()}"}) as client:
-        data = _post(client, "/api/v1/kernels/list",
+        data = _post(client, "ListKernels",
                      {"user": owner, "search": slug, "page": 1, "pageSize": 100})
         for k in data.get("kernels") or []:
             if (k.get("ref") or "") == want_ref or (k.get("slug") or "") == slug:
@@ -120,7 +139,7 @@ def current_version(owner: str, slug: str):
 
         # Fallback: page through everything owned by this account
         for page in range(1, 6):
-            data = _post(client, "/api/v1/kernels/list",
+            data = _post(client, "ListKernels",
                          {"user": owner, "page": page, "pageSize": 100})
             kernels = data.get("kernels") or []
             for k in kernels:

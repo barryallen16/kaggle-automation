@@ -773,7 +773,13 @@ class KaggleService:
         prefer_version: Optional[int] = None,
         probe_previous_for_stop: bool = False
     ):
-        """Best-effort output sync. Returns (path_or_None, version_used_or_None).
+        """Best-effort output sync. Returns (path, version_used, diagnostics).
+
+        diagnostics is a short list of human-readable strings explaining
+        why each versioned attempt produced no files (auth failure,
+        non-JSON response, log-only page, etc.) so the pull response can
+        surface the real reason when nothing was recovered instead of
+        silently falling back to a stub-only log.
 
         Order of attempts:
           1. prefer_version            - the pinned version holding real output
@@ -783,26 +789,39 @@ class KaggleService:
               behind the stop-stub that is now 'current')
           3. plain latest pull         - final fallback
         """
+        diagnostics: List[str] = []
         attempts: List[int] = []
         if prefer_version:
             attempts.append(int(prefer_version))
         else:
             current = await cls.get_kernel_current_version(account_username, kernel_ref)
-            if current:
+            if not current:
+                diagnostics.append("meta: get_kernel_current_version returned None "
+                                    "(auth failure, network error, or kernel list unavailable)")
+            else:
                 if probe_previous_for_stop and current > 1:
                     attempts.append(current - 1)
                 attempts.append(current)
 
         for v in attempts:
-            got = await cls.download_outputs_of_version(account_username, kernel_ref, v, run_id)
+            try:
+                got = await cls.download_outputs_of_version(account_username, kernel_ref, v, run_id)
+            except Exception as e:
+                diagnostics.append(f"version {v}: download_outputs_of_version raised: {e}")
+                continue
             if got:
-                return got, v
+                return got, v, diagnostics
+            diagnostics.append(
+                f"version {v}: no files published (log-only or empty for every "
+                f"versionLabel tried - helper notes were logged at INFO level)"
+            )
 
         try:
-            return await cls.download_outputs(account_username, kernel_ref, run_id), None
+            plain = await cls.download_outputs(account_username, kernel_ref, run_id)
+            return plain, None, diagnostics
         except Exception as e:
-            logger.info(f"Output sync skipped for {run_id}: {e}")
-            return None, None
+            diagnostics.append(f"plain pull failed: {e}")
+            return None, None, diagnostics
 
     @classmethod
     async def download_outputs(cls, account_username: str, kernel_ref: str, run_id: str) -> Path:
