@@ -31,6 +31,32 @@ class KaggleService:
     # Subscribers for live log broadcasting: run_id -> List[asyncio.Queue]
     _log_subscribers: Dict[str, List[asyncio.Queue]] = {}
 
+    # ---- OOM guard: kaggle CLI processes are ~50-150MB each. 16 parallel
+    # pushes (16 accounts x2 sessions) spike to >2GB and the OOM-killer
+    # kills uvicorn ("killed uvicorn ..."). Same for status checks.
+    PUSH_CONCURRENCY_LIMIT = max(1, int(os.getenv("PUSH_CONCURRENCY", "3")))
+    KERNEL_STATUS_CONCURRENCY_LIMIT = max(1, int(os.getenv("KERNEL_STATUS_CONCURRENCY", "3")))
+    KERNEL_STATUS_TIMEOUT_SECONDS = int(os.getenv("KERNEL_STATUS_TIMEOUT_SECONDS", "90"))
+    _push_semaphore: Optional[asyncio.Semaphore] = None
+    _kernel_status_semaphore: Optional[asyncio.Semaphore] = None
+    _push_primitive_loop_id: Optional[int] = None
+
+    @classmethod
+    def _get_push_semaphore(cls) -> asyncio.Semaphore:
+        loop_id = id(asyncio.get_running_loop())
+        if cls._push_semaphore is None or cls._push_primitive_loop_id != loop_id:
+            cls._push_semaphore = asyncio.Semaphore(cls.PUSH_CONCURRENCY_LIMIT)
+            cls._push_primitive_loop_id = loop_id
+        return cls._push_semaphore
+
+    @classmethod
+    def _get_kernel_status_semaphore(cls) -> asyncio.Semaphore:
+        loop_id = id(asyncio.get_running_loop())
+        if cls._kernel_status_semaphore is None or cls._push_primitive_loop_id != loop_id:
+            cls._kernel_status_semaphore = asyncio.Semaphore(cls.KERNEL_STATUS_CONCURRENCY_LIMIT)
+            cls._push_primitive_loop_id = loop_id
+        return cls._kernel_status_semaphore
+
     # Mapping from user-friendly accelerator names to Kaggle API machine_shape enum values.
     # Full list: https://github.com/Kaggle/kaggle-cli/blob/main/docs/kernels_metadata.md
     # WARNING: NvidiaTeslaP100 is broken with default Kaggle image PyTorch (cu128) - avoid.
@@ -313,9 +339,13 @@ class KaggleService:
         if effective_timeout:
             cmd.extend(["-t", str(effective_timeout)])
 
-        # A fresh launch clears the log directory - history lives in the runs
-        # catalog, and stale logs from previous sessions must not linger.
-        cls._purge_previous_logs()
+        # Log purge is now done once per distributed workload (WorkloadDistributor),
+        # not per shard. Per-shard purge raced when 16-32 shards launched in
+        # parallel and also deleted logs of shards that just started streaming.
+        # Keep purge for single-run pushes only when caller hasn't already purged.
+        # WorkloadDistributor sets _WORKLOAD_PURGE_DONE env flag per launch batch.
+        if not os.getenv("_WORKLOAD_PURGE_DONE"):
+            cls._purge_previous_logs()
 
         log_file_path = LOGS_DIR / f"{run_id}.log"
         log_file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -344,13 +374,14 @@ class KaggleService:
         
         try:
             for attempt in range(total_attempts):
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=env
-                )
-                stdout, stderr = await proc.communicate()
+                async with cls._get_push_semaphore():
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env=env
+                    )
+                    stdout, stderr = await proc.communicate()
                 out_str = stdout.decode("utf-8", errors="ignore")
                 err_str = stderr.decode("utf-8", errors="ignore")
 
@@ -424,8 +455,16 @@ class KaggleService:
             create_run_record(run_record)
 
             # Start background log streaming if queued/started successfully
+            # Cap concurrent followers - 32 shards each holding a `kaggle logs -f`
+            # subprocess is the same OOM spike as pushes. Beyond the cap, logs are
+            # still collected on demand when the user opens the Logs WebSocket
+            # (see logs.py:85 ensure_log_stream).
             if not is_error:
-                asyncio.create_task(cls.start_background_log_stream(run_id, account_username, kernel_ref, log_file_path))
+                max_streams = max(1, int(os.getenv("MAX_CONCURRENT_LOG_STREAMS", "6")))
+                if len(cls._active_stream_processes) < max_streams:
+                    asyncio.create_task(cls.start_background_log_stream(run_id, account_username, kernel_ref, log_file_path))
+                else:
+                    logger.info(f"Log streaming deferred for {run_id} ({len(cls._active_stream_processes)}/{max_streams} streams active) - will start on demand")
 
             return {
                 "success": not is_error,
@@ -470,19 +509,25 @@ class KaggleService:
 
     @classmethod
     async def get_kernel_status(cls, account_username: str, kernel_ref: str) -> Dict[str, Any]:
-        """Queries `kaggle kernels status <kernel_ref>`."""
+        """Queries `kaggle kernels status <kernel_ref>` - throttled + bounded."""
         cli = get_kaggle_cli_path()
         cmd = [cli, "kernels", "status", kernel_ref]
         env = AccountManager.get_account_env(account_username)
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env
-            )
-            stdout, stderr = await proc.communicate()
+            async with cls._get_kernel_status_semaphore():
+                proc = await asyncio.wait_for(
+                    asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env=env
+                    ),
+                    timeout=cls.KERNEL_STATUS_TIMEOUT_SECONDS
+                )
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=cls.KERNEL_STATUS_TIMEOUT_SECONDS
+                )
             out_str = stdout.decode("utf-8", errors="ignore").strip()
 
             # Status parsing: e.g. 'username/slug has status "running"'
@@ -495,6 +540,9 @@ class KaggleService:
                 "raw": out_str,
                 "status": status
             }
+        except asyncio.TimeoutError:
+            logger.warning(f"get_kernel_status timed out for {kernel_ref} (@{account_username})")
+            return {"success": False, "status": "unknown", "error": "timeout"}
         except Exception as e:
             return {"success": False, "status": "unknown", "error": str(e)}
 
