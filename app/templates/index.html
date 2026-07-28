@@ -103,6 +103,11 @@
           <span>Run Catalog</span>
         </button>
 
+        <button onclick="switchTab('kernels')" id="nav-kernels" class="nav-tab w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all border border-transparent">
+          <i data-lucide="layers" class="w-4 h-4 text-indigo-400"></i>
+          <span>Account Kernels</span>
+        </button>
+
         <div class="pt-4 pb-2">
           <div class="h-px bg-slate-800"></div>
         </div>
@@ -644,7 +649,112 @@
 
 
         <!-- ============================================== -->
-        <!-- TAB 7: SETTINGS & TELEGRAM BOT                -->
+        <!-- TAB 7: ACCOUNT KERNELS (any notebook per account) -->
+        <!-- ============================================== -->
+        <section id="tab-kernels" class="hidden space-y-6">
+          <div class="glass-card rounded-2xl p-6 border border-[#222d4a] space-y-5">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 class="text-base font-bold text-white flex items-center space-x-2">
+                  <i data-lucide="layers" class="w-5 h-5 text-indigo-400 flex-shrink-0"></i>
+                  <span>Account Kernels Explorer</span>
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-700/50">NEW</span>
+                </h3>
+                <p class="text-xs text-slate-400 mt-1">Browse <span class="text-white font-semibold">any</span> notebook (running or completed) owned by an account — even if it was not launched from this dashboard. Pull outputs/logs directly.</p>
+              </div>
+              <div class="flex items-center gap-2">
+                <select id="kernels-account-select" class="bg-[#0d121f] border border-[#222d4a] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 min-w-[180px]">
+                  <option value="">-- Select Account --</option>
+                </select>
+                <button onclick="loadKernelsForAccount()" id="btn-load-kernels" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition disabled:opacity-50">
+                  <i data-lucide="search" class="w-4 h-4"></i>
+                  <span>Load</span>
+                </button>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3">
+              <input type="text" id="kernels-search" placeholder="Filter by title / slug (optional)" class="flex-1 min-w-[200px] bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-500" onkeydown="if(event.key==='Enter') loadKernelsForAccount()">
+              <button onclick="loadKernelsForAccount()" class="px-3 py-2 rounded-xl text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition">Search</button>
+              <span id="kernels-count" class="text-xs text-slate-500 font-mono"></span>
+            </div>
+
+            <div class="glass-panel rounded-xl overflow-hidden">
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm text-slate-300 min-w-[820px]">
+                  <thead class="bg-[#0e1424] text-xs uppercase font-semibold text-slate-400 border-b border-[#222d4a]">
+                    <tr>
+                      <th class="px-4 py-3.5">Title & Ref</th>
+                      <th class="px-4 py-3.5">Status</th>
+                      <th class="px-4 py-3.5">Last Run</th>
+                      <th class="px-4 py-3.5">Version</th>
+                      <th class="px-4 py-3.5 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody id="kernels-table-body" class="divide-y divide-[#1e293b]">
+                    <tr><td colspan="5" class="px-6 py-8 text-center text-slate-500">Select an account and click Load to browse its notebooks.</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <div class="flex items-center justify-between">
+              <button onclick="loadKernelsPage(-1)" id="btn-kernels-prev" class="px-3 py-1.5 rounded-lg text-xs bg-slate-800 text-slate-300 border border-slate-700 disabled:opacity-40" disabled>← Prev</button>
+              <span id="kernels-page-info" class="text-xs text-slate-500 font-mono">Page 1</span>
+              <button onclick="loadKernelsPage(1)" id="btn-kernels-next" class="px-3 py-1.5 rounded-lg text-xs bg-slate-800 text-slate-300 border border-slate-700 disabled:opacity-40" disabled>Next →</button>
+            </div>
+          </div>
+
+          <!-- Selected kernel detail: files + logs -->
+          <div id="kernels-detail-panel" class="hidden glass-card rounded-2xl p-6 border border-indigo-800/50 space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[#1e293b] pb-3">
+              <h4 class="text-sm font-bold text-white flex items-center gap-2">
+                <i data-lucide="file-stack" class="w-4 h-4 text-indigo-400"></i>
+                <span id="kernels-detail-title">Kernel detail</span>
+                <span id="kernels-detail-ref" class="text-xs font-mono text-slate-400"></span>
+              </h4>
+              <button onclick="closeKernelsDetail()" class="text-slate-400 hover:text-white"><i data-lucide="x" class="w-4 h-4"></i></button>
+            </div>
+
+            <div class="flex flex-wrap gap-2">
+              <button onclick="kernelsPullOutput()" id="btn-kernels-pull" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 border border-indigo-500/40 transition">
+                <i data-lucide="cloud-download" class="w-4 h-4"></i><span>Pull Output Files</span>
+              </button>
+              <button onclick="kernelsListFiles()" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition">
+                <i data-lucide="folder-open" class="w-4 h-4"></i><span>Refresh Files</span>
+              </button>
+              <button onclick="kernelsFetchLogs()" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition">
+                <i data-lucide="scroll-text" class="w-4 h-4"></i><span>Fetch Logs</span>
+              </button>
+              <button onclick="kernelsDownloadZip()" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-blue-600/20 text-blue-300 hover:bg-blue-600/30 border border-blue-500/40 transition">
+                <i data-lucide="archive" class="w-4 h-4"></i><span>Download ZIP</span>
+              </button>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div>
+                <h5 class="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">Output Files</h5>
+                <div class="glass-panel rounded-xl overflow-hidden max-h-[320px] overflow-y-auto">
+                  <table class="w-full text-left text-xs text-slate-300">
+                    <thead class="bg-[#0e1424] text-[10px] uppercase font-semibold text-slate-400 sticky top-0">
+                      <tr><th class="px-3 py-2">Filename</th><th class="px-3 py-2">Size</th><th class="px-3 py-2 text-right">Download</th></tr>
+                    </thead>
+                    <tbody id="kernels-files-body" class="divide-y divide-[#1e293b]">
+                      <tr><td colspan="3" class="px-3 py-6 text-center text-slate-500">No files yet — click Pull.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div>
+                <h5 class="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">Logs</h5>
+                <pre id="kernels-logs-pre" class="w-full h-[320px] overflow-auto bg-[#060911] border border-[#222d4a] rounded-xl p-3 text-[11px] font-mono text-slate-300 whitespace-pre-wrap">Logs will appear here after Fetch.</pre>
+              </div>
+            </div>
+          </div>
+        </section>
+
+
+        <!-- ============================================== -->
+        <!-- TAB 8: SETTINGS & TELEGRAM BOT                -->
         <!-- ============================================== -->
         <section id="tab-settings" class="hidden space-y-6">
           <div class="max-w-3xl mx-auto glass-panel rounded-2xl p-5 sm:p-8 border border-[#222d4a] space-y-6">
@@ -731,6 +841,7 @@
   <script src="/static/js/distributed.js"></script>
   <script src="/static/js/terminal.js"></script>
   <script src="/static/js/files.js"></script>
+  <script src="/static/js/kernels.js"></script>
   <script src="/static/js/settings.js"></script>
   <script>
     // Initialize Lucide icons on page load
