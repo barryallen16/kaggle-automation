@@ -770,6 +770,7 @@ class KaggleService:
         Returns {kernels: [...], nextPageToken: str}. Each kernel has
         ref, title, slug, author, lastRunTime, currentVersionNumber etc.
         Throttled via kernel-status semaphore (same CLI weight class).
+        Results are sorted reverse-chronological (recent lastRunTime first).
         """
         # Clamp to Kaggle sane limits
         page = max(1, int(page or 1))
@@ -783,9 +784,62 @@ class KaggleService:
             return {"kernels": [], "nextPageToken": ""}
         try:
             data = json.loads(out)
-            return {"kernels": data.get("kernels") or [], "nextPageToken": data.get("nextPageToken") or ""}
+            kernels = data.get("kernels") or []
+            # Reverse chronological: newest lastRunTime first
+            def _time_key(k):
+                t = k.get("lastRunTime") or k.get("last_run_time") or k.get("creationTime") or ""
+                try:
+                    # Use string compare for ISO; fallback to 0
+                    return t or ""
+                except Exception:
+                    return ""
+            try:
+                kernels.sort(key=_time_key, reverse=True)
+            except Exception:
+                pass
+            return {"kernels": kernels, "nextPageToken": data.get("nextPageToken") or ""}
         except Exception:
             return {"kernels": [], "nextPageToken": ""}
+
+    @classmethod
+    async def list_kernel_versions(cls, account_username: str, kernel_ref: str, max_versions: int = 20) -> Dict[str, Any]:
+        """Lists per-version snapshots for a kernel, newest first.
+
+        Each version entry has version, label, creationTime (ISO or ""), fileCount, status, hasOutput.
+        """
+        owner, _, slug = kernel_ref.partition("/")
+        if not owner or not slug:
+            return {"versions": [], "current_version": None}
+        out = await cls._run_versioned_helper(
+            account_username,
+            ["versions", owner, slug, str(max_versions)],
+            timeout=180
+        )
+        if not out:
+            return {"versions": [], "current_version": None}
+        try:
+            data = json.loads(out)
+            return {"versions": data.get("versions") or [], "current_version": data.get("current_version")}
+        except Exception:
+            return {"versions": [], "current_version": None}
+
+    @classmethod
+    async def fetch_version_log(cls, account_username: str, kernel_ref: str, version: int) -> str:
+        """Fetches log for a specific version snapshot."""
+        owner, _, slug = kernel_ref.partition("/")
+        if not owner or not slug:
+            return ""
+        out = await cls._run_versioned_helper(
+            account_username,
+            ["log", owner, slug, str(version)],
+            timeout=60
+        )
+        if not out:
+            return ""
+        try:
+            return json.loads(out).get("log") or ""
+        except Exception:
+            return ""
 
     @classmethod
     async def get_kernel_current_version(cls, account_username: str, kernel_ref: str) -> Optional[int]:
@@ -896,11 +950,12 @@ class KaggleService:
             return None, None, diagnostics
 
     @classmethod
-    async def download_external_outputs(cls, account_username: str, kernel_ref: str):
+    async def download_external_outputs(cls, account_username: str, kernel_ref: str, version: Optional[int] = None):
         """Downloads output for any kernel_ref (not just dashboard runs).
 
         Uses a synthetic run_id `ext_<account>_<slug>` so files land in
         data/outputs/ext_<account>_<slug>/ and don't pollute the runs table.
+        If version is given, fetches that exact version snapshot.
         Returns (path, version_used, diagnostics) like download_latest_outputs.
         """
         owner, _, slug = kernel_ref.partition("/")
@@ -909,9 +964,79 @@ class KaggleService:
         safe_slug = cls.sanitize_slug(slug)
         safe_owner = "".join(c for c in owner if c.isalnum() or c in ("-", "_")).lower() or "unknown"
         run_id = f"ext_{safe_owner}_{safe_slug}"
+        if version:
+            # Exact version fetch
+            got = await cls.download_outputs_of_version(account_username, kernel_ref, int(version), run_id)
+            if got:
+                return got, int(version), []
+            return None, None, [f"version {version}: no files published"]
         # For external kernels we don't have a pinned output_version, so let
         # download_latest_outputs probe current version then plain pull.
         return await cls.download_latest_outputs(account_username, kernel_ref, run_id)
+
+    @classmethod
+    async def stop_external_kernel(cls, account_username: str, kernel_ref: str, title: Optional[str] = None) -> Dict[str, Any]:
+        """Stops any kernel_ref (even not in DB) by pushing a 1-sec exit stub.
+
+        Throttled via push semaphore like normal pushes. Returns {success, message/error}.
+        """
+        owner, _, slug = kernel_ref.partition("/")
+        if not owner or not slug:
+            return {"success": False, "error": "Invalid kernel_ref"}
+        # Need title for metadata - use provided or slug
+        clean_title = (title or slug)[:50]
+        # Use ext-run id for local log file (not DB)
+        run_id = f"ext_stop_{owner}_{slug}_{uuid.uuid4().hex[:4]}"
+        stop_dir = NOTEBOOKS_DIR / f"stop_{run_id}"
+        stop_dir.mkdir(parents=True, exist_ok=True)
+        # Always use notebook stub (Kaggle accepts notebook for any kernel type)
+        stub_filename = "cell.ipynb"
+        stub_nb = {
+            "cells": [{
+                "cell_type": "code",
+                "execution_count": None,
+                "metadata": {},
+                "outputs": [],
+                "source": ["import sys\n", "print('Session explicitly stopped from Account Kernels Explorer.')\n", "sys.exit(0)\n"]
+            }],
+            "metadata": {"kernelspec": dict(cls.DEFAULT_KERNELSPEC)},
+            "nbformat": 4,
+            "nbformat_minor": 2
+        }
+        with open(stop_dir / stub_filename, "w", encoding="utf-8") as f:
+            json.dump(stub_nb, f, indent=2)
+        metadata = {
+            "id": kernel_ref,
+            "title": clean_title,
+            "code_file": stub_filename,
+            "language": "python",
+            "kernel_type": "notebook",
+            "is_private": "true",
+            "enable_gpu": "false",
+            "enable_tpu": "false",
+            "enable_internet": "false"
+        }
+        with open(stop_dir / "kernel-metadata.json", "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2)
+        cli = get_kaggle_cli_path()
+        cmd = [cli, "kernels", "push", "-p", str(stop_dir), "-t", "1"]
+        env = AccountManager.get_account_env(account_username)
+        try:
+            async with cls._get_push_semaphore():
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            out_str = stdout.decode("utf-8", errors="ignore")
+            err_str = stderr.decode("utf-8", errors="ignore")
+            combined = (out_str + "\n" + err_str).strip()
+            if proc.returncode == 0 and "kernel push error" not in combined.lower():
+                return {"success": True, "message": f"Stop signal sent to {kernel_ref}"}
+            return {"success": False, "error": combined[-500:] or "push failed"}
+        except asyncio.TimeoutError:
+            return {"success": False, "error": "stop push timed out"}
+        except Exception as e:
+            return {"success": False, "error": str(e)}
 
     @classmethod
     async def download_outputs(cls, account_username: str, kernel_ref: str, run_id: str) -> Path:

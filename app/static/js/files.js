@@ -146,16 +146,27 @@ function renderFilesTable(data) {
   refreshIcons();
 }
 
+function setFilesBtnLoading(btn, loading, text) {
+  if (!btn) return;
+  if (loading) {
+    btn.dataset.origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>${text || 'Loading...'}</span>`;
+    try { refreshIcons(); } catch (_) {}
+  } else {
+    btn.disabled = false;
+    if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
+    try { refreshIcons(); } catch (_) {}
+  }
+}
 async function pullRemoteFiles() {
   if (!currentFilesRunId) {
     showToast('Select a run first to pull output files', 'warning');
     return;
   }
-
   showToast('Downloading all output artifacts from Kaggle CLI...', 'info');
   const btn = document.getElementById('btn-pull-files');
-  btn.disabled = true;
-
+  setFilesBtnLoading(btn, true, 'Pulling...');
   try {
     const res = await fetch(`/api/runs/${currentFilesRunId}/files/pull`, { method: 'POST' });
     const data = await res.json();
@@ -168,7 +179,7 @@ async function pullRemoteFiles() {
   } catch (err) {
     showToast('Error pulling files: ' + err.message, 'error');
   } finally {
-    btn.disabled = false;
+    setFilesBtnLoading(btn, false);
   }
 }
 

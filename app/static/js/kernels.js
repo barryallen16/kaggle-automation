@@ -76,11 +76,26 @@ function loadKernelsPage(delta) {
   loadKernelsForAccount();
 }
 
+function setBtnLoading(btn, loading, loadingText) {
+  if (!btn) return;
+  if (loading) {
+    btn.dataset.origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>${esc(loadingText || 'Loading...')}</span>`;
+    try { refreshIcons(); } catch (_) {}
+  } else {
+    btn.disabled = false;
+    if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
+    try { refreshIcons(); } catch (_) {}
+  }
+}
+
 async function loadKernelsForAccount() {
   const sel = document.getElementById('kernels-account-select');
   const searchEl = document.getElementById('kernels-search');
   const tbody = document.getElementById('kernels-table-body');
   const countEl = document.getElementById('kernels-count');
+  const loadBtn = document.getElementById('btn-load-kernels');
   if (!sel || !tbody) return;
 
   const account = sel.value.trim();
@@ -100,9 +115,9 @@ async function loadKernelsForAccount() {
   tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-slate-400"><i data-lucide="loader-2" class="w-5 h-5 animate-spin mx-auto mb-2 text-indigo-400"></i> Listing notebooks for @${esc(account)}...</td></tr>`;
   refreshIcons();
   if (countEl) countEl.textContent = '';
-
   const nextBtn = document.getElementById('btn-kernels-next');
   if (nextBtn) nextBtn.disabled = true;
+  setBtnLoading(loadBtn, true, 'Loading...');
 
   try {
     const params = new URLSearchParams({ account, search: kernelsState.search, page: String(kernelsState.page), pageSize: String(kernelsState.pageSize) });
@@ -110,8 +125,16 @@ async function loadKernelsForAccount() {
     if (res.status === 401) { window.location.href = '/login'; return; }
     const data = await res.json();
     if (!data.success) throw new Error(data.detail || 'Failed to list kernels');
-
-    kernelsState.kernels = data.kernels || [];
+    // Ensure reverse chronological (newest lastRunTime first) even if backend didn't sort
+    let kernels = data.kernels || [];
+    try {
+      kernels.sort((a, b) => {
+        const ta = a.lastRunTime || a.creationTime || '';
+        const tb = b.lastRunTime || b.creationTime || '';
+        return new Date(tb) - new Date(ta);
+      });
+    } catch (_) {}
+    kernelsState.kernels = kernels;
     const hasNext = !!(data.nextPageToken);
     if (nextBtn) {
       nextBtn.disabled = !hasNext;
@@ -122,6 +145,8 @@ async function loadKernelsForAccount() {
     renderKernelsTable();
   } catch (err) {
     tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-rose-400">Error: ${esc(err.message)}</td></tr>`;
+  } finally {
+    setBtnLoading(loadBtn, false);
   }
 }
 
@@ -153,6 +178,7 @@ function renderKernelsTable() {
         <td class="px-4 py-3 text-right">
           <div class="flex items-center justify-end gap-2 flex-wrap">
             <button data-account="${esc(kernelsState.account)}" data-ref="${esc(ref)}" data-title="${esc(title)}" onclick="openKernelsDetail(this.dataset.account, this.dataset.ref, this.dataset.title)" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 border border-indigo-500/30 transition">Open</button>
+            <button data-account="${esc(kernelsState.account)}" data-ref="${esc(ref)}" data-title="${esc(title)}" onclick="kernelsStopRow(this.dataset.account, this.dataset.ref, this.dataset.title, this)" title="Stop this kernel if running" class="px-2 py-1 rounded text-xs bg-rose-600/20 text-rose-300 hover:bg-rose-600/30 border border-rose-500/30">Stop</button>
             <a href="https://www.kaggle.com/code/${encodeURIComponent(ref)}" target="_blank" class="px-2 py-1 rounded text-xs bg-slate-800 text-slate-400 hover:text-white border border-slate-700"><i data-lucide="external-link" class="w-3 h-3 inline"></i></a>
           </div>
         </td>
@@ -164,6 +190,30 @@ function renderKernelsTable() {
   kernelsState.kernels.slice(0, 6).forEach((k, idx) => {
     setTimeout(() => fetchKernelStatus(kernelsState.account, k.ref, `kstatus-${idx}`), idx * 400);
   });
+}
+async function kernelsStopRow(account, ref, title, btn) {
+  if (!confirm(`Stop kernel ${ref} on @${account}?`)) return;
+  setBtnLoading(btn, true, 'Stopping...');
+  try {
+    const res = await fetch('/api/kernels/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_username: account, kernel_ref: ref, title })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(data.message || 'Stop signal sent', 'success');
+      // Find and refresh status cell for this ref
+      const idx = kernelsState.kernels.findIndex(k => k.ref === ref);
+      if (idx >= 0) fetchKernelStatus(account, ref, `kstatus-${idx}`);
+    } else {
+      throw new Error(data.detail || data.error || 'Stop failed');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    setBtnLoading(btn, false);
+  }
 }
 
 function formatKernelsTime(iso) {
@@ -230,8 +280,10 @@ async function kernelsListFiles() {
   if (!kernelsState.selected) { showToast('Open a kernel first','warning'); return; }
   const { account, ref } = kernelsState.selected;
   const tbody = document.getElementById('kernels-files-body');
+  const btn = document.getElementById('btn-kernels-files');
   if (tbody) tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-slate-400"><i data-lucide="loader-2" class="w-4 h-4 animate-spin mx-auto mb-1"></i> Listing files...</td></tr>`;
   refreshIcons();
+  setBtnLoading(btn, true, 'Listing...');
   try {
     const params = new URLSearchParams({ account, kernel_ref: ref });
     const res = await fetch(`/api/kernels/files?${params.toString()}`);
@@ -240,6 +292,8 @@ async function kernelsListFiles() {
     renderKernelsFiles(data);
   } catch (err) {
     if (tbody) tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-rose-400">${esc(err.message)}</td></tr>`;
+  } finally {
+    setBtnLoading(btn, false);
   }
 }
 
@@ -273,34 +327,41 @@ function renderKernelsFiles(data) {
   refreshIcons();
 }
 
-async function kernelsPullOutput() {
+async function kernelsPullOutput(version) {
   if (!kernelsState.selected) return;
   const { account, ref } = kernelsState.selected;
-  const btn = document.getElementById('btn-kernels-pull');
-  if (btn) btn.disabled = true;
-  showToast(`Pulling outputs for ${ref}...`, 'info');
+  const isVersion = version != null;
+  const btn = isVersion ? document.getElementById(`btn-pull-v${version}`) : document.getElementById('btn-kernels-pull');
+  setBtnLoading(btn, true, isVersion ? `Pulling v${version}...` : 'Pulling...');
+  showToast(`Pulling ${isVersion ? 'v'+version+' of ' : ''}${ref}...`, 'info');
   try {
+    const payload = { account_username: account, kernel_ref: ref };
+    if (isVersion) payload.version = parseInt(version, 10);
     const res = await fetch('/api/kernels/pull', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ account_username: account, kernel_ref: ref })
+      body: JSON.stringify(payload)
     });
     const data = await res.json();
     if (!data.success) throw new Error(data.detail || data.error || 'pull failed');
     showToast(data.message || 'Pulled', 'success');
     kernelsListFiles();
+    if (isVersion) loadKernelVersions();
   } catch (err) {
     showToast(err.message, 'error');
   } finally {
-    if (btn) btn.disabled = false;
+    setBtnLoading(btn, false);
   }
 }
+function kernelsPullVersion(v) { return kernelsPullOutput(v); }
 
 async function kernelsFetchLogs() {
   if (!kernelsState.selected) return;
   const { account, ref } = kernelsState.selected;
   const pre = document.getElementById('kernels-logs-pre');
+  const btn = document.getElementById('btn-kernels-logs');
   if (pre) pre.textContent = 'Fetching logs from Kaggle...';
+  setBtnLoading(btn, true, 'Fetching...');
   try {
     const params = new URLSearchParams({ account, kernel_ref: ref });
     const res = await fetch(`/api/kernels/logs?${params.toString()}`);
@@ -310,6 +371,8 @@ async function kernelsFetchLogs() {
     if (pre) pre.textContent = logs ? logs : '(no logs returned)';
   } catch (err) {
     if (pre) pre.textContent = 'Error: ' + err.message;
+  } finally {
+    setBtnLoading(btn, false);
   }
 }
 
@@ -318,4 +381,108 @@ function kernelsDownloadZip() {
   const { account, ref } = kernelsState.selected;
   const params = new URLSearchParams({ account, kernel_ref: ref });
   window.open(`/api/kernels/files/download-zip?${params.toString()}`, '_blank');
+}
+
+async function loadKernelVersions() {
+  if (!kernelsState.selected) { showToast('Open a kernel first','warning'); return; }
+  const { account, ref } = kernelsState.selected;
+  const tbody = document.getElementById('kernels-versions-body');
+  const btn = document.getElementById('btn-load-versions');
+  if (tbody) tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-slate-400"><i data-lucide="loader-2" class="w-4 h-4 animate-spin mx-auto mb-1"></i> Loading version history...</td></tr>`;
+  setBtnLoading(btn, true, 'Loading...');
+  try { refreshIcons(); } catch (_) {}
+  try {
+    const params = new URLSearchParams({ account, kernel_ref: ref, max_versions: '20' });
+    const res = await fetch(`/api/kernels/versions?${params.toString()}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.detail || 'failed');
+    renderKernelVersions(data.versions || []);
+  } catch (err) {
+    if (tbody) tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-rose-400">Error: ${esc(err.message)}</td></tr>`;
+  } finally {
+    setBtnLoading(btn, false);
+  }
+}
+
+function renderKernelVersions(versions) {
+  const tbody = document.getElementById('kernels-versions-body');
+  if (!tbody) return;
+  if (!versions.length) {
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-slate-500">No version history found (kernel may be new or API didn't return versions). Try pulling latest output instead.</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = versions.map(v => {
+    const timeDisplay = v.creationTime ? formatKernelsTime(v.creationTime) : '<span class="text-slate-500">—</span>';
+    const status = (v.status || 'unknown').toLowerCase();
+    let statusCls = 'bg-slate-800 text-slate-300 border-slate-700';
+    if (status === 'complete') statusCls = 'bg-emerald-950 text-emerald-300 border-emerald-800';
+    else if (status === 'running' || status === 'queued') statusCls = 'bg-amber-950 text-amber-300 border-amber-800';
+    else if (status === 'error') statusCls = 'bg-rose-950 text-rose-300 border-rose-800';
+    else if (status === 'stopped') statusCls = 'bg-slate-800 text-slate-400 border-slate-700';
+    const hasOutput = v.hasOutput ? `<span class="text-emerald-400">${v.fileCount} files</span>` : `<span class="text-slate-500">log only</span>`;
+    return `
+      <tr class="hover:bg-slate-800/30">
+        <td class="px-3 py-2 font-mono text-xs font-bold text-white">v${v.version}</td>
+        <td class="px-3 py-2 text-xs font-mono text-slate-300 whitespace-nowrap" title="${esc(v.creationTime || '')}">${timeDisplay}</td>
+        <td class="px-3 py-2"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${statusCls}">${esc(status.toUpperCase())}</span></td>
+        <td class="px-3 py-2 text-xs text-slate-400">${hasOutput}</td>
+        <td class="px-3 py-2 text-right">
+          <div class="flex items-center justify-end gap-1">
+            <button id="btn-pull-v${v.version}" onclick="kernelsPullVersion(${v.version})" class="px-2 py-1 rounded text-xs font-bold bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 border border-indigo-500/30">Pull</button>
+            <button id="btn-log-v${v.version}" onclick="kernelsFetchVersionLog(${v.version})" class="px-2 py-1 rounded text-xs bg-slate-800 text-slate-400 hover:text-white border border-slate-700" title="Fetch log for this version">Logs</button>
+          </div>
+        </td>
+      </tr>
+    `;
+  }).join('');
+  try { refreshIcons(); } catch (_) {}
+}
+async function kernelsFetchVersionLog(version) {
+  if (!kernelsState.selected) return;
+  const { account, ref } = kernelsState.selected;
+  const pre = document.getElementById('kernels-logs-pre');
+  const btn = document.getElementById(`btn-log-v${version}`);
+  if (pre) pre.textContent = `Fetching log for v${version}...`;
+  setBtnLoading(btn, true, `v${version}...`);
+  try {
+    const params = new URLSearchParams({ account, kernel_ref: ref, version: String(version) });
+    const res = await fetch(`/api/kernels/logs?${params.toString()}`);
+    const data = await res.json();
+    if (!data.success) throw new Error(data.detail || 'failed');
+    if (pre) pre.textContent = data.logs ? `--- Version ${version} log ---\n` + data.logs : `(no log for v${version})`;
+    pre.scrollTop = 0;
+  } catch (err) {
+    if (pre) pre.textContent = 'Error: ' + err.message;
+  } finally {
+    setBtnLoading(btn, false);
+  }
+}
+
+async function kernelsStop() {
+  if (!kernelsState.selected) { showToast('Open a kernel first','warning'); return; }
+  const { account, ref, title } = kernelsState.selected;
+  if (!confirm(`Stop kernel ${ref} on @${account}?\nThis pushes a 1-sec cancel stub.`)) return;
+  const btn = document.getElementById('btn-kernels-stop');
+  setBtnLoading(btn, true, 'Stopping...');
+  showToast(`Sending stop signal to ${ref}...`, 'warning');
+  try {
+    const res = await fetch('/api/kernels/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ account_username: account, kernel_ref: ref, title })
+    });
+    const data = await res.json();
+    if (data.success) {
+      showToast(data.message || 'Stop signal sent', 'success');
+      // Refresh status for this kernel
+      const idx = kernelsState.kernels.findIndex(k => k.ref === ref);
+      if (idx >= 0) fetchKernelStatus(account, ref, `kstatus-${idx}`);
+    } else {
+      throw new Error(data.detail || data.error || 'Stop failed');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    setBtnLoading(btn, false);
+  }
 }

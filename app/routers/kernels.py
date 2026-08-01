@@ -107,10 +107,16 @@ async def kernel_files(account: str = Query(...), kernel_ref: str = Query(...)):
 
 
 @router.get("/logs")
-async def kernel_logs(account: str = Query(...), kernel_ref: str = Query(...)):
-    """Fetches latest execution logs for any kernel_ref."""
+async def kernel_logs(account: str = Query(...), kernel_ref: str = Query(...), version: Optional[int] = Query(None, description="Specific version to fetch log for")):
+    """Fetches execution logs for any kernel_ref, optionally for a specific version."""
     _require_account(account)
     ref = _parse_ref(kernel_ref)
+    if version is not None:
+        logs = await KaggleService.fetch_version_log(account, ref, int(version))
+        # Fallback to latest logs if version-specific log is empty
+        if not logs:
+            logs = await KaggleService.fetch_full_logs(account, ref)
+        return {"success": True, "kernel_ref": ref, "version": version, "logs": logs}
     logs = await KaggleService.fetch_full_logs(account, ref)
     return {"success": True, "kernel_ref": ref, "logs": logs}
 
@@ -118,6 +124,7 @@ async def kernel_logs(account: str = Query(...), kernel_ref: str = Query(...)):
 class PullRequest(BaseModel):
     account_username: str
     kernel_ref: str
+    version: Optional[int] = None
 
 
 @router.post("/pull")
@@ -125,8 +132,7 @@ async def kernel_pull(payload: PullRequest):
     """Downloads output files for any kernel_ref into data/outputs/ext_<owner>_<slug>/."""
     account = _require_account(payload.account_username)
     ref = _parse_ref(payload.kernel_ref)
-    # Use version-aware download that tries pinned version then plain pull
-    target_dir, version_used, diagnostics = await KaggleService.download_external_outputs(account, ref)
+    target_dir, version_used, diagnostics = await KaggleService.download_external_outputs(account, ref, version=payload.version)
     if not target_dir or not target_dir.exists():
         raise HTTPException(status_code=502, detail=" | ".join(diagnostics) if diagnostics else "No output files found for this kernel (it may still be running or published no files).")
     files = []
@@ -142,8 +148,41 @@ async def kernel_pull(payload: PullRequest):
     msg = f"Downloaded {len(files)} file(s) from Kaggle"
     if version_used:
         msg += f" (version {version_used} snapshot)"
+    elif payload.version:
+        msg += f" (version {payload.version} snapshot)"
     msg += "."
-    return {"success": True, "message": msg, "files": files, "version_used": version_used, "kernel_ref": ref}
+    return {"success": True, "message": msg, "files": files, "version_used": version_used or payload.version, "kernel_ref": ref}
+
+
+@router.get("/versions")
+async def kernel_versions(account: str = Query(...), kernel_ref: str = Query(...), max_versions: int = Query(20, ge=1, le=50)):
+    """Lists per-version snapshots for a kernel, newest first. Each entry has version, creationTime, status, fileCount."""
+    _require_account(account)
+    ref = _parse_ref(kernel_ref)
+    data = await KaggleService.list_kernel_versions(account, ref, max_versions)
+    return {"success": True, "kernel_ref": ref, **data}
+
+
+class StopRequest(BaseModel):
+    account_username: str
+    kernel_ref: str
+    title: Optional[str] = None
+
+
+@router.post("/stop")
+async def kernel_stop(payload: StopRequest):
+    """Stops any running kernel (even not in DB) by pushing a cancel stub."""
+    account = _require_account(payload.account_username)
+    ref = _parse_ref(payload.kernel_ref)
+    # Check live status first - don't push stub if already terminal
+    status_resp = await KaggleService.get_kernel_status(account, ref)
+    st = (status_resp.get("status") or "unknown").lower()
+    if st in ("complete", "error", "stopped"):
+        return {"success": False, "error": f"Kernel already {st} - no stop needed", "status": st}
+    result = await KaggleService.stop_external_kernel(account, ref, title=payload.title)
+    if result.get("success"):
+        return {"success": True, "message": result.get("message"), "kernel_ref": ref}
+    raise HTTPException(status_code=502, detail=result.get("error") or "Stop failed")
 
 
 @router.get("/files/download/{filename:path}")
