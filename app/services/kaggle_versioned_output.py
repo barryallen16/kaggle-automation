@@ -162,8 +162,27 @@ def list_versions(owner: str, slug: str, max_versions: int = 20):
     Times are ISO strings from the API when available, else "".
     """
     cur = current_version(owner, slug)
+    # Fallback: if current_version couldn't be determined (private kernel, search miss, etc.),
+    # probe descending from 20 to find the highest version that actually exists.
     if not cur:
-        return []
+        # Try to discover current by probing existence via GetKernelSessionStatus
+        # Use a temporary client for discovery (reuses same token)
+        try:
+            with httpx.Client(timeout=TIMEOUT, headers={"Authorization": f"Bearer {_token()}"}) as client:
+                for probe in range(20, 0, -1):
+                    for label in (str(probe), f"version-{probe}", f"version{probe}"):
+                        try:
+                            _get_status(client, owner, slug, label=label)
+                            cur = probe
+                            break
+                        except KaggleError:
+                            continue
+                    if cur:
+                        break
+        except Exception:
+            pass
+        if not cur:
+            return []
     # Clamp to sane range
     try:
         max_versions = max(1, min(50, int(max_versions or 20)))
@@ -248,33 +267,65 @@ def fetch_version_log(owner: str, slug: str, version: int) -> str:
     return ""
 
 
+def _get_kernel_metadata(client: httpx.Client, owner: str, slug: str):
+    """Fetches single kernel metadata via GetKernel (more reliable for currentVersionNumber)."""
+    try:
+        data = _post(client, "GetKernel", {"userName": owner, "kernelSlug": slug})
+        # Response may be {metadata: {...}} or direct
+        meta = data.get("metadata") or data
+        if isinstance(meta, dict):
+            v = meta.get("currentVersionNumber") or meta.get("current_version_number")
+            if v:
+                return int(v)
+        # Some responses nest under "metadata" with camelCase
+        if isinstance(data.get("metadata"), dict):
+            v = data["metadata"].get("currentVersionNumber")
+            if v:
+                return int(v)
+    except KaggleError:
+        pass
+    return None
+
 def current_version(owner: str, slug: str):
     """Latest pushed version number of the kernel, or None if undeterminable.
 
     Search first; private kernels sometimes don't match search, so fall back
-    to paging the user's full kernel list and matching by ref.
+    to paging the user's full kernel list and matching by ref. Finally try
+    GetKernel which is more reliable for currentVersionNumber.
     """
     want_ref = f"{owner}/{slug}"
     with httpx.Client(timeout=TIMEOUT,
                       headers={"Authorization": f"Bearer {_token()}"}) as client:
-        data = _post(client, "ListKernels",
-                     {"user": owner, "search": slug, "page": 1, "pageSize": 100})
-        for k in data.get("kernels") or []:
-            if (k.get("ref") or "") == want_ref or (k.get("slug") or "") == slug:
-                v = k.get("currentVersionNumber") or 0
-                return int(v) if v else None
+        try:
+            data = _post(client, "ListKernels",
+                         {"user": owner, "search": slug, "page": 1, "pageSize": 100})
+            for k in data.get("kernels") or []:
+                if (k.get("ref") or "") == want_ref or (k.get("slug") or "") == slug:
+                    v = k.get("currentVersionNumber") or k.get("current_version_number") or 0
+                    if v:
+                        return int(v)
+        except KaggleError:
+            pass
 
         # Fallback: page through everything owned by this account
-        for page in range(1, 6):
-            data = _post(client, "ListKernels",
-                         {"user": owner, "page": page, "pageSize": 100})
-            kernels = data.get("kernels") or []
-            for k in kernels:
-                if (k.get("ref") or "") == want_ref or (k.get("slug") or "") == slug:
-                    v = k.get("currentVersionNumber") or 0
-                    return int(v) if v else None
-            if len(kernels) < 100:
-                break
+        try:
+            for page in range(1, 6):
+                data = _post(client, "ListKernels",
+                             {"user": owner, "page": page, "pageSize": 100})
+                kernels = data.get("kernels") or []
+                for k in kernels:
+                    if (k.get("ref") or "") == want_ref or (k.get("slug") or "") == slug:
+                        v = k.get("currentVersionNumber") or k.get("current_version_number") or 0
+                        if v:
+                            return int(v)
+                if len(kernels) < 100:
+                    break
+        except KaggleError:
+            pass
+        # Final fallback: GetKernel is more reliable for version number
+        v = _get_kernel_metadata(client, owner, slug)
+        if v:
+            return v
     return None
 
 
