@@ -163,6 +163,19 @@ async def kernel_versions(account: str = Query(...), kernel_ref: str = Query(...
     return {"success": True, "kernel_ref": ref, **data}
 
 
+@router.get("/debug/current_version")
+async def debug_current_version(account: str = Query(...), kernel_ref: str = Query(...)):
+    """Debug helper: shows what current_version logic returns and raw GetKernel/ListKernels probes."""
+    _require_account(account)
+    ref = _parse_ref(kernel_ref)
+    owner, _, slug = ref.partition("/")
+    # Try current_version via service
+    cur = await KaggleService.get_kernel_current_version(account, ref)
+    # Also try direct helper list_kernels raw for debugging
+    raw_list = await KaggleService.list_account_kernels(account, slug, 1, 5)
+    return {"success": True, "kernel_ref": ref, "current_version_via_service": cur, "list_raw_sample": (raw_list.get("kernels") or [])[:2]}
+
+
 class StopRequest(BaseModel):
     account_username: str
     kernel_ref: str
