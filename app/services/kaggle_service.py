@@ -955,7 +955,9 @@ class KaggleService:
 
         Uses a synthetic run_id `ext_<account>_<slug>` so files land in
         data/outputs/ext_<account>_<slug>/ and don't pollute the runs table.
-        If version is given, fetches that exact version snapshot.
+        If version is given, fetches that exact version snapshot; if that fails
+        (404/403 for old label formats) falls back to plain latest pull which
+        is the same output when version == current (common for v1 kernels).
         Returns (path, version_used, diagnostics) like download_latest_outputs.
         """
         owner, _, slug = kernel_ref.partition("/")
@@ -965,11 +967,23 @@ class KaggleService:
         safe_owner = "".join(c for c in owner if c.isalnum() or c in ("-", "_")).lower() or "unknown"
         run_id = f"ext_{safe_owner}_{safe_slug}"
         if version:
-            # Exact version fetch
+            # Exact version fetch - try versioned helper first
             got = await cls.download_outputs_of_version(account_username, kernel_ref, int(version), run_id)
             if got:
                 return got, int(version), []
-            return None, None, [f"version {version}: no files published"]
+            # Fallback: if version-specific failed (common for v1 where label '1' 404s but plain works),
+            # try plain latest pull - for single-version kernels this is the same output.
+            # Check if version is current or latest by probing current_version; if unknown, still try plain.
+            try:
+                cur = await cls.get_kernel_current_version(account_username, kernel_ref)
+                if cur is None or int(version) == cur:
+                    plain, _, diag = await cls.download_latest_outputs(account_username, kernel_ref, run_id)
+                    if plain:
+                        # Return plain but note it was fallback
+                        return plain, int(version), [f"version {version}: versioned probe failed, fell back to latest pull"] + diag
+            except Exception:
+                pass
+            return None, None, [f"version {version}: no files published (tried labels '1','version-1','version1' - all 404/403)"]
         # For external kernels we don't have a pinned output_version, so let
         # download_latest_outputs probe current version then plain pull.
         return await cls.download_latest_outputs(account_username, kernel_ref, run_id)
