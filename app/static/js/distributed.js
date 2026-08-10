@@ -42,20 +42,22 @@ function renderDistributedAccountCheckboxes() {
     const prevSess = prevSessions[acc.username];
     const sessVal = prevSess ? prevSess : globalSessions;
     return `
-    <label class="flex items-center space-x-2.5 p-2.5 rounded-lg bg-[#080b12] border border-[#1e293b] hover:border-purple-500/50 cursor-pointer transition">
-      <input type="checkbox" name="dist-acc" value="${esc(acc.username)}" ${shouldChecked ? 'checked' : ''} onchange="updateShardsPreview()" class="w-4 h-4 text-purple-500 rounded bg-slate-900 border-slate-700 focus:ring-0">
-      <div class="truncate flex-1">
-        <span class="text-xs font-bold text-white block truncate">@${esc(acc.username)}</span>
-        <span class="text-[10px] text-slate-400 font-mono">${esc(quotaLabel)}</span>
-      </div>
-      <select onchange="event.stopPropagation(); updateShardsPreview();" onclick="event.stopPropagation()"
-              class="dist-session-select bg-[#0d121f] border border-[#222d4a] rounded-md px-1.5 py-1 text-[10px] text-purple-300 focus:outline-none focus:border-purple-500"
+    <div class="flex items-center space-x-2.5 p-2.5 rounded-lg bg-[#080b12] border border-[#1e293b] hover:border-purple-500/50 transition">
+      <label class="flex items-center space-x-2.5 flex-1 min-w-0 cursor-pointer">
+        <input type="checkbox" name="dist-acc" value="${esc(acc.username)}" ${shouldChecked ? 'checked' : ''} onchange="updateShardsPreview()" class="w-4 h-4 text-purple-500 rounded bg-slate-900 border-slate-700 focus:ring-0 flex-shrink-0">
+        <div class="truncate flex-1">
+          <span class="text-xs font-bold text-white block truncate">@${esc(acc.username)}</span>
+          <span class="text-[10px] text-slate-400 font-mono">${esc(quotaLabel)}</span>
+        </div>
+      </label>
+      <select onchange="updateShardsPreview();" 
+              class="dist-session-select bg-[#0d121f] border border-[#222d4a] rounded-md px-1.5 py-1 text-[10px] text-purple-300 focus:outline-none focus:border-purple-500 flex-shrink-0"
               title="GPU sessions for this account (overrides the global setting)"
               data-acc="${esc(acc.username)}">
         <option value="1" ${sessVal === '1' ? 'selected' : ''}>1x</option>
         <option value="2" ${sessVal === '2' ? 'selected' : ''}>2x</option>
       </select>
-    </label>
+    </div>
   `;
   }).join('');
 
