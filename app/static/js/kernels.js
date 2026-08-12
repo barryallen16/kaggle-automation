@@ -424,24 +424,35 @@ function kernelsDownloadZip() {
   window.open(`/api/kernels/files/download-zip?${params.toString()}`, '_blank');
 }
 
-async function loadKernelVersions() {
+async function loadKernelVersions(maxVersions = 20) {
   if (!kernelsState.selected) { showToast('Open a kernel first','warning'); return; }
   const { account, ref } = kernelsState.selected;
   const tbody = document.getElementById('kernels-versions-body');
-  const btn = document.getElementById('btn-load-versions');
-  if (tbody) tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-slate-400"><i data-lucide="loader-2" class="w-4 h-4 animate-spin mx-auto mb-1"></i> Loading version history...</td></tr>`;
-  setBtnLoading(btn, true, 'Loading...');
+  const badge = document.getElementById('kernels-versions-count-badge');
+  const btn20 = document.getElementById('btn-load-versions');
+  const btn50 = document.getElementById('btn-load-all-versions');
+  const activeBtn = maxVersions > 20 ? btn50 : btn20;
+
+  if (tbody) tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-slate-400"><i data-lucide="loader-2" class="w-4 h-4 animate-spin mx-auto mb-1"></i> Loading ${maxVersions > 20 ? 'all' : 'newest'} versions...</td></tr>`;
+  setBtnLoading(activeBtn, true, maxVersions > 20 ? 'Loading 50...' : 'Loading 20...');
   try { refreshIcons(); } catch (_) {}
+
   try {
-    const params = new URLSearchParams({ account, kernel_ref: ref, max_versions: '20' });
+    const params = new URLSearchParams({ account, kernel_ref: ref, max_versions: String(maxVersions) });
     const res = await fetch(`/api/kernels/versions?${params.toString()}`);
     const data = await res.json();
     if (!data.success) throw new Error(data.detail || 'failed');
-    renderKernelVersions(data.versions || []);
+    const versions = data.versions || [];
+    if (badge) {
+      badge.classList.remove('hidden');
+      badge.textContent = `${versions.length} version${versions.length !== 1 ? 's' : ''}`;
+    }
+    renderKernelVersions(versions);
   } catch (err) {
     if (tbody) tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-rose-400">Error: ${esc(err.message)}</td></tr>`;
+    if (badge) badge.classList.add('hidden');
   } finally {
-    setBtnLoading(btn, false);
+    setBtnLoading(activeBtn, false);
   }
 }
 
@@ -449,7 +460,7 @@ function renderKernelVersions(versions) {
   const tbody = document.getElementById('kernels-versions-body');
   if (!tbody) return;
   if (!versions.length) {
-    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-slate-500">No version history found (kernel may be new or API didn't return versions). Try pulling latest output instead.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" class="px-3 py-6 text-center text-slate-500">No version history found. Try pulling latest output instead.</td></tr>`;
     return;
   }
   tbody.innerHTML = versions.map(v => {
@@ -460,17 +471,17 @@ function renderKernelVersions(versions) {
     else if (status === 'running' || status === 'queued') statusCls = 'bg-amber-950 text-amber-300 border-amber-800';
     else if (status === 'error') statusCls = 'bg-rose-950 text-rose-300 border-rose-800';
     else if (status === 'stopped') statusCls = 'bg-slate-800 text-slate-400 border-slate-700';
-    const hasOutput = v.hasOutput ? `<span class="text-emerald-400">${v.fileCount} files</span>` : `<span class="text-slate-500">log only</span>`;
+    const hasOutput = v.hasOutput ? `<span class="text-emerald-400 font-semibold">${v.fileCount} file(s)</span>` : `<span class="text-slate-500">log only</span>`;
     return `
-      <tr class="hover:bg-slate-800/30">
+      <tr class="hover:bg-slate-800/30 transition">
         <td class="px-3 py-2 font-mono text-xs font-bold text-white">v${v.version}</td>
         <td class="px-3 py-2 text-xs font-mono text-slate-300 whitespace-nowrap" title="${esc(v.creationTime || '')}">${timeDisplay}</td>
         <td class="px-3 py-2"><span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${statusCls}">${esc(status.toUpperCase())}</span></td>
         <td class="px-3 py-2 text-xs text-slate-400">${hasOutput}</td>
         <td class="px-3 py-2 text-right">
           <div class="flex items-center justify-end gap-1">
-            <button id="btn-pull-v${v.version}" onclick="kernelsPullVersion(${v.version})" class="px-2 py-1 rounded text-xs font-bold bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 border border-indigo-500/30">Pull</button>
-            <button id="btn-log-v${v.version}" onclick="kernelsFetchVersionLog(${v.version})" class="px-2 py-1 rounded text-xs bg-slate-800 text-slate-400 hover:text-white border border-slate-700" title="Fetch log for this version">Logs</button>
+            <button id="btn-pull-v${v.version}" onclick="kernelsPullVersion(${v.version})" class="px-2 py-1 rounded text-xs font-bold bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 border border-indigo-500/30 transition">Pull</button>
+            <button id="btn-log-v${v.version}" onclick="kernelsFetchVersionLog(${v.version})" class="px-2 py-1 rounded text-xs bg-slate-800 text-slate-400 hover:text-white border border-slate-700 transition" title="Fetch log for this version">Logs</button>
           </div>
         </td>
       </tr>

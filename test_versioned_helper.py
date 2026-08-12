@@ -155,6 +155,8 @@ class TestVersionedHelper(unittest.TestCase):
 
         def handler(request):
             headers_seen.update(dict(request.headers))
+            if request.url.path == "/v1/kernels.KernelsApiService/GetKernel":
+                return httpx.Response(200, json={"metadata": {"currentVersionNumber": 5}})
             if request.url.path == "/v1/kernels.KernelsApiService/ListKernels":
                 return httpx.Response(200, json={"kernels": [
                     {"ref": "owner/my-slug", "currentVersionNumber": 5}]})
@@ -168,6 +170,97 @@ class TestVersionedHelper(unittest.TestCase):
         finally:
             helper.httpx.Client = real_client
         self.assertEqual(headers_seen.get("authorization"), "Bearer test-token")
+
+    def test_5_get_kernel_primary_meta(self):
+        import httpx
+        import app.services.kaggle_versioned_output as helper
+
+        def handler(request):
+            if request.url.path == "/v1/kernels.KernelsApiService/GetKernel":
+                return httpx.Response(200, json={"metadata": {"currentVersionNumber": 8, "lastRunTime": "2026-08-30T10:00:00Z"}})
+            # ListKernels has null to simulate the real bug
+            if request.url.path == "/v1/kernels.KernelsApiService/ListKernels":
+                return httpx.Response(200, json={"kernels": [{"ref": "owner/my-slug", "currentVersionNumber": None}]})
+            return httpx.Response(404)
+
+        real_client = httpx.Client
+        helper.httpx.Client = staticmethod(lambda *a, **kw: real_client(
+            *a, transport=httpx.MockTransport(handler), **kw))
+        try:
+            cur = helper.current_version("owner", "my-slug")
+        finally:
+            helper.httpx.Client = real_client
+        self.assertEqual(cur, 8)
+
+    def test_6_list_versions_parallel_ordering(self):
+        import httpx
+        import app.services.kaggle_versioned_output as helper
+
+        def handler(request):
+            body = json.loads(request.content or b"{}")
+            if request.url.path == "/v1/kernels.KernelsApiService/GetKernel":
+                return httpx.Response(200, json={"metadata": {"currentVersionNumber": 4}})
+            if request.url.path == "/v1/kernels.KernelsApiService/GetKernelSessionStatus":
+                lbl = body.get("versionLabel", "")
+                st = "complete" if lbl in ("1", "2", "3") else "stopped"
+                return httpx.Response(200, json={"status": st})
+            if request.url.path == "/v1/kernels.KernelsApiService/ListKernelFiles":
+                lbl = body.get("versionLabel", "")
+                if lbl in ("1", "2", "3"):
+                    return httpx.Response(200, json={"files": [{"name": f"out_{lbl}.csv", "size": 100, "creationDate": f"2026-08-30T0{lbl}:00:00Z"}]})
+                return httpx.Response(200, json={"files": []})
+            return httpx.Response(404)
+
+        real_client = httpx.Client
+        helper.httpx.Client = staticmethod(lambda *a, **kw: real_client(
+            *a, transport=httpx.MockTransport(handler), **kw))
+        try:
+            vers = helper.list_versions("owner", "my-slug", max_versions=10)
+        finally:
+            helper.httpx.Client = real_client
+
+        self.assertEqual(len(vers), 4)
+        self.assertEqual([v["version"] for v in vers], [4, 3, 2, 1])
+        self.assertEqual(vers[0]["status"], "stopped")
+        self.assertFalse(vers[0]["hasOutput"])
+        self.assertEqual(vers[1]["status"], "complete")
+        self.assertTrue(vers[1]["hasOutput"])
+        self.assertEqual(vers[1]["fileCount"], 1)
+
+    def test_7_download_kernel_output_direct_zip(self):
+        import io
+        import zipfile
+        import httpx
+        import app.services.kaggle_versioned_output as helper
+
+        out_dir = tempfile.mkdtemp(prefix="vh_zip_")
+
+        # Create a mock zip
+        zip_buf = io.BytesIO()
+        with zipfile.ZipFile(zip_buf, "w") as zf:
+            zf.writestr("test_shard.jsonl", "SHARD_DATA_V7")
+        zip_bytes = zip_buf.getvalue()
+
+        def handler(request):
+            if request.url.path == "/v1/kernels.KernelsApiService/DownloadKernelOutput":
+                return httpx.Response(200, json={"url": "http://test/bundle.zip"})
+            if str(request.url) == "http://test/bundle.zip":
+                return httpx.Response(200, content=zip_bytes, headers={"Content-Type": "application/zip"})
+            return httpx.Response(404)
+
+        real_client = httpx.Client
+        helper.httpx.Client = staticmethod(lambda *a, **kw: real_client(
+            *a, transport=httpx.MockTransport(handler), **kw))
+        try:
+            saved, notes = helper.fetch_version_output("owner", "my-slug", 7, out_dir)
+        finally:
+            helper.httpx.Client = real_client
+
+        self.assertIn("test_shard.jsonl", saved)
+        saved_file = os.path.join(out_dir, "test_shard.jsonl")
+        self.assertTrue(os.path.isfile(saved_file))
+        with open(saved_file, "r") as f:
+            self.assertEqual(f.read(), "SHARD_DATA_V7")
 
 
 if __name__ == "__main__":
