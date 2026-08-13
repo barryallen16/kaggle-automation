@@ -216,11 +216,15 @@
 
           <!-- Accounts & Quotas Grid -->
           <div class="space-y-4">
-            <div class="flex items-center justify-between">
+            <div class="flex items-center justify-between flex-wrap gap-2">
               <h3 class="text-base font-bold text-white flex items-center space-x-2">
                 <i data-lucide="shield-check" class="w-5 h-5 text-cyan-400 flex-shrink-0"></i>
                 <span>Managed Kaggle Accounts & Quota Balances</span>
               </h3>
+              <span class="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-[#131b2e] border border-[#222d4a] text-cyan-300" title="Accounts automatically ordered by most available quota first">
+                <i data-lucide="arrow-down" class="w-3.5 h-3.5 mr-1.5 text-cyan-400"></i>
+                Arranged: Highest Quota First
+              </span>
             </div>
 
             <div id="accounts-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-5">
@@ -285,6 +289,8 @@
                   <select id="runner-account-select" required class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
                     <option value="">-- Select Account --</option>
                   </select>
+                  <!-- Live Quota Balance Card -->
+                  <div id="runner-account-quota-card" class="mt-2.5"></div>
                 </div>
 
                 <div>
@@ -428,11 +434,71 @@
               <p id="dist-quota-hint" class="hidden text-[11px] text-amber-300/80 mt-2">⚠ 2 sessions halve wall-clock time but burn each account's weekly GPU quota 2× faster — total items/week stays the same.</p>
               <p class="text-[11px] text-slate-500 mt-1">Each account row above has its own GPU-session selector — tweak it there to override the global value for that account only.</p>
 
-              <!-- Shard Partition Preview Box -->
-              <div class="p-4 rounded-xl bg-purple-950/30 border border-purple-800/50">
-                <h4 class="text-xs font-bold text-purple-300 uppercase tracking-wider mb-2">Auto-Calculated Shards Partition</h4>
-                <div id="dist-shards-preview" class="text-xs font-mono text-purple-200 space-y-1">
-                  Select accounts above to calculate partitions...
+              <!-- Workload Partition Strategy Selector (UX Law 1: Hick's Law, UX Law 19: Tesler's Law) -->
+              <div class="pt-2">
+                <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
+                  <div>
+                    <h4 class="text-xs font-bold text-slate-300 uppercase tracking-wider">Partition Strategy</h4>
+                    <p class="text-[11px] text-slate-500">Choose between automated equal splits or manual custom range sharding</p>
+                  </div>
+                  <div class="inline-flex p-1 bg-[#080c16] rounded-xl border border-[#222d4a]">
+                    <button type="button" id="dist-mode-btn-auto" onclick="setDistShardingMode('auto')" class="px-3.5 py-1.5 text-xs font-bold rounded-lg bg-purple-600 text-white transition-all">
+                      Auto-Partition (Equal Slices)
+                    </button>
+                    <button type="button" id="dist-mode-btn-manual" onclick="setDistShardingMode('manual')" class="px-3.5 py-1.5 text-xs font-bold rounded-lg text-slate-400 hover:text-white transition-all">
+                      Manual Sharding (Custom Ranges)
+                    </button>
+                  </div>
+                </div>
+
+                <!-- Panel 1: Auto Partition Preview -->
+                <div id="dist-auto-shards-panel" class="p-4 rounded-xl bg-purple-950/30 border border-purple-800/50">
+                  <div class="flex items-center justify-between mb-2">
+                    <h4 class="text-xs font-bold text-purple-300 uppercase tracking-wider">Auto-Calculated Shards Partition</h4>
+                    <span class="text-[11px] text-purple-400/80 font-mono">Calculated dynamically based on selected accounts</span>
+                  </div>
+                  <div id="dist-shards-preview" class="text-xs font-mono text-purple-200 space-y-1">
+                    Select accounts above to calculate partitions...
+                  </div>
+                </div>
+
+                <!-- Panel 2: Manual Sharding Custom Rows (Hidden by default) -->
+                <div id="dist-manual-shards-panel" class="hidden p-4 rounded-xl bg-[#080d1a] border border-purple-800/50 space-y-4">
+                  <div class="flex items-center justify-between flex-wrap gap-2 border-b border-[#1e293b] pb-3">
+                    <div>
+                      <h4 class="text-xs font-bold text-purple-300 uppercase tracking-wider">Custom Manual Shards</h4>
+                      <p class="text-[11px] text-slate-400">Configure exact ranges and target accounts for each shard</p>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                      <button type="button" onclick="populateManualFromAuto()" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-purple-950/80 text-purple-300 border border-purple-800 hover:bg-purple-900/60 transition" title="Auto-fill rows using current accounts and total workload count">
+                        <i data-lucide="sparkles" class="w-3.5 h-3.5 text-purple-400"></i>
+                        <span>Prefill from Auto</span>
+                      </button>
+                      <button type="button" onclick="addManualShardRow()" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-950/80 text-cyan-300 border border-cyan-800 hover:bg-cyan-900/60 transition" title="Add another shard row">
+                        <i data-lucide="plus" class="w-3.5 h-3.5 text-cyan-400"></i>
+                        <span>+ Add Shard</span>
+                      </button>
+                      <button type="button" onclick="clearManualShards()" class="inline-flex items-center space-x-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-slate-400 hover:text-rose-400 transition" title="Clear all shards">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- Container for Shard Rows -->
+                  <div id="dist-manual-shards-container" class="space-y-2.5">
+                    <!-- Populated dynamically by distributed.js -->
+                  </div>
+
+                  <!-- Summary & Live Validation Bar -->
+                  <div id="dist-manual-summary" class="p-3 rounded-xl bg-[#040711] border border-[#1e293b] flex items-center justify-between flex-wrap gap-2 text-xs">
+                    <div class="flex items-center space-x-4">
+                      <span class="text-slate-400">Shards: <strong id="dist-manual-count" class="text-white">0</strong></span>
+                      <span class="text-slate-400">Items Spanned: <strong id="dist-manual-total-items" class="text-cyan-300 font-mono">0</strong></span>
+                    </div>
+                    <div id="dist-manual-validation-status" class="flex items-center space-x-1.5">
+                      <span class="text-slate-500">No shards configured yet</span>
+                    </div>
+                  </div>
                 </div>
               </div>
 

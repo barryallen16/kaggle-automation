@@ -283,17 +283,29 @@ class WorkloadDistributor:
         is_trial: bool = False,
         timeout_seconds: Optional[int] = None,
         env_vars: Optional[Dict[str, Any]] = None,
-        sessions_per_account: Union[int, Dict[str, int]] = 2
+        sessions_per_account: Union[int, Dict[str, int]] = 2,
+        manual_shards: Optional[List[Dict[str, Any]]] = None
     ) -> Dict[str, Any]:
         """Partitions the workload across expanded per-account GPU runners.
 
         Each account may run up to its `sessions_per_account` value (1..2)
         concurrent GPU sessions - pass an int for a uniform setting or a dict
-        {username: count} for per-account control. Availability is checked live
-        and reduced silently when fewer slots are free. The whole launch is
-        validated atomically BEFORE any workload record is created.
+        {username: count} for per-account control. If `manual_shards` is
+        supplied, custom ranges and account assignments are honored directly.
+        Availability is checked live and validated atomically BEFORE any
+        workload record is created.
         """
         accounts = [a for a in accounts if a]
+        if manual_shards:
+            if len(manual_shards) == 0:
+                return {"success": False, "error": "At least one manual shard must be specified."}
+            for i, ms in enumerate(manual_shards):
+                acc = ms.get("account")
+                if not acc:
+                    return {"success": False, "error": f"Manual shard #{i + 1} is missing a target Kaggle account."}
+                if acc not in accounts:
+                    accounts.append(acc)
+
         if not accounts:
             return {"success": False, "error": "No Kaggle accounts selected for distribution."}
         sessions_map = cls._normalize_sessions_map(sessions_per_account, accounts)
@@ -313,47 +325,92 @@ class WorkloadDistributor:
             except Exception as e:
                 logger.warning(f"Slot reclamation skipped: {e}")
 
-        # 1. Live availability -> runner plan (silent reduction per account)
+        # 1. Live availability check
         busy = await cls._busy_gpu_sessions(accounts, cls._is_gpu(accelerator))
-        plan = cls._build_runner_plan(accounts, sessions_map, accelerator, busy)
-        runners: List[Dict[str, Any]] = []
-        for p in plan:
-            for _ in range(p["slots"]):
-                runners.append({"account": p["account"]})
-
-        R = len(runners)
-        if R == 0:
-            detail = ", ".join(f"@{p['account']}: {p['busy']} active" for p in plan)
-            return {
-                "success": False,
-                "error": f"No free GPU session slots. Active sessions - {detail}. "
-                         "Stop existing runs or wait for them to finish."
-            }
-
-        if total_items < R:
-            return {"success": False, "error": f"Cannot split {total_items} items across {R} runners (fewer items than shards)."}
 
         workload_id = f"workload_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
-        # 2. Shard partitions over R runners (remainder to the first shards)
-        total_units = total_items
-        chunk_size = total_units // R
-        remainder = total_units % R
+        if manual_shards:
+            # Validate manual shards
+            if len(manual_shards) == 0:
+                return {"success": False, "error": "At least one manual shard must be specified."}
 
-        shards_info = []
-        current_start = start_offset
-        for i, runner in enumerate(runners):
-            extra = 1 if i < remainder else 0
-            current_chunk = chunk_size + extra
-            current_end = current_start + current_chunk
-            shards_info.append({
-                "shard_index": i,
-                "account_username": runner["account"],
-                "start_index": current_start,
-                "end_index": current_end,
-                "count": current_chunk
-            })
-            current_start = current_end
+            shards_info = []
+            for i, ms in enumerate(manual_shards):
+                acc = ms.get("account")
+                if not acc:
+                    return {"success": False, "error": f"Manual shard #{i + 1} is missing a target Kaggle account."}
+                try:
+                    s_idx = int(ms.get("start_index", 0))
+                    e_idx = int(ms.get("end_index", 0))
+                except (ValueError, TypeError):
+                    return {"success": False, "error": f"Manual shard #{i + 1} has invalid start/end indices."}
+                if s_idx > e_idx:
+                    return {"success": False, "error": f"Manual shard #{i + 1} has start index ({s_idx}) greater than end index ({e_idx})."}
+                shards_info.append({
+                    "shard_index": i,
+                    "account_username": acc,
+                    "start_index": s_idx,
+                    "end_index": e_idx,
+                    "count": max(0, e_idx - s_idx),
+                    "custom_params": ms.get("custom_params")
+                })
+
+            # Check per-account GPU slot capacity in manual mode
+            if cls._is_gpu(accelerator):
+                for acc in set(s["account_username"] for s in shards_info):
+                    assigned = sum(1 for s in shards_info if s["account_username"] == acc)
+                    active_sess = busy.get(acc, 0)
+                    if assigned + active_sess > 2:
+                        return {
+                            "success": False,
+                            "error": f"Account @{acc} has {active_sess} active GPU session(s) and cannot run {assigned} manual shards (Kaggle cap is 2 concurrent GPU sessions)."
+                        }
+
+            R = len(shards_info)
+            total_units = sum(s["count"] for s in shards_info)
+            workload_type = "manual_range"
+            plan = [{"account": acc, "slots": sum(1 for s in shards_info if s["account_username"] == acc), "busy": busy.get(acc, 0)} for acc in accounts]
+
+        else:
+            # Automatic uniform partition
+            plan = cls._build_runner_plan(accounts, sessions_map, accelerator, busy)
+            runners: List[Dict[str, Any]] = []
+            for p in plan:
+                for _ in range(p["slots"]):
+                    runners.append({"account": p["account"]})
+
+            R = len(runners)
+            if R == 0:
+                detail = ", ".join(f"@{p['account']}: {p['busy']} active" for p in plan)
+                return {
+                    "success": False,
+                    "error": f"No free GPU session slots. Active sessions - {detail}. "
+                             "Stop existing runs or wait for them to finish."
+                }
+
+            if total_items < R:
+                return {"success": False, "error": f"Cannot split {total_items} items across {R} runners (fewer items than shards)."}
+
+            workload_type = "range"
+            total_units = total_items
+            chunk_size = total_units // R
+            remainder = total_units % R
+
+            shards_info = []
+            current_start = start_offset
+            for i, runner in enumerate(runners):
+                extra = 1 if i < remainder else 0
+                current_chunk = chunk_size + extra
+                current_end = current_start + current_chunk
+                shards_info.append({
+                    "shard_index": i,
+                    "account_username": runner["account"],
+                    "start_index": current_start,
+                    "end_index": current_end,
+                    "count": current_chunk
+                })
+                current_start = current_end
 
         # 3. Atomic pre-flight: every planned kernel_ref must be free BEFORE
         #    the workload row exists (zero side effects on rejection).
@@ -378,12 +435,13 @@ class WorkloadDistributor:
         create_distributed_workload({
             "id": workload_id,
             "title": base_title,
-            "workload_type": "range",
+            "workload_type": workload_type,
             "total_units": total_units,
             "accounts_used": json.dumps({
                 "accounts": list(dict.fromkeys(accounts)),
                 "runners": [{"account": s["account_username"], "shard_index": s["shard_index"]} for s in shards_info],
-                "sessions_per_account": sessions_map
+                "sessions_per_account": sessions_map,
+                "is_manual": bool(manual_shards)
             }),
             "created_at": utcnow_iso(),
             "status": "running"
@@ -418,7 +476,8 @@ class WorkloadDistributor:
                 total_shards=R,
                 start_index=shard["start_index"],
                 end_index=shard["end_index"],
-                total_items=total_units
+                total_items=total_units,
+                custom_params=shard.get("custom_params")
             )
 
             async with push_sem:

@@ -9,6 +9,13 @@ from app.database import get_all_workloads, get_all_runs, get_active_runs, updat
 
 router = APIRouter(prefix="/api/distributed", tags=["Distributed Workload"])
 
+class ManualShardItem(BaseModel):
+    shard_index: Optional[int] = None
+    account: str
+    start_index: int
+    end_index: int
+    custom_params: Optional[Dict[str, Any]] = None
+
 class DistributedLaunchJSON(BaseModel):
     base_title: str
     code_content: str
@@ -23,6 +30,8 @@ class DistributedLaunchJSON(BaseModel):
     env_vars: Optional[Dict[str, str]] = None
     # Global session count (int) OR per-account overrides {username: 1|2}
     sessions_per_account: Union[int, Dict[str, int]] = 2
+    # Optional manual shards configuration
+    manual_shards: Optional[List[ManualShardItem]] = None
 
 @router.get("")
 async def list_workloads():
@@ -54,7 +63,8 @@ async def launch_distributed_json(payload: DistributedLaunchJSON):
             is_trial=payload.is_trial,
             timeout_seconds=payload.timeout_seconds,
             env_vars=payload.env_vars,
-            sessions_per_account=payload.sessions_per_account
+            sessions_per_account=payload.sessions_per_account,
+            manual_shards=[s.dict() for s in payload.manual_shards] if payload.manual_shards else None
         )
         return result
     except HTTPException:

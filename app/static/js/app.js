@@ -19,6 +19,32 @@ function esc(value) {
     .replace(/'/g, '&#39;');
 }
 
+// Account quota helper - returns remaining GPU and TPU hours
+function getAccountRemainingQuota(acc) {
+  const quota = acc?.last_quota || {};
+  const gpu = quota.gpu || { used: 0, limit: 30 };
+  const tpu = quota.tpu || { used: 0, limit: 20 };
+  const gpuLimit = typeof gpu.limit === 'number' ? gpu.limit : (parseFloat(gpu.limit) || 30);
+  const gpuUsed = typeof gpu.used === 'number' ? gpu.used : (parseFloat(gpu.used) || 0);
+  const tpuLimit = typeof tpu.limit === 'number' ? tpu.limit : (parseFloat(tpu.limit) || 20);
+  const tpuUsed = typeof tpu.used === 'number' ? tpu.used : (parseFloat(tpu.used) || 0);
+  return {
+    gpuLeft: Math.max(0, gpuLimit - gpuUsed),
+    tpuLeft: Math.max(0, tpuLimit - tpuUsed)
+  };
+}
+
+// Sort accounts descending: highest GPU quota left first, then TPU quota left, then username
+function sortAccountsDescending(accounts) {
+  return [...accounts].sort((a, b) => {
+    const qA = getAccountRemainingQuota(a);
+    const qB = getAccountRemainingQuota(b);
+    if (qB.gpuLeft !== qA.gpuLeft) return qB.gpuLeft - qA.gpuLeft;
+    if (qB.tpuLeft !== qA.tpuLeft) return qB.tpuLeft - qA.tpuLeft;
+    return (a.username || '').localeCompare(b.username || '');
+  });
+}
+
 // Toast notification helper
 function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
@@ -178,7 +204,7 @@ async function refreshGlobalData() {
     updateEngineIndicator(healthRes ? healthRes.cli_available : false);
 
     if (accRes.success) {
-      AppState.accounts = accRes.accounts || [];
+      AppState.accounts = sortAccountsDescending(accRes.accounts || []);
       const sa = document.getElementById('sidebar-accounts-count');
       if (sa) sa.innerText = AppState.accounts.length;
       const kpi = document.getElementById('kpi-accounts-total');

@@ -282,6 +282,82 @@ class TestMultiSessionDistributor(unittest.TestCase):
         self.assertEqual(plan["accB"]["requested"], 2)   # defaulted
         self.assertEqual(res["total_shards"], 4)
 
+    def test_11_manual_shards_distribution(self):
+        """manual_shards with custom ranges and accounts launches exact partitions."""
+        db = _fresh()
+        WD, _ = self._dist()
+        manual_shards = [
+            {"account": "accA", "start_index": 0, "end_index": 100},
+            {"account": "accB", "start_index": 100, "end_index": 500}
+        ]
+        res = asyncio_run(WD.distribute_and_launch(
+            base_title="ManualShardsTest",
+            code_content=CODE,
+            filename="main.py",
+            accounts=["accA", "accB"],
+            total_items=500,
+            accelerator="none",
+            manual_shards=manual_shards
+        ))
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["total_shards"], 2)
+        self.assertEqual(res["total_units"], 500)
+        ordered = sorted(res["shards"], key=lambda s: s["shard_index"])
+        self.assertEqual(ordered[0]["range"], [0, 100])
+        self.assertEqual(ordered[0]["account"], "accA")
+        self.assertEqual(ordered[1]["range"], [100, 500])
+        self.assertEqual(ordered[1]["account"], "accB")
+
+        wls = db.get_all_workloads()
+        self.assertEqual(len(wls), 1)
+        self.assertEqual(wls[0]["workload_type"], "manual_range")
+        self.assertEqual(wls[0]["total_units"], 500)
+
+    def test_12_manual_shards_validation_invalids(self):
+        """Rejects inverted range start > end or missing accounts."""
+        db = _fresh()
+        WD, _ = self._dist()
+        # Inverted range
+        res = asyncio_run(WD.distribute_and_launch(
+            base_title="InvalidRange",
+            code_content=CODE,
+            filename="main.py",
+            accounts=["accA"],
+            total_items=100,
+            manual_shards=[{"account": "accA", "start_index": 200, "end_index": 50}]
+        ))
+        self.assertFalse(res["success"])
+        self.assertIn("greater than end index", res["error"])
+
+        # Missing account
+        res2 = asyncio_run(WD.distribute_and_launch(
+            base_title="MissingAccount",
+            code_content=CODE,
+            filename="main.py",
+            accounts=[],
+            total_items=100,
+            manual_shards=[{"account": "", "start_index": 0, "end_index": 50}]
+        ))
+        self.assertFalse(res2["success"])
+        self.assertIn("missing a target Kaggle account", res2["error"])
+
+    def test_13_accounts_descending_quota_sort(self):
+        """list_accounts returns accounts sorted descending by remaining quota."""
+        db = _fresh()
+        from app.routers.accounts import list_accounts
+        # Seed 3 accounts with varying GPU quotas
+        # acc_low: 5h left (used 25/30)
+        db.save_account("1", "acc_low", "key1", {"gpu": {"limit": 30, "used": 25}, "tpu": {"limit": 20, "used": 0}})
+        # acc_high: 28h left (used 2/30)
+        db.save_account("2", "acc_high", "key2", {"gpu": {"limit": 30, "used": 2}, "tpu": {"limit": 20, "used": 0}})
+        # acc_mid: 15h left (used 15/30)
+        db.save_account("3", "acc_mid", "key3", {"gpu": {"limit": 30, "used": 15}, "tpu": {"limit": 20, "used": 0}})
+
+        resp = asyncio_run(list_accounts())
+        self.assertTrue(resp["success"])
+        names = [a["username"] for a in resp["accounts"]]
+        self.assertEqual(names, ["acc_high", "acc_mid", "acc_low"])
+
 
 def asyncio_run(coro):
     import asyncio
