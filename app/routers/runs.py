@@ -2,9 +2,36 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from app.services.kaggle_service import KaggleService
+from app.services.account_manager import AccountManager
 from app.database import get_all_runs, get_active_runs, get_run_by_id, update_run_status
 
 router = APIRouter(prefix="/api/runs", tags=["Runs"])
+
+
+def _is_gpu_accelerator(acc: Any) -> bool:
+    a = str(acc or "").lower()
+    return bool(a) and a not in ("none", "default", "cpu")
+
+
+async def _quota_capped_env(account_username: str, accelerator: Any, env_vars: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+    """Merges a quota-aware MAX_RUNTIME_MINUTES into env_vars for GPU launches.
+
+    The kernel self-finishes before the account's remaining weekly GPU quota
+    runs out (Kaggle hangs spent-quota sessions instead of stopping them; a
+    stop-stub would lose the version's output). User-pinned env vars win.
+    concurrent = this kernel + currently-active GPU runs on the account.
+    """
+    if not _is_gpu_accelerator(accelerator):
+        return env_vars
+    active = [
+        r for r in get_active_runs()
+        if r.get("account_username") == account_username
+        and _is_gpu_accelerator(r.get("accelerator"))
+    ]
+    budget = await AccountManager.gpu_runtime_budget_minutes(account_username, 1 + len(active))
+    if not budget or (env_vars and "MAX_RUNTIME_MINUTES" in env_vars):
+        return env_vars
+    return {**(env_vars or {}), "MAX_RUNTIME_MINUTES": str(budget)}
 
 class LaunchRunJSONRequest(BaseModel):
     account_username: str
@@ -38,6 +65,9 @@ async def get_run_details(run_id: str):
 @router.post("/launch-json")
 async def launch_run_json(payload: LaunchRunJSONRequest):
     try:
+        env_vars = await _quota_capped_env(
+            payload.account_username, payload.accelerator, payload.env_vars
+        )
         result = await KaggleService.push_kernel(
             account_username=payload.account_username,
             title=payload.title,
@@ -47,7 +77,7 @@ async def launch_run_json(payload: LaunchRunJSONRequest):
             enable_internet=payload.enable_internet,
             is_trial=payload.is_trial,
             timeout_seconds=payload.timeout_seconds,
-            env_vars=payload.env_vars
+            env_vars=env_vars
         )
         return result
     except HTTPException:
@@ -70,6 +100,7 @@ async def upload_and_launch(
         code_content = content_bytes.decode("utf-8", errors="ignore")
         filename = file.filename or "notebook.ipynb"
 
+        env_vars = await _quota_capped_env(account_username, accelerator, None)
         result = await KaggleService.push_kernel(
             account_username=account_username,
             title=title,
@@ -78,7 +109,8 @@ async def upload_and_launch(
             accelerator=accelerator,
             enable_internet=enable_internet,
             is_trial=is_trial,
-            timeout_seconds=timeout_seconds
+            timeout_seconds=timeout_seconds,
+            env_vars=env_vars
         )
         return result
     except HTTPException:
