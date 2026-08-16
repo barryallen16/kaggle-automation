@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from app.services.kaggle_service import KaggleService
 from app.services.account_manager import AccountManager
+from app.services.ops_tracker import tracker
 from app.database import get_all_runs, get_active_runs, get_run_by_id, update_run_status
 
 router = APIRouter(prefix="/api/runs", tags=["Runs"])
@@ -64,6 +65,7 @@ async def get_run_details(run_id: str):
 
 @router.post("/launch-json")
 async def launch_run_json(payload: LaunchRunJSONRequest):
+    tracker.begin("launch_run")
     try:
         env_vars = await _quota_capped_env(
             payload.account_username, payload.accelerator, payload.env_vars
@@ -84,6 +86,8 @@ async def launch_run_json(payload: LaunchRunJSONRequest):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        tracker.end("launch_run")
 
 @router.post("/upload-and-launch")
 async def upload_and_launch(
@@ -95,6 +99,7 @@ async def upload_and_launch(
     is_trial: bool = Form(False),
     timeout_seconds: Optional[int] = Form(None)
 ):
+    tracker.begin("launch_run")
     try:
         content_bytes = await file.read()
         code_content = content_bytes.decode("utf-8", errors="ignore")
@@ -117,6 +122,8 @@ async def upload_and_launch(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        tracker.end("launch_run")
 
 @router.post("/{run_id}/stop")
 async def stop_run(run_id: str):

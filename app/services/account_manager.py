@@ -64,6 +64,15 @@ QUOTA_CAP_MAX_QUOTA_AGE_MINUTES = 15
 class AccountManager:
     _lock = asyncio.Lock()
 
+    # In-process username renames (auto-corrected accounts). When the first
+    # push of a freshly-added account discovers the real Kaggle username it
+    # renames the row mid-flight (kaggle_xxxx -> realuser), but sibling shards
+    # of the SAME launch batch were already planned with the placeholder name.
+    # This map lets any later call translate a stale name to the current one
+    # (see resolve_effective_username). The old config dir is also kept, so a
+    # subprocess still built around the old name keeps authenticating.
+    _username_aliases: Dict[str, str] = {}
+
     # Quota lookups each spawn a full kaggle CLI process (~50-150MB). Firing
     # one per account SIMULTANEOUSLY (15+ accounts) spikes RAM until the OS
     # OOM-killer takes down the whole server, and trips Kaggle rate limits.
@@ -95,6 +104,23 @@ class AccountManager:
             cls._refresh_all_lock = asyncio.Lock()
             cls._sync_primitive_loop_id = loop_id
         return cls._refresh_all_lock
+
+    @classmethod
+    def resolve_effective_username(cls, username: str) -> str:
+        """Returns the current username for a possibly-renamed account name.
+
+        A push that auto-corrects an account's username (placeholder hash ->
+        real Kaggle username) records the old->new mapping here so later calls
+        that still hold the pre-rename name (a second GPU session of the same
+        batch, a status probe, a stop) resolve to the current identity instead
+        of looking up a config dir whose token was moved away.
+        """
+        current = username or ""
+        seen = 0
+        while current in cls._username_aliases and seen < 32:
+            current = cls._username_aliases[current]
+            seen += 1
+        return current
 
     @staticmethod
     def get_account_config_dir(username_or_id: str) -> Path:
@@ -139,6 +165,10 @@ class AccountManager:
     @classmethod
     def get_account_env(cls, username: str) -> Dict[str, str]:
         """Builds subprocess environment variables for the specified account."""
+        # Resolve renames first: once a placeholder (kaggle_xxxx) account has
+        # been auto-corrected to its real username, an env built under the old
+        # name must point at the CURRENT config dir (which holds the token).
+        username = cls.resolve_effective_username(username)
         acc_dir = cls.get_account_config_dir(username)
         env = os.environ.copy()
         env["KAGGLE_CONFIG_DIR"] = str(acc_dir)
@@ -243,21 +273,34 @@ class AccountManager:
 
     @classmethod
     def update_username(cls, old_username: str, new_username: str):
-        """Renames an account's folder and updates database records."""
+        """Renames an account's folder and updates database records.
+
+        The old config dir is KEPT (mirrored, not moved) and the old name is
+        registered as an alias. Deleting the old dir used to strip the token
+        out from under the second GPU session of a launch batch that was still
+        referencing the placeholder name - that session then died with
+        "Authentication required to call the Kaggle API.".
+        """
         from app.database import update_account_username
         if old_username == new_username:
             return
 
-        # Update config directory
+        # Mirror old config dir into the new one, then leave the old dir in
+        # place as a fallback for in-flight calls built around the old name.
         old_dir = cls.get_account_config_dir(old_username)
         new_dir = cls.get_account_config_dir(new_username)
-        if old_dir.exists():
-            try:
+        try:
+            if old_dir != new_dir:
                 # get_account_config_dir() pre-creates the destination, so we must merge into it
                 shutil.copytree(old_dir, new_dir, dirs_exist_ok=True)
-                shutil.rmtree(old_dir, ignore_errors=True)
-            except Exception as e:
-                logger.error(f"Failed to move config dir {old_dir} -> {new_dir}: {e}")
+        except Exception as e:
+            logger.error(f"Failed to mirror config dir {old_dir} -> {new_dir}: {e}")
+
+        cls._username_aliases[old_username] = new_username
+        # Rewrite any earlier alias that pointed at the now-renamed name
+        for key, val in list(cls._username_aliases.items()):
+            if val == old_username:
+                cls._username_aliases[key] = new_username
 
         update_account_username(old_username, new_username)
 

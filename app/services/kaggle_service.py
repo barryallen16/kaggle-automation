@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, AsyncGenerator
 from app.config import NOTEBOOKS_DIR, LOGS_DIR, OUTPUTS_DIR, get_kaggle_cli_path, get_kernel_env_defaults
 from app.services.account_manager import AccountManager
+from app.services.ops_tracker import tracker, run_stop_key
 from app.database import create_run_record, update_run_status, get_run_by_id, get_active_runs, set_run_output_version, utcnow_iso
 
 logger = logging.getLogger("kaggle_service")
@@ -37,8 +38,14 @@ class KaggleService:
     PUSH_CONCURRENCY_LIMIT = max(1, int(os.getenv("PUSH_CONCURRENCY", "3")))
     KERNEL_STATUS_CONCURRENCY_LIMIT = max(1, int(os.getenv("KERNEL_STATUS_CONCURRENCY", "3")))
     KERNEL_STATUS_TIMEOUT_SECONDS = int(os.getenv("KERNEL_STATUS_TIMEOUT_SECONDS", "90"))
+    # Stop pushes are even heavier than regular pushes: each stop_kernel runs a
+    # pre-stop output pull + a version probe + the stop-stub push (+ retries).
+    # "Stop All" on a 32-shard workload used to fire ALL of them at once -> RAM
+    # spike -> OOM-killed the server. All stops funnel through this global cap.
+    STOP_CONCURRENCY_LIMIT = max(1, int(os.getenv("STOP_CONCURRENCY", "3")))
     _push_semaphore: Optional[asyncio.Semaphore] = None
     _kernel_status_semaphore: Optional[asyncio.Semaphore] = None
+    _stop_semaphore: Optional[asyncio.Semaphore] = None
     _push_primitive_loop_id: Optional[int] = None
 
     @classmethod
@@ -56,6 +63,14 @@ class KaggleService:
             cls._kernel_status_semaphore = asyncio.Semaphore(cls.KERNEL_STATUS_CONCURRENCY_LIMIT)
             cls._push_primitive_loop_id = loop_id
         return cls._kernel_status_semaphore
+
+    @classmethod
+    def _get_stop_semaphore(cls) -> asyncio.Semaphore:
+        loop_id = id(asyncio.get_running_loop())
+        if cls._stop_semaphore is None or cls._push_primitive_loop_id != loop_id:
+            cls._stop_semaphore = asyncio.Semaphore(cls.STOP_CONCURRENCY_LIMIT)
+            cls._push_primitive_loop_id = loop_id
+        return cls._stop_semaphore
 
     # Mapping from user-friendly accelerator names to Kaggle API machine_shape enum values.
     # Full list: https://github.com/Kaggle/kaggle-cli/blob/main/docs/kernels_metadata.md
@@ -242,6 +257,12 @@ class KaggleService:
         total_shards: Optional[int] = None
     ) -> Dict[str, Any]:
         """Prepares metadata, writes code, and executes `kaggle kernels push`."""
+        # Resolve stale/renamed account names up front: when the first push of
+        # a fresh account discovers the real Kaggle username it renames the row
+        # mid-batch, and later shards of the same launch still arrive with the
+        # placeholder (kaggle_xxxx) name. Resolving here keeps kernel_ref, the
+        # metadata id and the subprocess env all on the CURRENT identity.
+        account_username = AccountManager.resolve_effective_username(account_username)
         run_hash = uuid.uuid4().hex[:6]
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{run_hash}"
         # Ensure title fits Kaggle's 50-character limit; derive the slug from
@@ -360,12 +381,17 @@ class KaggleService:
         env = AccountManager.get_account_env(account_username)
         
         # Retry logic for 409 Conflict errors (Kaggle rate-limits when a kernel
-        # is still starting/running on the same account) and transient batch-GPU session caps.
+        # is still starting/running on the same account) and transient batch-GPU
+        # session caps. The two need VERY different windows:
+        #   - session cap: a second same-account GPU session usually has to wait
+        #     out the first session's Kaggle queue (often minutes), and a stop
+        #     teardown (CANCEL_ACKNOWLEDGED) can hold the slot for many minutes.
+        #     Keep retrying ~18 minutes so 2 sessions/account actually land.
+        #   - 409 conflict: clears in seconds once the kernel finishes its
+        #     transition - retry briefly, never burn the long window on it.
         MAX_RETRIES = 4
         RETRY_BASE_DELAY = 5  # seconds
-        # Session teardown after a stop can hold the batch-GPU slot for a few
-        # minutes (CANCEL_ACKNOWLEDGED). Total coverage ~= 6 min backoff.
-        SESSION_CAP_RETRY_DELAYS = [15, 30, 45, 60, 90, 120]
+        SESSION_CAP_RETRY_DELAYS = [20, 30, 45, 60, 90, 120, 180, 240, 300]
         total_attempts = max(MAX_RETRIES, len(SESSION_CAP_RETRY_DELAYS) + 1)
         
         out_str = ""
@@ -394,13 +420,17 @@ class KaggleService:
                 is_409 = "409" in combined_out or "conflict" in low
                 is_push_err = proc.returncode != 0 or "kernel push error" in low
                 retryable = is_push_err and (is_409 or session_cap_hit)
-                if retryable and attempt < total_attempts - 1:
+                if retryable:
                     if session_cap_hit:
                         delay = SESSION_CAP_RETRY_DELAYS[min(attempt, len(SESSION_CAP_RETRY_DELAYS) - 1)]
+                        retry_limit = total_attempts  # long window: let the first session's queue settle
                     else:
                         delay = RETRY_BASE_DELAY * (2 ** attempt)
+                        retry_limit = MAX_RETRIES  # 409s clear fast - don't burn 25 min on them
+                    if attempt >= retry_limit - 1:
+                        break
                     reason = "session cap" if session_cap_hit else "409 conflict"
-                    logger.warning(f"Kaggle push attempt {attempt + 1}/{total_attempts} hit {reason}, backing off {delay}s...")
+                    logger.warning(f"Kaggle push attempt {attempt + 1}/{retry_limit} hit {reason}, backing off {delay}s...")
                     with open(log_file_path, "a", encoding="utf-8") as f:
                         f.write(f"[RETRY] attempt {attempt + 1} failed ({reason}), backing off {delay}s...\n")
                     await asyncio.sleep(delay)
@@ -1032,6 +1062,7 @@ class KaggleService:
         cli = get_kaggle_cli_path()
         cmd = [cli, "kernels", "push", "-p", str(stop_dir), "-t", "1"]
         env = AccountManager.get_account_env(account_username)
+        tracker.begin(f"ext_stop:{account_username}/{kernel_ref}")
         try:
             async with cls._get_push_semaphore():
                 proc = await asyncio.create_subprocess_exec(
@@ -1048,6 +1079,8 @@ class KaggleService:
             return {"success": False, "error": "stop push timed out"}
         except Exception as e:
             return {"success": False, "error": str(e)}
+        finally:
+            tracker.end(f"ext_stop:{account_username}/{kernel_ref}")
 
     @classmethod
     async def download_outputs(cls, account_username: str, kernel_ref: str, run_id: str) -> Path:
@@ -1075,7 +1108,25 @@ class KaggleService:
 
     @classmethod
     async def stop_kernel(cls, run_id: str) -> Dict[str, Any]:
-        """Stops the active Kaggle run by replacing it with a 1-second exit stub and killing local streams."""
+        """Stops the active Kaggle run by replacing it with a 1-second exit stub and killing local streams.
+
+        The whole stop pipeline (output pull, version probe, stub push, version
+        recovery) is throttled by a global semaphore: "Stop All" fans out over
+        every active shard, and unbounded stops spawn dozens of heavyweight CLI
+        subprocesses at once - the same OOM that used to kill the server.
+
+        Registers in the ops tracker so the UI keeps the Stop button disabled
+        ("Stopping...") even if the page is refreshed mid-stop.
+        """
+        tracker.begin(run_stop_key(run_id))
+        try:
+            async with cls._get_stop_semaphore():
+                return await cls._stop_kernel_impl(run_id)
+        finally:
+            tracker.end(run_stop_key(run_id))
+
+    @classmethod
+    async def _stop_kernel_impl(cls, run_id: str) -> Dict[str, Any]:
         run = get_run_by_id(run_id)
         if not run:
             return {"success": False, "error": "Run not found"}

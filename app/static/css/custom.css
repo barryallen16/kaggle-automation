@@ -129,3 +129,46 @@ svg[data-pixel-icon], .pixel-icon-svg {
 pre, code, .terminal-font, .font-mono {
   overflow-wrap: anywhere;
 }
+
+/* ------------------------------------------------------------------
+   Collapsible desktop sidebar (expanded <-> icon-only rail)
+   ------------------------------------------------------------------ */
+/* #sidebar id beats Tailwind's .w-64, so the collapsed width wins */
+#sidebar.sidebar-collapsed {
+  width: 4.5rem;
+}
+
+/* Logo: center the mark, hide the wordmark text */
+#sidebar.sidebar-collapsed > .h-16 {
+  justify-content: center;
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+}
+#sidebar.sidebar-collapsed > .h-16 .min-w-0 {
+  display: none;
+}
+
+/* Nav: snugger padding, icon buttons centered with no text */
+#sidebar.sidebar-collapsed nav {
+  padding-left: 0.5rem;
+  padding-right: 0.5rem;
+  padding-top: 0.75rem;
+  padding-bottom: 0.75rem;
+}
+#sidebar.sidebar-collapsed .nav-tab {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+#sidebar.sidebar-collapsed .nav-tab > span {
+  display: none;
+}
+/* Keep only each item's leading icon (drops e.g. the trailing hard-drive glyph) */
+#sidebar.sidebar-collapsed .nav-tab > i:not(:first-child) {
+  display: none;
+}
+
+/* Quick-stats footer: hidden while collapsed (hover titles cover the nav) */
+#sidebar.sidebar-collapsed > div:last-child {
+  display: none;
+}

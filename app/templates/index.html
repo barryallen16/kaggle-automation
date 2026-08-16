@@ -58,7 +58,7 @@
 
     <!-- Sidebar Navigation (off-canvas drawer on mobile, fixed column on desktop) -->
     <aside id="sidebar"
-           class="fixed lg:sticky lg:top-0 inset-y-0 left-0 z-50 w-64 max-w-[85vw] bg-[#0d121f] border-r border-[#1e293b] flex flex-col flex-shrink-0 transform -translate-x-full lg:translate-x-0 transition-transform duration-300 ease-in-out">
+           class="fixed lg:sticky lg:top-0 inset-y-0 left-0 z-50 w-64 max-w-[85vw] h-[100dvh] bg-[#0d121f] border-r border-[#1e293b] flex flex-col flex-shrink-0 overflow-hidden transform -translate-x-full lg:translate-x-0 transition-[transform,width] duration-300 ease-in-out">
       <!-- App Header / Logo -->
       <div class="h-16 flex items-center px-6 border-b border-[#1e293b] space-x-3 flex-shrink-0">
         <img src="/static/icons/android-chrome-192x192.png" alt="Logo" class="w-9 h-9 rounded-xl">
@@ -71,8 +71,9 @@
         </button>
       </div>
 
-      <!-- Navigation Links -->
-      <nav class="flex-1 px-4 py-6 space-y-1.5 overflow-y-auto">
+      <!-- Navigation Links (min-h-0: never push the footer out of view on
+           short windows - the link list scrolls internally instead) -->
+      <nav class="flex-1 min-h-0 px-4 py-6 space-y-1.5 overflow-y-auto">
         <button onclick="switchTab('dashboard')" id="nav-dashboard" class="nav-tab active w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all border border-transparent">
           <i data-lucide="layout-dashboard" class="w-4 h-4 text-cyan-400"></i>
           <span>Dashboard & Quotas</span>
@@ -119,8 +120,8 @@
         </button>
       </nav>
 
-      <!-- Sidebar Footer / Quick Stats -->
-      <div class="p-4 border-t border-[#1e293b] bg-[#0a0d14]/40">
+      <!-- Sidebar Footer / Quick Stats (pinned to the bottom of the viewport) -->
+      <div class="flex-shrink-0 p-4 border-t border-[#1e293b] bg-[#0a0d14]/40">
         <div class="flex items-center justify-between text-xs text-slate-400 mb-2">
           <span>Active Runs:</span>
           <span id="sidebar-active-count" class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-semibold font-mono">0</span>
@@ -141,6 +142,16 @@
           <button onclick="toggleSidebar()" class="lg:hidden inline-flex items-center justify-center w-9 h-9 flex-shrink-0 rounded-lg bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700 transition" aria-label="Open menu">
             <i data-lucide="menu" class="w-5 h-5"></i>
           </button>
+          <!-- Desktop sidebar collapse/expand toggle (icon rail) -->
+          <button id="btn-sidebar-collapse" onclick="toggleSidebarCollapse()" title="Collapse sidebar" aria-label="Collapse sidebar" aria-expanded="true"
+                  class="hidden lg:inline-flex items-center justify-center w-9 h-9 flex-shrink-0 rounded-lg bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700 transition">
+            <svg id="icon-sidebar-collapse" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square">
+              <path d="M12 5 4 12l8 7"/><path d="M18 5l-7 7 7 7"/>
+            </svg>
+            <svg id="icon-sidebar-expand" class="w-4 h-4 hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square">
+              <path d="M12 5l8 7-8 7"/><path d="M6 5l7 7-7 7"/>
+            </svg>
+          </button>
           <h2 id="page-title" class="font-pixel text-base sm:text-lg text-white truncate">Multi-Account Dashboard</h2>
           <span id="live-indicator" class="hidden md:inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 whitespace-nowrap">
             <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 pulsing-dot"></span> CLI Engine Online
@@ -148,7 +159,7 @@
         </div>
 
         <div class="flex items-center space-x-2 sm:space-x-3 flex-shrink-0">
-          <button onclick="refreshAllQuotas()" title="Refresh Quotas" class="inline-flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800/80 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700 transition">
+          <button onclick="refreshAllQuotas()" id="btn-refresh-quotas" title="Refresh Quotas" class="inline-flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800/80 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700 transition">
             <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
             <span class="hidden sm:inline">Refresh Quotas</span>
           </button>
@@ -222,7 +233,7 @@
                 <span>Managed Kaggle Accounts & Quota Balances</span>
               </h3>
               <span class="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-[#131b2e] border border-[#222d4a] text-cyan-300" title="Accounts automatically ordered by most available quota first">
-                <i data-lucide="arrow-down" class="w-3.5 h-3.5 mr-1.5 text-cyan-400"></i>
+                <i data-lucide="download" class="w-3.5 h-3.5 mr-1.5 text-cyan-400"></i>
                 Arranged: Highest Quota First
               </span>
             </div>
@@ -471,7 +482,7 @@
                     </div>
                     <div class="flex items-center space-x-2">
                       <button type="button" onclick="populateManualFromAuto()" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-purple-950/80 text-purple-300 border border-purple-800 hover:bg-purple-900/60 transition" title="Auto-fill rows using current accounts and total workload count">
-                        <i data-lucide="sparkles" class="w-3.5 h-3.5 text-purple-400"></i>
+                        <i data-lucide="zap" class="w-3.5 h-3.5 text-purple-400"></i>
                         <span>Prefill from Auto</span>
                       </button>
                       <button type="button" onclick="addManualShardRow()" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-cyan-950/80 text-cyan-300 border border-cyan-800 hover:bg-cyan-900/60 transition" title="Add another shard row">
@@ -665,7 +676,7 @@
           <div id="merge-cart-panel" class="glass-card rounded-2xl border border-emerald-800/50 bg-gradient-to-br from-emerald-950/20 to-transparent p-0 overflow-hidden">
             <div class="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-[#1e293b]">
               <h3 class="text-sm font-bold text-white flex items-center space-x-2">
-                <i data-lucide="shopping-cart" class="w-4 h-4 text-emerald-400"></i>
+                <i data-lucide="archive" class="w-4 h-4 text-emerald-400"></i>
                 <span>Merge Cart</span>
                 <span id="cart-count-badge" class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-700/50">0 files</span>
               </h3>
@@ -680,11 +691,11 @@
               <p class="text-[11px] text-slate-500">Files are concatenated raw (<code class="text-cyan-400">cat shard/* &gt; merged.jsonl</code>), top to bottom in the order listed above.</p>
               <div class="flex items-center space-x-3">
                 <button onclick="clearMergeCart()" class="inline-flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-800 text-slate-400 hover:text-white border border-slate-700 transition">
-                  <i data-lucide="x-circle" class="w-3.5 h-3.5"></i>
+                  <i data-lucide="x" class="w-3.5 h-3.5"></i>
                   <span>Clear Cart</span>
                 </button>
                 <button onclick="downloadMergedCart()" id="btn-download-merged" class="inline-flex items-center space-x-2 px-5 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white transition shadow-lg shadow-emerald-600/25 disabled:opacity-40 disabled:cursor-not-allowed">
-                  <i data-lucide="package-check" class="w-4 h-4"></i>
+                  <i data-lucide="download" class="w-4 h-4"></i>
                   <span>Download Merged File</span>
                 </button>
               </div>
@@ -729,7 +740,7 @@
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 class="text-base font-bold text-white flex items-center space-x-2">
-                  <i data-lucide="layers" class="w-5 h-5 text-indigo-400 flex-shrink-0"></i>
+                  <i data-lucide="database" class="w-5 h-5 text-indigo-400 flex-shrink-0"></i>
                   <span>Account Kernels Explorer</span>
                   <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-700/50">NEW</span>
                 </h3>
@@ -784,7 +795,7 @@
           <div id="kernels-detail-panel" class="hidden glass-card rounded-2xl p-6 border border-indigo-800/50 space-y-4">
             <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[#1e293b] pb-3">
               <h4 class="text-sm font-bold text-white flex items-center gap-2">
-                <i data-lucide="file-stack" class="w-4 h-4 text-indigo-400"></i>
+                <i data-lucide="file" class="w-4 h-4 text-indigo-400"></i>
                 <span id="kernels-detail-title">Kernel detail</span>
                 <span id="kernels-detail-ref" class="text-xs font-mono text-slate-400"></span>
               </h4>
@@ -796,16 +807,16 @@
                 <i data-lucide="cloud-download" class="w-4 h-4"></i><span>Pull Latest Output</span>
               </button>
               <button onclick="kernelsListFiles()" id="btn-kernels-files" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition">
-                <i data-lucide="folder-open" class="w-4 h-4"></i><span>Refresh Files</span>
+                <i data-lucide="folder-down" class="w-4 h-4"></i><span>Refresh Files</span>
               </button>
               <button onclick="kernelsFetchLogs()" id="btn-kernels-logs" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition">
-                <i data-lucide="scroll-text" class="w-4 h-4"></i><span>Fetch Logs</span>
+                <i data-lucide="terminal" class="w-4 h-4"></i><span>Fetch Logs</span>
               </button>
               <button onclick="kernelsDownloadZip()" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-blue-600/20 text-blue-300 hover:bg-blue-600/30 border border-blue-500/40 transition">
                 <i data-lucide="archive" class="w-4 h-4"></i><span>Download ZIP</span>
               </button>
               <button onclick="kernelsStop()" id="btn-kernels-stop" disabled class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-rose-600/20 text-rose-300 hover:bg-rose-600/30 border border-rose-500/40 transition disabled:opacity-40 disabled:cursor-not-allowed opacity-40" title="Checking status...">
-                <i data-lucide="octagon" class="w-4 h-4"></i><span>Stop Kernel</span>
+                <i data-lucide="x" class="w-4 h-4"></i><span>Stop Kernel</span>
               </button>
             </div>
 
@@ -842,10 +853,10 @@
                 </div>
                 <div class="flex items-center gap-2">
                   <button onclick="loadKernelVersions(20)" id="btn-load-versions" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 border border-amber-500/40 transition">
-                    <i data-lucide="layers" class="w-3.5 h-3.5"></i><span>Load Versions</span>
+                    <i data-lucide="history" class="w-3.5 h-3.5"></i><span>Load Versions</span>
                   </button>
                   <button onclick="loadKernelVersions(50)" id="btn-load-all-versions" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-amber-400 hover:bg-slate-700 border border-slate-700 transition" title="Load up to 50 versions for kernels with extensive history">
-                    <i data-lucide="list-filter" class="w-3.5 h-3.5"></i><span>Show All (50)</span>
+                    <i data-lucide="history" class="w-3.5 h-3.5"></i><span>Show All (50)</span>
                   </button>
                 </div>
               </div>

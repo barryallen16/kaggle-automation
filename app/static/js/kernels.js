@@ -156,24 +156,33 @@ function isTerminalStatus(st) {
 }
 function updateStopButtonState(account, ref, status) {
   const terminal = isTerminalStatus(status);
+  const stopping = isKernelStopping(account, ref);
+  const disabled = stopping || terminal;
   // Per-row stop buttons (filter by data-ref to avoid CSS.escape issues with slash)
   document.querySelectorAll('button[data-ref]').forEach(btn => {
     if (btn.dataset.ref === ref && btn.getAttribute('onclick') && btn.getAttribute('onclick').includes('kernelsStopRow')) {
-      btn.disabled = terminal;
-      btn.classList.toggle('opacity-40', terminal);
-      btn.classList.toggle('cursor-not-allowed', terminal);
-      btn.title = terminal ? `Already ${status} — stop not needed` : 'Stop this kernel if running';
-      if (terminal) btn.classList.add('opacity-60'); else btn.classList.remove('opacity-60');
+      btn.disabled = disabled;
+      btn.classList.toggle('opacity-40', disabled);
+      btn.classList.toggle('cursor-not-allowed', disabled);
+      btn.title = stopping ? 'Stop is in progress — please wait' : (terminal ? `Already ${status} — stop not needed` : 'Stop this kernel if running');
+      if (disabled) btn.classList.add('opacity-60'); else btn.classList.remove('opacity-60');
+      if (stopping && !btn.dataset.busyHtml) {
+        btn.dataset.busyHtml = btn.innerHTML;
+        btn.innerHTML = `<i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i><span>Stopping...</span>`;
+      } else if (!stopping && btn.dataset.busyHtml) {
+        btn.innerHTML = btn.dataset.busyHtml;
+        delete btn.dataset.busyHtml;
+      }
     }
   });
   // Detail panel stop button if selected matches
   if (kernelsState.selected && kernelsState.selected.ref === ref) {
     const detailBtn = document.getElementById('btn-kernels-stop');
     if (detailBtn) {
-      detailBtn.disabled = terminal;
-      detailBtn.classList.toggle('opacity-40', terminal);
-      detailBtn.classList.toggle('cursor-not-allowed', terminal);
-      detailBtn.title = terminal ? `Already ${status}` : 'Stop this kernel';
+      detailBtn.disabled = disabled;
+      detailBtn.classList.toggle('opacity-40', disabled);
+      detailBtn.classList.toggle('cursor-not-allowed', disabled);
+      detailBtn.title = stopping ? 'Stop is in progress — please wait' : (terminal ? `Already ${status}` : 'Stop this kernel');
     }
   }
 }
@@ -219,7 +228,12 @@ function renderKernelsTable() {
   });
 }
 async function kernelsStopRow(account, ref, title, btn) {
+  if (isKernelStopping(account, ref)) {
+    showToast('This kernel is already being stopped - please wait.', 'warning');
+    return;
+  }
   if (!confirm(`Stop kernel ${ref} on @${account}?`)) return;
+  markKernelStopping(account, ref, true);
   setBtnLoading(btn, true, 'Stopping...');
   try {
     const res = await fetch('/api/kernels/stop', {
@@ -239,7 +253,9 @@ async function kernelsStopRow(account, ref, title, btn) {
   } catch (err) {
     showToast(err.message, 'error');
   } finally {
+    markKernelStopping(account, ref, false);
     setBtnLoading(btn, false);
+    updateStopButtonState(account, ref, kernelsState.kernels.find(k => k.ref === ref)?.status || 'running');
   }
 }
 
@@ -513,8 +529,13 @@ async function kernelsFetchVersionLog(version) {
 async function kernelsStop() {
   if (!kernelsState.selected) { showToast('Open a kernel first','warning'); return; }
   const { account, ref, title } = kernelsState.selected;
+  if (isKernelStopping(account, ref)) {
+    showToast('This kernel is already being stopped - please wait.', 'warning');
+    return;
+  }
   if (!confirm(`Stop kernel ${ref} on @${account}?\nThis pushes a 1-sec cancel stub.`)) return;
   const btn = document.getElementById('btn-kernels-stop');
+  markKernelStopping(account, ref, true);
   setBtnLoading(btn, true, 'Stopping...');
   showToast(`Sending stop signal to ${ref}...`, 'warning');
   try {
@@ -535,6 +556,7 @@ async function kernelsStop() {
   } catch (err) {
     showToast(err.message, 'error');
   } finally {
+    markKernelStopping(account, ref, false);
     setBtnLoading(btn, false);
   }
 }

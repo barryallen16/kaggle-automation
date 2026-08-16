@@ -49,9 +49,7 @@ function renderDashboard() {
           <p class="font-bold text-white truncate">${esc(r.title)}</p>
           <p class="text-[10px] text-slate-400 font-mono">${esc(r.accelerator)}</p>
         </div>
-        <button onclick="stopRun('${esc(r.id)}')" class="px-2 py-1 rounded text-[10px] font-bold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 transition">
-          Stop
-        </button>
+        ${stoppingRunButtonHtml(r.id, 'px-2 py-1 rounded text-[10px] font-bold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 transition inline-flex items-center space-x-1')}
       </div>
     `).join('');
 
@@ -112,9 +110,9 @@ function renderDashboard() {
 
         <!-- Footer Actions -->
         <div class="pt-2 border-t border-[#1e293b] flex items-center justify-between text-xs">
-          <button onclick="refreshSingleQuota('${esc(acc.username)}')" class="text-slate-400 hover:text-cyan-400 flex items-center space-x-1 transition text-[11px]">
-            <i data-lucide="rotate-cw" class="w-3 h-3"></i>
-            <span>Refresh Quota</span>
+          <button onclick="refreshSingleQuota('${esc(acc.username)}')" ${AppState.ops?.refreshing_quotas ? 'disabled' : ''} class="text-slate-400 hover:text-cyan-400 flex items-center space-x-1 transition text-[11px] ${AppState.ops?.refreshing_quotas ? 'opacity-50 cursor-not-allowed' : ''}">
+            <i data-lucide="rotate-cw" class="w-3 h-3 ${AppState.ops?.refreshing_quotas ? 'animate-spin' : ''}"></i>
+            <span>${AppState.ops?.refreshing_quotas ? 'Refreshing...' : 'Refresh Quota'}</span>
           </button>
           <a href="https://kaggle.com/${encodeURIComponent(acc.username)}" target="_blank" class="text-slate-400 hover:text-blue-400 flex items-center space-x-1 transition text-[11px]">
             <span>Profile</span>
@@ -176,9 +174,7 @@ function renderActiveRunsTable() {
             <button onclick="viewLogsForRun('${esc(run.id)}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 transition">
               Live Stream
             </button>
-            <button onclick="stopRun('${esc(run.id)}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 border border-rose-500/30 transition">
-              Stop
-            </button>
+            ${stoppingRunButtonHtml(run.id, 'px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 border border-rose-500/30 transition inline-flex items-center space-x-1.5')}
           </div>
         </td>
       </tr>
@@ -197,8 +193,14 @@ function closeAddAccountModal() {
   if (modal) modal.classList.add('hidden');
 }
 
+let _addingAccount = false;
+
 async function handleAddAccountSubmit(e) {
   e.preventDefault();
+  if (_addingAccount) return;
+  _addingAccount = true;
+  const submitBtn = document.querySelector('#modal-add-account button[type="submit"]');
+  if (submitBtn) setButtonBusy(submitBtn, true, 'Authenticating...');
   const apiKey = document.getElementById('modal-api-key').value;
   const username = document.getElementById('modal-username').value;
 
@@ -221,10 +223,19 @@ async function handleAddAccountSubmit(e) {
     }
   } catch (err) {
     showToast('Error adding account: ' + err.message, 'error');
+  } finally {
+    _addingAccount = false;
+    if (submitBtn) setButtonBusy(submitBtn, false);
   }
 }
 
 async function refreshAllQuotas() {
+  if (AppState.ops?.refreshing_quotas) {
+    showToast('Quota refresh is already in progress - please wait.', 'warning');
+    return;
+  }
+  AppState.ops = Object.assign({}, AppState.ops, { refreshing_quotas: true });
+  syncOpsStaticButtons();
   showToast('Refreshing all Kaggle quotas...', 'info');
   try {
     const res = await fetch('/api/accounts/refresh', { method: 'POST' });
@@ -232,13 +243,23 @@ async function refreshAllQuotas() {
     if (data.success) {
       showToast('All quotas refreshed successfully!', 'success');
       refreshGlobalData();
+    } else {
+      showToast(data.detail || 'Failed to refresh quotas', 'error');
     }
   } catch (err) {
     showToast('Failed to refresh quotas', 'error');
+  } finally {
+    await refreshOps();
   }
 }
 
 async function refreshSingleQuota(username) {
+  if (AppState.ops?.refreshing_quotas) {
+    showToast('A quota refresh is already in progress - please wait.', 'warning');
+    return;
+  }
+  AppState.ops = Object.assign({}, AppState.ops, { refreshing_quotas: true });
+  syncOpsStaticButtons();
   try {
     showToast(`Refreshing quota for @${username}...`, 'info');
     const res = await fetch(`/api/accounts/${username}/refresh`, { method: 'POST' });
@@ -248,6 +269,8 @@ async function refreshSingleQuota(username) {
     }
   } catch (err) {
     showToast(`Failed to refresh @${username}`, 'error');
+  } finally {
+    await refreshOps();
   }
 }
 
@@ -265,18 +288,27 @@ async function deleteAccount(username) {
 }
 
 async function stopRun(runId) {
+  if (isRunStopping(runId)) {
+    showToast('This session is already being stopped - please wait.', 'warning');
+    return;
+  }
   if (!confirm('Are you sure you want to stop this running session on Kaggle?')) return;
+  markRunStopping(runId, true);
+  if (AppState.activeTab === 'dashboard') renderDashboard();
+  else if (AppState.activeTab === 'history') renderHistory();
   showToast('Sending stop signal to Kaggle session...', 'warning');
   try {
     const res = await fetch(`/api/runs/${runId}/stop`, { method: 'POST' });
     const data = await res.json();
     if (data.success) {
       showToast('Kernel stop signal deployed successfully!', 'success');
-      refreshGlobalData();
     } else {
       showToast(data.error || 'Failed to stop run', 'error');
     }
   } catch (err) {
     showToast('Error stopping run: ' + err.message, 'error');
+  } finally {
+    markRunStopping(runId, false);
+    await refreshGlobalData();
   }
 }

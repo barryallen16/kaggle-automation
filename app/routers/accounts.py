@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from app.services.account_manager import AccountManager
+from app.services.ops_tracker import tracker
 from app.database import get_all_accounts, get_active_runs
 
 router = APIRouter(prefix="/api/accounts", tags=["Accounts"])
@@ -88,19 +89,25 @@ async def remove_account(username: str):
 
 @router.post("/refresh")
 async def refresh_all():
+    tracker.begin("refresh_quotas")
     try:
         updated = await AccountManager.refresh_all_quotas()
         return {"success": True, "accounts": [_sanitize_account(a) for a in updated]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        tracker.end("refresh_quotas")
 
 @router.post("/{username}/refresh")
 async def refresh_single(username: str):
+    tracker.begin("refresh_quotas")
     try:
         quota = await AccountManager.refresh_account_quota(username)
         return {"success": True, "quota": quota}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        tracker.end("refresh_quotas")
 
 @router.get("/{username}/debug")
 async def debug_account(username: str):
