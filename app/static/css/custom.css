@@ -172,3 +172,16 @@ pre, code, .terminal-font, .font-mono {
 #sidebar.sidebar-collapsed > div:last-child {
   display: none;
 }
+/* ------------------------------------------------------------------
+   Fixed sidebar: keep <main> offset in sync with sidebar width
+   ------------------------------------------------------------------ */
+@media (min-width: 1024px) {
+  #sidebar ~ main {
+    margin-left: 16rem; /* matches Tailwind's w-64 expanded width */
+    transition: margin-left 0.3s ease-in-out;
+  }
+
+  #sidebar.sidebar-collapsed ~ main {
+    margin-left: 4.5rem; /* matches #sidebar.sidebar-collapsed width above */
+  }
+}

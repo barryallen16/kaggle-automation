@@ -57,9 +57,8 @@
   <div class="flex flex-1 h-screen h-[100dvh] overflow-hidden">
 
     <!-- Sidebar Navigation (off-canvas drawer on mobile, fixed column on desktop) -->
-    <aside id="sidebar"
-           class="fixed lg:sticky lg:top-0 inset-y-0 left-0 z-50 w-64 max-w-[85vw] h-[100dvh] bg-[#0d121f] border-r border-[#1e293b] flex flex-col flex-shrink-0 overflow-hidden transform -translate-x-full lg:translate-x-0 transition-[transform,width] duration-300 ease-in-out">
-      <!-- App Header / Logo -->
+    <aside id="sidebar" class="fixed lg:fixed lg:top-0 lg:left-0 inset-y-0 left-0 z-50 w-64 max-w-[85vw] h-[100dvh] bg-[#0d121f] border-r border-[#1e293b] flex flex-col flex-shrink-0 overflow-hidden transform -translate-x-full lg:translate-x-0 transition-[transform,width] duration-300 ease-in-out sidebar-collapsed">
+    <!-- App Header / Logo -->
       <div class="h-16 flex items-center px-6 border-b border-[#1e293b] space-x-3 flex-shrink-0">
         <img src="/static/icons/android-chrome-192x192.png" alt="Logo" class="w-9 h-9 rounded-xl">
         <div class="min-w-0">
