@@ -1,0 +1,16 @@
+[project]
+name = "kaggle-automation"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi[standard]>=0.141.1",
+    "kaggle>=2.2.4",
+    "tqdm>=4.70.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
