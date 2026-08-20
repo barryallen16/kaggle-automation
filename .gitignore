@@ -1,34 +1,46 @@
-.idea
+# Environments & Secrets
+.env
+.env.*
+*.env
+kaggle.json
+access_token
+
+# Python & Virtual Environments
+.venv/
+venv/
+env/
+env3.*/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Local Data, Databases & Logs
+data/
+*.db
+*.sqlite
+*.sqlite3
+*.log
+log.txt
+*.txt
+
+# IDEs & Editors
+.vscode/
+.idea/
 .ipynb_checkpoints
-.mypy_cache
-.vscode
-__pycache__
-.pytest_cache
-htmlcov
-dist
-site
-site_zensical_src
+.pytest_cache/
+htmlcov/
 .coverage*
 coverage.xml
-.netlify
-test.db
-log.txt
-Pipfile.lock
-env3.*
-env
-docs_build
-site_build
-venv
-docs.zip
+
+# Archives & Builds
+dist/
+build/
+*.zip
+*.tar.gz
 archive.zip
+docs.zip
 
-# vim temporary files
-*~
-.*.sw?
-.cache
-
-# macOS
+# OS Specific
 .DS_Store
-
-.codspeed
-.env
+Thumbs.db

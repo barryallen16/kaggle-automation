@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kaggle Multi-Account Automation Platform</title>
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              cyan: '#00f2fe',
+              blue: '#4facfe',
+              dark: '#0a0d14',
+              surface: '#121829',
+              card: '#161e33',
+              border: '#222d4a',
+            }
+          }
+        }
+      }
+    }
+  </script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <link rel="stylesheet" href="/static/css/custom.css">
+</head>
+<body class="bg-[#0a0d14] text-slate-100 min-h-screen flex flex-col antialiased">
+
+  <!-- Toast Notification Container -->
+  <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col space-y-3 pointer-events-none"></div>
+
+  <!-- Main App Layout -->
+  <div class="flex flex-1 h-screen overflow-hidden">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="w-64 bg-[#0d121f] border-r border-[#1e293b] flex flex-col flex-shrink-0">
+      <!-- App Header / Logo -->
+      <div class="h-16 flex items-center px-6 border-b border-[#1e293b] space-x-3">
+        <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-cyan-500 to-blue-600 flex items-center justify-center shadow-lg shadow-cyan-500/20">
+          <i data-lucide="cpu" class="w-5 h-5 text-white"></i>
+        </div>
+        <div>
+          <h1 class="text-sm font-bold tracking-wide text-white">KAGGLE AUTO</h1>
+          <p class="text-[10px] text-cyan-400 font-medium uppercase tracking-wider">Multi-Account Hub</p>
+        </div>
+      </div>
+
+      <!-- Navigation Links -->
+      <nav class="flex-1 px-4 py-6 space-y-1.5 overflow-y-auto">
+        <button onclick="switchTab('dashboard')" id="nav-dashboard" class="nav-tab active w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all border border-transparent">
+          <i data-lucide="layout-dashboard" class="w-4 h-4 text-cyan-400"></i>
+          <span>Dashboard & Quotas</span>
+        </button>
+
+        <button onclick="switchTab('runner')" id="nav-runner" class="nav-tab w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all border border-transparent">
+          <i data-lucide="play-circle" class="w-4 h-4 text-blue-400"></i>
+          <span>Single Run & Trial</span>
+        </button>
+
+        <button onclick="switchTab('distributed')" id="nav-distributed" class="nav-tab w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all border border-transparent">
+          <i data-lucide="network" class="w-4 h-4 text-purple-400"></i>
+          <span>Distributed Runner</span>
+        </button>
+
+        <button onclick="switchTab('terminal')" id="nav-terminal" class="nav-tab w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all border border-transparent">
+          <i data-lucide="terminal" class="w-4 h-4 text-emerald-400"></i>
+          <span>Live Logs & Stream</span>
+        </button>
+
+        <button onclick="switchTab('files')" id="nav-files" class="nav-tab w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all border border-transparent">
+          <i data-lucide="folder-down" class="w-4 h-4 text-amber-400"></i>
+          <span>Output Files</span>
+        </button>
+
+        <button onclick="switchTab('history')" id="nav-history" class="nav-tab w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all border border-transparent">
+          <i data-lucide="history" class="w-4 h-4 text-slate-400"></i>
+          <span>Run Catalog</span>
+        </button>
+
+        <div class="pt-4 pb-2">
+          <div class="h-px bg-slate-800"></div>
+        </div>
+
+        <button onclick="switchTab('settings')" id="nav-settings" class="nav-tab w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all border border-transparent">
+          <i data-lucide="send" class="w-4 h-4 text-sky-400"></i>
+          <span>Telegram & Settings</span>
+        </button>
+      </nav>
+
+      <!-- Sidebar Footer / Quick Stats -->
+      <div class="p-4 border-t border-[#1e293b] bg-[#0a0d14]/40">
+        <div class="flex items-center justify-between text-xs text-slate-400 mb-2">
+          <span>Active Runs:</span>
+          <span id="sidebar-active-count" class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-semibold font-mono">0</span>
+        </div>
+        <div class="flex items-center justify-between text-xs text-slate-400">
+          <span>Accounts:</span>
+          <span id="sidebar-accounts-count" class="px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-semibold font-mono">0</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#0a0d14]">
+      
+      <!-- Top Bar -->
+      <header class="h-16 border-b border-[#1e293b] bg-[#0e1424] px-8 flex items-center justify-between flex-shrink-0">
+        <div class="flex items-center space-x-4">
+          <h2 id="page-title" class="text-lg font-bold text-white tracking-wide">Multi-Account Dashboard</h2>
+          <span id="live-indicator" class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-950/80 text-emerald-400 border border-emerald-800/60">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 pulsing-dot"></span> CLI Engine Online
+          </span>
+        </div>
+
+        <div class="flex items-center space-x-3">
+          <button onclick="refreshAllQuotas()" class="inline-flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800/80 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700 transition">
+            <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i>
+            <span>Refresh Quotas</span>
+          </button>
+          <button onclick="openAddAccountModal()" class="inline-flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-medium bg-cyan-600/20 text-cyan-400 hover:bg-cyan-600/30 border border-cyan-500/40 transition">
+            <i data-lucide="user-plus" class="w-3.5 h-3.5"></i>
+            <span>Add Account</span>
+          </button>
+        </div>
+      </header>
+
+      <!-- Scrollable Tab Content Viewport -->
+      <div class="flex-1 overflow-y-auto p-8 space-y-6">
+
+        <!-- ============================================== -->
+        <!-- TAB 1: DASHBOARD & QUOTAS                     -->
+        <!-- ============================================== -->
+        <section id="tab-dashboard" class="space-y-6">
+          <!-- Top KPI Cards -->
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-5">
+            <div class="glass-card rounded-2xl p-5 border border-[#222d4a]">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Connected Accounts</span>
+                <i data-lucide="users" class="w-5 h-5 text-cyan-400"></i>
+              </div>
+              <p id="kpi-accounts-total" class="text-2xl font-extrabold text-white mt-2">0</p>
+              <p class="text-xs text-slate-500 mt-1">Multi-credential pool</p>
+            </div>
+
+            <div class="glass-card rounded-2xl p-5 border border-[#222d4a]">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Active Executions</span>
+                <i data-lucide="activity" class="w-5 h-5 text-emerald-400"></i>
+              </div>
+              <p id="kpi-active-runs" class="text-2xl font-extrabold text-emerald-400 mt-2">0</p>
+              <p class="text-xs text-slate-500 mt-1">Kernels in session</p>
+            </div>
+
+            <div class="glass-card rounded-2xl p-5 border border-[#222d4a]">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Max Session Limit</span>
+                <i data-lucide="clock" class="w-5 h-5 text-amber-400"></i>
+              </div>
+              <p class="text-2xl font-extrabold text-amber-400 mt-2">12.0 hrs</p>
+              <p class="text-xs text-slate-500 mt-1">Telegram alert on cutoff</p>
+            </div>
+
+            <div class="glass-card rounded-2xl p-5 border border-[#222d4a]">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Runs Executed</span>
+                <i data-lucide="check-circle" class="w-5 h-5 text-blue-400"></i>
+              </div>
+              <p id="kpi-total-runs" class="text-2xl font-extrabold text-blue-400 mt-2">0</p>
+              <p class="text-xs text-slate-500 mt-1">Logged in catalog</p>
+            </div>
+          </div>
+
+          <!-- Accounts & Quotas Grid -->
+          <div class="space-y-4">
+            <div class="flex items-center justify-between">
+              <h3 class="text-base font-bold text-white flex items-center space-x-2">
+                <i data-lucide="shield-check" class="w-5 h-5 text-cyan-400"></i>
+                <span>Managed Kaggle Accounts & Quota Balances</span>
+              </h3>
+            </div>
+
+            <div id="accounts-grid" class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-5">
+              <!-- Rendered dynamically by dashboard.js -->
+              <div class="col-span-full text-center py-12 text-slate-500">
+                <i data-lucide="loader-2" class="w-8 h-8 animate-spin mx-auto mb-3 text-slate-600"></i>
+                Loading accounts and quotas...
+              </div>
+            </div>
+          </div>
+
+          <!-- Active Running Sessions Table -->
+          <div class="space-y-4 pt-4">
+            <h3 class="text-base font-bold text-white flex items-center space-x-2">
+              <i data-lucide="radio" class="w-5 h-5 text-emerald-400 animate-pulse"></i>
+              <span>Currently Running Sessions</span>
+            </h3>
+
+            <div class="glass-panel rounded-2xl overflow-hidden">
+              <table class="w-full text-left text-sm text-slate-300">
+                <thead class="bg-[#0e1424] text-xs uppercase font-semibold text-slate-400 border-b border-[#222d4a]">
+                  <tr>
+                    <th class="px-6 py-3.5">Account</th>
+                    <th class="px-6 py-3.5">Notebook Title</th>
+                    <th class="px-6 py-3.5">Accelerator</th>
+                    <th class="px-6 py-3.5">Elapsed / Max</th>
+                    <th class="px-6 py-3.5">Status</th>
+                    <th class="px-6 py-3.5 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="active-runs-table-body" class="divide-y divide-[#1e293b]">
+                  <tr>
+                    <td colspan="6" class="px-6 py-8 text-center text-slate-500">No active notebook sessions currently running.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+
+        <!-- ============================================== -->
+        <!-- TAB 2: SINGLE RUN & TRIAL                     -->
+        <!-- ============================================== -->
+        <section id="tab-runner" class="hidden space-y-6">
+          <div class="max-w-4xl mx-auto glass-panel rounded-2xl p-8 border border-[#222d4a]">
+            <div class="border-b border-[#1e293b] pb-5 mb-6">
+              <h3 class="text-lg font-bold text-white flex items-center space-x-2">
+                <i data-lucide="play" class="w-5 h-5 text-blue-400"></i>
+                <span>Launch Kaggle Notebook Session</span>
+              </h3>
+              <p class="text-xs text-slate-400 mt-1">Configure accelerator, trial run mode, and push code to your selected Kaggle account.</p>
+            </div>
+
+            <form id="single-run-form" onsubmit="handleSingleRunSubmit(event)" class="space-y-6">
+              <!-- Account Selection -->
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Target Kaggle Account</label>
+                  <select id="runner-account-select" required class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
+                    <option value="">-- Select Account --</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Notebook Title</label>
+                  <input type="text" id="runner-title" required placeholder="e.g. My Heavy ML Model Training" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
+                </div>
+              </div>
+
+              <!-- Accelerator & Hardware Options -->
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Hardware Accelerator</label>
+                  <select id="runner-accelerator-select" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
+                    <option value="none">Default / CPU</option>
+                    <option value="nvidia-tesla-t4-x2" selected>⚡ T4 GPU x 2 (High Performance)</option>
+                    <option value="nvidia-tesla-t4">⚡ T4 GPU x 1</option>
+                    <option value="v3-8">🚀 TPU VM v3-8 (Tensor Accelerator)</option>
+                  </select>
+                </div>
+
+                <!-- Internet and Options -->
+                <div class="flex items-center space-x-6 pt-6">
+                  <label class="flex items-center space-x-2.5 cursor-pointer">
+                    <input type="checkbox" id="runner-internet" checked class="w-4 h-4 text-cyan-500 rounded bg-slate-900 border-slate-700 focus:ring-0">
+                    <span class="text-sm font-medium text-slate-300">Enable Internet Access</span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Trial Run Toggle Box -->
+              <div class="p-4 rounded-xl bg-amber-950/30 border border-amber-800/50 flex items-start space-x-3">
+                <input type="checkbox" id="runner-is-trial" onchange="toggleTrialFields()" class="w-4 h-4 mt-0.5 text-amber-500 rounded bg-slate-900 border-amber-700 focus:ring-0">
+                <div class="flex-1">
+                  <label for="runner-is-trial" class="text-sm font-bold text-amber-300 cursor-pointer">Trial Run Mode (Pre-Flight Verification)</label>
+                  <p class="text-xs text-amber-200/70 mt-0.5">Run with a short timeout to verify dependencies and start iterations without consuming your 12-hour session quota.</p>
+                  
+                  <div id="trial-timeout-container" class="mt-3 hidden">
+                    <label class="block text-xs font-medium text-amber-200 mb-1">Trial Timeout Limit (Seconds)</label>
+                    <input type="number" id="runner-trial-timeout" value="300" min="60" max="3600" class="w-48 bg-[#0d121f] border border-amber-700/60 rounded-lg px-3 py-1.5 text-xs text-white">
+                  </div>
+                </div>
+              </div>
+
+              <!-- Notebook Source Code / File Upload -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Notebook / Script Code</label>
+                
+                <!-- File Upload Dropzone -->
+                <div class="border-2 border-dashed border-[#242f49] hover:border-cyan-500/60 rounded-xl p-4 text-center cursor-pointer mb-3 transition" onclick="document.getElementById('runner-file-input').click()">
+                  <input type="file" id="runner-file-input" accept=".ipynb,.py" class="hidden" onchange="handleFileInputChange(event)">
+                  <i data-lucide="upload-cloud" class="w-6 h-6 text-slate-400 mx-auto mb-1"></i>
+                  <span id="file-upload-label" class="text-xs text-slate-400">Click to upload <code class="text-cyan-400">.ipynb</code> or <code class="text-cyan-400">.py</code> file, or paste code below</span>
+                </div>
+
+                <textarea id="runner-code-textarea" rows="8" class="w-full terminal-font text-xs bg-[#060911] border border-[#222d4a] rounded-xl p-4 text-cyan-300 focus:outline-none focus:border-cyan-500" placeholder="# Paste Python code or edit uploaded script here..."></textarea>
+              </div>
+
+              <!-- Submit Button -->
+              <div class="flex justify-end space-x-4 pt-2">
+                <button type="submit" id="btn-launch-run" class="inline-flex items-center space-x-2 px-6 py-3 rounded-xl text-sm font-bold bg-gradient-to-r from-cyan-500 to-blue-600 text-white hover:from-cyan-400 hover:to-blue-500 shadow-lg shadow-cyan-500/25 transition">
+                  <i data-lucide="rocket" class="w-4 h-4"></i>
+                  <span>Deploy & Launch to Kaggle</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+
+        <!-- ============================================== -->
+        <!-- TAB 3: DISTRIBUTED WORKLOAD RUNNER            -->
+        <!-- ============================================== -->
+        <section id="tab-distributed" class="hidden space-y-6">
+          <div class="max-w-4xl mx-auto glass-panel rounded-2xl p-8 border border-[#222d4a]">
+            <div class="border-b border-[#1e293b] pb-5 mb-6">
+              <h3 class="text-lg font-bold text-white flex items-center space-x-2">
+                <i data-lucide="network" class="w-5 h-5 text-purple-400"></i>
+                <span>Distributed Workload Sharder</span>
+              </h3>
+              <p class="text-xs text-slate-400 mt-1">Split massive jobs (e.g. 10,000,000 items, seeds, or files) across multiple Kaggle accounts simultaneously.</p>
+            </div>
+
+            <form id="distributed-run-form" onsubmit="handleDistributedSubmit(event)" class="space-y-6">
+              <!-- Title & Total Workload Items -->
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Workload Base Title</label>
+                  <input type="text" id="dist-title" required placeholder="e.g. Distributed 10M Data Cruncher" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
+                </div>
+
+                <div>
+                  <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Total Workload Count (Items / Iterations)</label>
+                  <input type="number" id="dist-total-items" value="10000000" min="1" required class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500" oninput="updateShardsPreview()">
+                </div>
+              </div>
+
+              <!-- Participating Accounts Selection -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Select Participating Kaggle Accounts</label>
+                <div id="dist-accounts-checkboxes" class="grid grid-cols-2 md:grid-cols-3 gap-3 p-4 bg-[#0d121f] border border-[#222d4a] rounded-xl">
+                  <!-- Checkboxes dynamically rendered -->
+                </div>
+              </div>
+
+              <!-- Hardware and Options -->
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                  <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Accelerator per Account</label>
+                  <select id="dist-accelerator" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
+                    <option value="nvidia-tesla-t4-x2" selected>⚡ T4 GPU x 2 (High Performance)</option>
+                    <option value="nvidia-tesla-t4">⚡ T4 GPU x 1</option>
+                    <option value="v3-8">🚀 TPU VM v3-8</option>
+                    <option value="none">Default / CPU</option>
+                  </select>
+                </div>
+
+                <div class="flex items-center space-x-6 pt-6">
+                  <label class="flex items-center space-x-2.5 cursor-pointer">
+                    <input type="checkbox" id="dist-internet" checked class="w-4 h-4 text-purple-500 rounded bg-slate-900 border-slate-700 focus:ring-0">
+                    <span class="text-sm font-medium text-slate-300">Enable Internet Access</span>
+                  </label>
+                </div>
+              </div>
+
+              <!-- Shard Partition Preview Box -->
+              <div class="p-4 rounded-xl bg-purple-950/30 border border-purple-800/50">
+                <h4 class="text-xs font-bold text-purple-300 uppercase tracking-wider mb-2">Auto-Calculated Shards Partition</h4>
+                <div id="dist-shards-preview" class="text-xs font-mono text-purple-200 space-y-1">
+                  Select accounts above to calculate partitions...
+                </div>
+              </div>
+
+              <!-- Notebook Source Code -->
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Base Notebook Code (Shard variables will be auto-injected)</label>
+                <div class="border-2 border-dashed border-[#242f49] hover:border-purple-500/60 rounded-xl p-4 text-center cursor-pointer mb-3 transition" onclick="document.getElementById('dist-file-input').click()">
+                  <input type="file" id="dist-file-input" accept=".ipynb,.py" class="hidden" onchange="handleDistFileInputChange(event)">
+                  <i data-lucide="upload-cloud" class="w-6 h-6 text-slate-400 mx-auto mb-1"></i>
+                  <span id="dist-file-upload-label" class="text-xs text-slate-400">Click to upload <code class="text-purple-400">.ipynb</code> or <code class="text-purple-400">.py</code> base file</span>
+                </div>
+                <textarea id="dist-code-textarea" rows="6" class="w-full terminal-font text-xs bg-[#060911] border border-[#222d4a] rounded-xl p-4 text-purple-300 focus:outline-none focus:border-purple-500" placeholder="# In your notebook, variables SHARD_ID, TOTAL_SHARDS, START_INDEX, END_INDEX will be injected automatically!"></textarea>
+              </div>
+
+              <!-- Submit -->
+              <div class="flex justify-end space-x-4 pt-2">
+                <button type="submit" id="btn-launch-dist" class="inline-flex items-center space-x-2 px-6 py-3 rounded-xl text-sm font-bold bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:from-purple-500 hover:to-indigo-500 shadow-lg shadow-purple-500/25 transition">
+                  <i data-lucide="cpu" class="w-4 h-4"></i>
+                  <span>Distribute & Launch Across Accounts</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+
+        <!-- ============================================== -->
+        <!-- TAB 4: LIVE LOGS & STREAM TERMINAL            -->
+        <!-- ============================================== -->
+        <section id="tab-terminal" class="hidden space-y-4">
+          <!-- Terminal Control Toolbar -->
+          <div class="glass-card rounded-2xl p-4 border border-[#222d4a] flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center space-x-4 flex-1 min-w-[300px]">
+              <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Select Run:</label>
+              <select id="terminal-run-select" onchange="handleTerminalRunSelect(event)" class="bg-[#0d121f] border border-[#222d4a] rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 flex-1">
+                <option value="">-- Select a run to view output logs --</option>
+              </select>
+            </div>
+
+            <div class="flex items-center space-x-3">
+              <label class="flex items-center space-x-2 cursor-pointer text-xs text-slate-400">
+                <input type="checkbox" id="terminal-autoscroll" checked class="w-3.5 h-3.5 text-emerald-500 rounded bg-slate-900 border-slate-700">
+                <span>Auto-Scroll</span>
+              </label>
+              <button onclick="fetchRemoteLogs()" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700 transition">
+                <i data-lucide="download-cloud" class="w-3.5 h-3.5"></i>
+                <span>Fetch Full Kaggle Log</span>
+              </button>
+              <button onclick="downloadCurrentLogFile()" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600/30 border border-emerald-500/40 transition">
+                <i data-lucide="download" class="w-3.5 h-3.5"></i>
+                <span>Download Log</span>
+              </button>
+              <button onclick="clearTerminal()" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-800 text-slate-400 hover:text-rose-400 transition">
+                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                <span>Clear</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Terminal Screen -->
+          <div class="terminal-window rounded-2xl p-4 border border-[#1e293b] flex flex-col h-[600px] shadow-2xl relative">
+            <div class="flex items-center justify-between pb-3 mb-2 border-b border-slate-800 text-xs text-slate-500">
+              <div class="flex items-center space-x-2">
+                <span class="w-3 h-3 rounded-full bg-rose-500/80 inline-block"></span>
+                <span class="w-3 h-3 rounded-full bg-amber-500/80 inline-block"></span>
+                <span class="w-3 h-3 rounded-full bg-emerald-500/80 inline-block"></span>
+                <span id="terminal-stream-status" class="ml-2 font-mono text-[11px] text-slate-400">Stream Disconnected</span>
+              </div>
+              <div class="font-mono text-[11px]" id="terminal-run-info">No Active Session</div>
+            </div>
+
+            <pre id="terminal-body" class="flex-1 overflow-y-auto font-mono text-xs text-slate-200 leading-relaxed whitespace-pre-wrap select-text p-2">Select a notebook execution from the dropdown above to stream output in real-time or view logs.</pre>
+          </div>
+        </section>
+
+
+        <!-- ============================================== -->
+        <!-- TAB 5: OUTPUT FILES EXPLORER                  -->
+        <!-- ============================================== -->
+        <section id="tab-files" class="hidden space-y-6">
+          <div class="glass-card rounded-2xl p-6 border border-[#222d4a] space-y-4">
+            <div class="flex flex-wrap items-center justify-between gap-4">
+              <div class="flex items-center space-x-4 flex-1 min-w-[300px]">
+                <label class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Select Run:</label>
+                <select id="files-run-select" onchange="handleFilesRunSelect(event)" class="bg-[#0d121f] border border-[#222d4a] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500 flex-1">
+                  <option value="">-- Select run to inspect output files --</option>
+                </select>
+              </div>
+
+              <div class="flex items-center space-x-3">
+                <button onclick="pullRemoteFiles()" id="btn-pull-files" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 border border-amber-500/40 transition">
+                  <i data-lucide="cloud-download" class="w-4 h-4"></i>
+                  <span>Pull Output Files from Kaggle</span>
+                </button>
+                <button onclick="downloadAllFilesZip()" id="btn-zip-files" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 border border-blue-500/40 transition">
+                  <i data-lucide="archive" class="w-4 h-4"></i>
+                  <span>Download All as ZIP</span>
+                </button>
+              </div>
+            </div>
+
+            <!-- Output Files Table -->
+            <div class="glass-panel rounded-xl overflow-hidden mt-4">
+              <table class="w-full text-left text-sm text-slate-300">
+                <thead class="bg-[#0e1424] text-xs uppercase font-semibold text-slate-400 border-b border-[#222d4a]">
+                  <tr>
+                    <th class="px-6 py-3.5">Filename</th>
+                    <th class="px-6 py-3.5">Size</th>
+                    <th class="px-6 py-3.5">Type</th>
+                    <th class="px-6 py-3.5 text-right">Download</th>
+                  </tr>
+                </thead>
+                <tbody id="files-table-body" class="divide-y divide-[#1e293b]">
+                  <tr>
+                    <td colspan="4" class="px-6 py-8 text-center text-slate-500">Select a notebook run to view generated output artifacts and files.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+
+        <!-- ============================================== -->
+        <!-- TAB 6: RUN CATALOG & HISTORY                  -->
+        <!-- ============================================== -->
+        <section id="tab-history" class="hidden space-y-4">
+          <div class="glass-panel rounded-2xl overflow-hidden border border-[#222d4a]">
+            <table class="w-full text-left text-sm text-slate-300">
+              <thead class="bg-[#0e1424] text-xs uppercase font-semibold text-slate-400 border-b border-[#222d4a]">
+                <tr>
+                  <th class="px-6 py-3.5">Notebook Title & Link</th>
+                  <th class="px-6 py-3.5">Account</th>
+                  <th class="px-6 py-3.5">Accelerator</th>
+                  <th class="px-6 py-3.5">Started At</th>
+                  <th class="px-6 py-3.5">Status</th>
+                  <th class="px-6 py-3.5 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="history-table-body" class="divide-y divide-[#1e293b]">
+                <tr>
+                  <td colspan="6" class="px-6 py-8 text-center text-slate-500">Loading execution history...</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+
+        <!-- ============================================== -->
+        <!-- TAB 7: SETTINGS & TELEGRAM BOT                -->
+        <!-- ============================================== -->
+        <section id="tab-settings" class="hidden space-y-6">
+          <div class="max-w-3xl mx-auto glass-panel rounded-2xl p-8 border border-[#222d4a] space-y-6">
+            <div class="border-b border-[#1e293b] pb-5">
+              <h3 class="text-lg font-bold text-white flex items-center space-x-2">
+                <i data-lucide="send" class="w-5 h-5 text-sky-400"></i>
+                <span>Telegram Bot & 12-Hour Alert Notification Channel</span>
+              </h3>
+              <p class="text-xs text-slate-400 mt-1">Configure your Telegram Bot token and Channel ID to receive alerts when runs start, reach the 11h warning, or hit the 12h cutoff limit.</p>
+            </div>
+
+            <form onsubmit="handleSaveTelegramSettings(event)" class="space-y-5">
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Telegram Bot Token</label>
+                <input type="text" id="settings-bot-token" placeholder="e.g. 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500 font-mono">
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Telegram Chat / Channel ID</label>
+                <input type="text" id="settings-chat-id" placeholder="e.g. -1001234567890 or @your_channel" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500 font-mono">
+              </div>
+
+              <div class="flex items-center justify-between pt-4">
+                <button type="button" onclick="sendTestTelegramMessage()" class="inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-slate-800 text-sky-400 hover:bg-slate-700 border border-slate-700 transition">
+                  <i data-lucide="bell-ring" class="w-4 h-4"></i>
+                  <span>Send Test Notification</span>
+                </button>
+
+                <button type="submit" class="inline-flex items-center space-x-2 px-6 py-2.5 rounded-xl text-xs font-bold bg-sky-600 hover:bg-sky-500 text-white transition shadow-lg shadow-sky-600/25">
+                  <i data-lucide="save" class="w-4 h-4"></i>
+                  <span>Save Configuration</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- Add Account Modal -->
+  <div id="modal-add-account" class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center hidden p-4">
+    <div class="glass-card max-w-lg w-full rounded-2xl p-6 border border-[#222d4a] shadow-2xl">
+      <div class="flex items-center justify-between border-b border-[#1e293b] pb-4 mb-4">
+        <h3 class="text-base font-bold text-white flex items-center space-x-2">
+          <i data-lucide="user-plus" class="w-5 h-5 text-cyan-400"></i>
+          <span>Add Kaggle Account</span>
+        </h3>
+        <button onclick="closeAddAccountModal()" class="text-slate-400 hover:text-white">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <form onsubmit="handleAddAccountSubmit(event)" class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Kaggle Access Token / API Key</label>
+          <textarea id="modal-api-key" required rows="4" placeholder="Paste your Kaggle access_token or kaggle.json content here..." class="w-full font-mono text-xs bg-[#0d121f] border border-[#222d4a] rounded-xl p-3 text-white focus:outline-none focus:border-cyan-500"></textarea>
+          <p class="text-[11px] text-slate-500 mt-1">Found in Kaggle Settings -> API -> Create New Token / Access Token.</p>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Custom Username (Optional)</label>
+          <input type="text" id="modal-username" placeholder="Leave empty for auto-discovery" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2 text-xs text-white focus:outline-none focus:border-cyan-500">
+        </div>
+
+        <div class="flex justify-end space-x-3 pt-2">
+          <button type="button" onclick="closeAddAccountModal()" class="px-4 py-2 text-xs font-medium text-slate-400 hover:text-white">Cancel</button>
+          <button type="submit" class="px-5 py-2 text-xs font-bold bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl shadow-lg shadow-cyan-600/25">Add & Authenticate</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="/static/js/app.js"></script>
+  <script src="/static/js/dashboard.js"></script>
+  <script src="/static/js/runner.js"></script>
+  <script src="/static/js/distributed.js"></script>
+  <script src="/static/js/terminal.js"></script>
+  <script src="/static/js/files.js"></script>
+  <script src="/static/js/settings.js"></script>
+  <script>
+    // Initialize Lucide icons on page load
+    document.addEventListener('DOMContentLoaded', () => {
+      lucide.createIcons();
+    });
+  </script>
+</body>
+</html>
