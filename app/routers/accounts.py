@@ -1,24 +1,28 @@
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from app.services.account_manager import AccountManager
-from app.services.ops_tracker import tracker
-from app.database import get_all_accounts, get_active_runs
+from services.account_manager import AccountManager
+from services.ops_tracker import tracker
+from database import get_all_accounts, get_active_runs
 
 router = APIRouter(prefix="/api/accounts", tags=["Accounts"])
+
 
 class AddAccountRequest(BaseModel):
     api_key: str
     username: Optional[str] = None
 
+
 def _mask_key(key: str) -> str:
     return key[:6] + "..." + key[-4:] if len(key) > 10 else "***"
+
 
 def _sanitize_account(acc: Dict[str, Any]) -> Dict[str, Any]:
     acc_copy = dict(acc)
     acc_copy["api_key_masked"] = _mask_key(acc.get("api_key", ""))
     acc_copy.pop("api_key", None)
     return acc_copy
+
 
 def _account_quota_left(acc: Dict[str, Any]) -> tuple:
     last_q = acc.get("last_quota") or {}
@@ -40,11 +44,12 @@ def _account_quota_left(acc: Dict[str, Any]) -> tuple:
         tpu_left = 0.0
     return (gpu_left, tpu_left)
 
+
 @router.get("")
 async def list_accounts():
     accounts = get_all_accounts()
     active_runs = get_active_runs()
-    
+
     # Map active runs to accounts
     active_by_user = {}
     for r in active_runs:
@@ -62,22 +67,28 @@ async def list_accounts():
 
     # Sort descending by quota left: GPU hours first, then TPU hours, then username
     results.sort(
-        key=lambda a: (_account_quota_left(a)[0], _account_quota_left(a)[1], a.get("username", "")),
-        reverse=True
+        key=lambda a: (
+            _account_quota_left(a)[0],
+            _account_quota_left(a)[1],
+            a.get("username", ""),
+        ),
+        reverse=True,
     )
 
     return {"success": True, "accounts": results}
+
 
 @router.post("")
 async def add_account(payload: AddAccountRequest):
     if not payload.api_key.strip():
         raise HTTPException(status_code=400, detail="API Key / Token is required")
-    
+
     try:
         result = await AccountManager.add_account(payload.api_key, payload.username)
         return {"success": True, "account": result}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.delete("/{username}")
 async def remove_account(username: str):
@@ -86,6 +97,7 @@ async def remove_account(username: str):
         return {"success": True, "message": f"Account {username} removed successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.post("/refresh")
 async def refresh_all():
@@ -98,6 +110,7 @@ async def refresh_all():
     finally:
         tracker.end("refresh_quotas")
 
+
 @router.post("/{username}/refresh")
 async def refresh_single(username: str):
     tracker.begin("refresh_quotas")
@@ -109,12 +122,14 @@ async def refresh_single(username: str):
     finally:
         tracker.end("refresh_quotas")
 
+
 @router.get("/{username}/debug")
 async def debug_account(username: str):
     """Debug fallback usernames like kaggle_0694f485 - shows real Kaggle username via JWT and via CLI."""
-    from app.database import get_account_by_username
-    from app.services.account_manager import AccountManager
+    from database import get_account_by_username
+    from services.account_manager import AccountManager
     import base64, json as _json
+
     acc = get_account_by_username(username)
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
@@ -128,7 +143,11 @@ async def debug_account(username: str):
             decoded = base64.urlsafe_b64decode(payload)
             claims = _json.loads(decoded)
             for field in ["username", "user_name", "sub", "preferred_username"]:
-                if field in claims and isinstance(claims[field], str) and not claims[field].isdigit():
+                if (
+                    field in claims
+                    and isinstance(claims[field], str)
+                    and not claims[field].isdigit()
+                ):
                     jwt_username = claims[field]
                     break
     except Exception:
@@ -139,6 +158,7 @@ async def debug_account(username: str):
     try:
         # Use a temp id to avoid colliding with real account
         import uuid
+
         temp_id = f"debug_{uuid.uuid4().hex[:4]}"
         cli_username = await AccountManager.fetch_username_for_key(temp_id, key)
         AccountManager._cleanup_temp_dir(temp_id)

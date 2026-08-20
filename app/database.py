@@ -2,11 +2,13 @@ import sqlite3
 import json
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
-from app.config import DB_PATH
+from config import DB_PATH
+
 
 def utcnow_iso() -> str:
     """Timezone-aware UTC timestamp (ISO-8601 with Z suffix, parseable by JS Date)."""
     return datetime.now(timezone.utc).isoformat()
+
 
 def get_db_connection() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=30)
@@ -14,11 +16,12 @@ def get_db_connection() -> sqlite3.Connection:
     conn.execute("PRAGMA busy_timeout = 30000")
     return conn
 
+
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
-    
+
     # Accounts table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
@@ -30,7 +33,7 @@ def init_db():
             last_checked TEXT
         )
     """)
-    
+
     # Runs history table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS runs (
@@ -61,7 +64,7 @@ def init_db():
         )
         """)
 
-        # Lightweight migrations for pre-existing databases
+    # Lightweight migrations for pre-existing databases
     def _ensure_column(table: str, column_def: str):
         col_name = column_def.split()[0]
         cursor.execute(f"PRAGMA table_info({table})")
@@ -71,7 +74,9 @@ def init_db():
 
     _ensure_column("runs", "output_version INTEGER")
     # Repair rows written before enum-style CLI statuses were normalized
-    cursor.execute("UPDATE runs SET status = 'stopped' WHERE lower(status) LIKE '%cancel%'")
+    cursor.execute(
+        "UPDATE runs SET status = 'stopped' WHERE lower(status) LIKE '%cancel%'"
+    )
 
     # Distributed workloads table
     cursor.execute("""
@@ -85,7 +90,7 @@ def init_db():
             status TEXT DEFAULT 'running'
         )
     """)
-    
+
     # System settings table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
@@ -93,25 +98,32 @@ def init_db():
             value TEXT NOT NULL
         )
     """)
-    
+
     conn.commit()
     conn.close()
 
+
 # Database helper functions
-def save_account(account_id: str, username: str, api_key: str, last_quota: Optional[Dict] = None):
+def save_account(
+    account_id: str, username: str, api_key: str, last_quota: Optional[Dict] = None
+):
     conn = get_db_connection()
     now = utcnow_iso()
     quota_str = json.dumps(last_quota) if last_quota else None
     with conn:
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO accounts (id, username, api_key, created_at, last_quota, last_checked)
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(username) DO UPDATE SET
                 api_key = excluded.api_key,
                 last_quota = excluded.last_quota,
                 last_checked = excluded.last_checked
-        """, (account_id, username, api_key, now, quota_str, now))
+        """,
+            (account_id, username, api_key, now, quota_str, now),
+        )
     conn.close()
+
 
 def get_all_accounts() -> List[Dict[str, Any]]:
     conn = get_db_connection()
@@ -128,9 +140,12 @@ def get_all_accounts() -> List[Dict[str, Any]]:
     conn.close()
     return accounts
 
+
 def get_account_by_username(username: str) -> Optional[Dict[str, Any]]:
     conn = get_db_connection()
-    row = conn.execute("SELECT * FROM accounts WHERE username = ?", (username,)).fetchone()
+    row = conn.execute(
+        "SELECT * FROM accounts WHERE username = ?", (username,)
+    ).fetchone()
     conn.close()
     if row:
         acc = dict(row)
@@ -142,23 +157,33 @@ def get_account_by_username(username: str) -> Optional[Dict[str, Any]]:
         return acc
     return None
 
+
 def delete_account(username: str):
     conn = get_db_connection()
     with conn:
         conn.execute("DELETE FROM accounts WHERE username = ?", (username,))
     conn.close()
 
+
 def update_account_username(old_username: str, new_username: str):
     conn = get_db_connection()
     with conn:
-        conn.execute("UPDATE accounts SET username = ? WHERE username = ?", (new_username, old_username))
-        conn.execute("UPDATE runs SET account_username = ? WHERE account_username = ?", (new_username, old_username))
+        conn.execute(
+            "UPDATE accounts SET username = ? WHERE username = ?",
+            (new_username, old_username),
+        )
+        conn.execute(
+            "UPDATE runs SET account_username = ? WHERE account_username = ?",
+            (new_username, old_username),
+        )
     conn.close()
+
 
 def create_run_record(run_data: Dict[str, Any]):
     conn = get_db_connection()
     with conn:
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO runs (
                 id, account_username, kernel_slug, kernel_ref, title, code_file,
                 accelerator, enable_internet, is_trial, timeout_seconds, status,
@@ -170,30 +195,48 @@ def create_run_record(run_data: Dict[str, Any]):
                 :status_message, :start_time, :kaggle_url, :workload_id,
                 :shard_index, :total_shards, :log_file
             )
-        """, run_data)
+        """,
+            run_data,
+        )
     conn.close()
 
-def update_run_status(run_id: str, status: str, status_message: str = "", end_time: Optional[str] = None):
+
+def update_run_status(
+    run_id: str, status: str, status_message: str = "", end_time: Optional[str] = None
+):
     conn = get_db_connection()
     with conn:
         if end_time:
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE runs SET status = ?, status_message = ?, end_time = ? WHERE id = ?
-            """, (status, status_message, end_time, run_id))
+            """,
+                (status, status_message, end_time, run_id),
+            )
         else:
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE runs SET status = ?, status_message = ? WHERE id = ?
-            """, (status, status_message, run_id))
+            """,
+                (status, status_message, run_id),
+            )
     conn.close()
 
+
 def update_run_telegram_flag(run_id: str, flag_name: str, value: int = 1):
-    allowed_flags = {"telegram_notified_start", "telegram_notified_11h", "telegram_notified_12h", "telegram_notified_end"}
+    allowed_flags = {
+        "telegram_notified_start",
+        "telegram_notified_11h",
+        "telegram_notified_12h",
+        "telegram_notified_end",
+    }
     if flag_name not in allowed_flags:
         raise ValueError(f"Invalid flag name: {flag_name}")
     conn = get_db_connection()
     with conn:
         conn.execute(f"UPDATE runs SET {flag_name} = ? WHERE id = ?", (value, run_id))
     conn.close()
+
 
 def set_run_output_version(run_id: str, version: int):
     """Pins which Kaggle VERSION holds this run's real output.
@@ -204,22 +247,31 @@ def set_run_output_version(run_id: str, version: int):
     """
     conn = get_db_connection()
     with conn:
-        conn.execute("UPDATE runs SET output_version = ? WHERE id = ?", (int(version), run_id))
+        conn.execute(
+            "UPDATE runs SET output_version = ? WHERE id = ?", (int(version), run_id)
+        )
     conn.close()
+
 
 def get_all_runs(limit: int = 100) -> List[Dict[str, Any]]:
     conn = get_db_connection()
-    rows = conn.execute("SELECT * FROM runs ORDER BY start_time DESC LIMIT ?", (limit,)).fetchall()
+    rows = conn.execute(
+        "SELECT * FROM runs ORDER BY start_time DESC LIMIT ?", (limit,)
+    ).fetchall()
     runs = [dict(r) for r in rows]
     conn.close()
     return runs
 
+
 def get_active_runs() -> List[Dict[str, Any]]:
     conn = get_db_connection()
-    rows = conn.execute("SELECT * FROM runs WHERE status IN ('queued', 'running') ORDER BY start_time DESC").fetchall()
+    rows = conn.execute(
+        "SELECT * FROM runs WHERE status IN ('queued', 'running') ORDER BY start_time DESC"
+    ).fetchall()
     runs = [dict(r) for r in rows]
     conn.close()
     return runs
+
 
 def get_run_by_id(run_id: str) -> Optional[Dict[str, Any]]:
     conn = get_db_connection()
@@ -227,18 +279,25 @@ def get_run_by_id(run_id: str) -> Optional[Dict[str, Any]]:
     conn.close()
     return dict(row) if row else None
 
+
 def create_distributed_workload(workload_data: Dict[str, Any]):
     conn = get_db_connection()
     with conn:
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO distributed_workloads (id, title, workload_type, total_units, accounts_used, created_at, status)
             VALUES (:id, :title, :workload_type, :total_units, :accounts_used, :created_at, :status)
-        """, workload_data)
+        """,
+            workload_data,
+        )
     conn.close()
+
 
 def get_all_workloads() -> List[Dict[str, Any]]:
     conn = get_db_connection()
-    rows = conn.execute("SELECT * FROM distributed_workloads ORDER BY created_at DESC").fetchall()
+    rows = conn.execute(
+        "SELECT * FROM distributed_workloads ORDER BY created_at DESC"
+    ).fetchall()
     workloads = []
     for r in rows:
         w = dict(r)
@@ -250,11 +309,16 @@ def get_all_workloads() -> List[Dict[str, Any]]:
     conn.close()
     return workloads
 
+
 def update_workload_status(workload_id: str, status: str):
     conn = get_db_connection()
     with conn:
-        conn.execute("UPDATE distributed_workloads SET status = ? WHERE id = ?", (status, workload_id))
+        conn.execute(
+            "UPDATE distributed_workloads SET status = ? WHERE id = ?",
+            (status, workload_id),
+        )
     conn.close()
+
 
 def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     conn = get_db_connection()
@@ -262,8 +326,12 @@ def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
     conn.close()
     return row["value"] if row else default
 
+
 def set_setting(key: str, value: str):
     conn = get_db_connection()
     with conn:
-        conn.execute("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
     conn.close()

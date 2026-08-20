@@ -27,14 +27,12 @@ A centralized dashboard and FastAPI backend to orchestrate, monitor, and distrib
 
 ## Quick Start
 
-### 1. Activate Environment & Install Dependencies
+### 1. Activate Environment & Install Dependencies using uv
 ```bash
-uv venv
-.venv\Scripts\activate
-uv pip install -r requirements.txt
+uv sync --locked
 ```
 
-### 2. Configure `.env`
+### 2. Configure `.env` (edit .env.example)
 ```env
 # Kaggle access tokens (comma-separated; auto-registered on startup)
 KAGGLE_APIKEYS=your_kaggle_access_token_1,your_kaggle_access_token_2
@@ -46,12 +44,15 @@ APP_AUTH_TOKEN=a-long-random-string
 # Get your numeric ID from @userinfobot, then press START on your bot once.
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_CHAT_ID=123456789
+
+#hf read token for faster model, datasets downloads.
+HF_TOKEN=hf_read_token
 ```
 *(Accounts and Telegram credentials can also be managed directly from the UI — UI values override `.env`.)*
 
 ### 3. Start the Server
 ```bash
-python run.py
+uv run fastapi app/main.py 
 ```
 The server binds to `127.0.0.1:8000` by default (safe). Override with `APP_HOST=0.0.0.0` / `APP_PORT=8000` in `.env` **only if you understand the exposure** — set `APP_AUTH_TOKEN` first.
 

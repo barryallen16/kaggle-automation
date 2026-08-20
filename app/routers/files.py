@@ -9,19 +9,21 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
-from app.services.kaggle_service import KaggleService
-from app.database import get_run_by_id
-from app.config import OUTPUTS_DIR, LOGS_DIR
+from services.kaggle_service import KaggleService
+from database import get_run_by_id
+from config import OUTPUTS_DIR, LOGS_DIR
 
 router = APIRouter(prefix="/api/runs", tags=["Output Files"])
 
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
 
 def _validate_run_id(run_id: str) -> str:
     """Rejects run ids that could escape the outputs directory."""
     if not SAFE_ID_RE.match(run_id or ""):
         raise HTTPException(status_code=400, detail="Invalid run id")
     return run_id
+
 
 def _safe_output_path(run_id: str, filename: str) -> Path:
     """Resolves a user-supplied filename inside the run's output dir, blocking traversal."""
@@ -36,13 +38,16 @@ def _safe_output_path(run_id: str, filename: str) -> Path:
         raise HTTPException(status_code=400, detail="Path traversal blocked")
     return target
 
+
 @router.get("/{run_id}/files")
 async def list_files(run_id: str):
     run = get_run_by_id(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    files = await KaggleService.list_output_files(run["account_username"], run["kernel_ref"])
+    files = await KaggleService.list_output_files(
+        run["account_username"], run["kernel_ref"]
+    )
 
     # Check if files have been downloaded locally
     local_output_dir = OUTPUTS_DIR / run_id
@@ -50,23 +55,27 @@ async def list_files(run_id: str):
     if local_output_dir.exists():
         for f in local_output_dir.rglob("*"):
             if f.is_file():
-                local_files.append({
-                    "name": f.name,
-                    "size": f.stat().st_size,
-                    "rel_path": str(f.relative_to(local_output_dir))
-                })
+                local_files.append(
+                    {
+                        "name": f.name,
+                        "size": f.stat().st_size,
+                        "rel_path": str(f.relative_to(local_output_dir)),
+                    }
+                )
 
     return {
         "success": True,
         "remote_files": files,
         "local_files": local_files,
-        "has_local_download": local_output_dir.exists() and len(local_files) > 0
+        "has_local_download": local_output_dir.exists() and len(local_files) > 0,
     }
+
 
 def _stopped_probe_flag(run: dict) -> bool:
     """Legacy stopped runs have no pinned version: the cancelled run sits
     exactly one version behind the stop-stub that is now 'current'."""
     return run.get("status") == "stopped" and not run.get("output_version")
+
 
 @router.post("/{run_id}/files/pull")
 async def pull_files_from_kaggle(run_id: str):
@@ -75,39 +84,53 @@ async def pull_files_from_kaggle(run_id: str):
         raise HTTPException(status_code=404, detail="Run not found")
 
     try:
-        target_dir, used_version, diagnostics = await KaggleService.download_latest_outputs(
-            run["account_username"], run["kernel_ref"], run_id,
+        (
+            target_dir,
+            used_version,
+            diagnostics,
+        ) = await KaggleService.download_latest_outputs(
+            run["account_username"],
+            run["kernel_ref"],
+            run_id,
             prefer_version=run.get("output_version"),
-            probe_previous_for_stop=_stopped_probe_flag(run)
+            probe_previous_for_stop=_stopped_probe_flag(run),
         )
         # Persist a rescued legacy pin so future pulls skip probing
         if target_dir and used_version and not run.get("output_version"):
-            from app.database import set_run_output_version
+            from database import set_run_output_version
+
             set_run_output_version(run_id, used_version)
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Kaggle output download failed: {e}")
+        raise HTTPException(
+            status_code=502, detail=f"Kaggle output download failed: {e}"
+        )
 
     if target_dir is None:
         # Surface the actual reason in the response body so the UI can show
         # the operator why the versioned pull found nothing.
         hint = (" | ".join(diagnostics)) if diagnostics else "no diagnostics captured"
-        raise HTTPException(status_code=502, detail=f"Kaggle output download failed: {hint}")
+        raise HTTPException(
+            status_code=502, detail=f"Kaggle output download failed: {hint}"
+        )
 
     downloaded = []
     for f in target_dir.rglob("*"):
         if f.is_file():
-            downloaded.append({
-                "name": f.name,
-                "size": f.stat().st_size,
-                "path": str(f.relative_to(target_dir))
-            })
+            downloaded.append(
+                {
+                    "name": f.name,
+                    "size": f.stat().st_size,
+                    "path": str(f.relative_to(target_dir)),
+                }
+            )
 
     return {
         "success": True,
         "message": f"Downloaded {len(downloaded)} file(s) from Kaggle"
-                   + (f" (version {used_version} snapshot)." if used_version else "."),
-        "files": downloaded
+        + (f" (version {used_version} snapshot)." if used_version else "."),
+        "files": downloaded,
     }
+
 
 @router.get("/{run_id}/files/download/{filename:path}")
 async def download_single_file(run_id: str, filename: str):
@@ -119,17 +142,22 @@ async def download_single_file(run_id: str, filename: str):
             raise HTTPException(status_code=404, detail="Run not found")
         try:
             target_dir, _ver, _diag = await KaggleService.download_latest_outputs(
-                run["account_username"], run["kernel_ref"], run_id,
+                run["account_username"],
+                run["kernel_ref"],
+                run_id,
                 prefer_version=run.get("output_version"),
-                probe_previous_for_stop=_stopped_probe_flag(run)
+                probe_previous_for_stop=_stopped_probe_flag(run),
             )
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Kaggle output download failed: {e}")
+            raise HTTPException(
+                status_code=502, detail=f"Kaggle output download failed: {e}"
+            )
 
         if not local_file.exists():
             raise HTTPException(status_code=404, detail="File not found on server")
 
     return FileResponse(path=str(local_file), filename=local_file.name)
+
 
 @router.get("/{run_id}/files/download-zip")
 async def download_all_zip(run_id: str):
@@ -142,17 +170,25 @@ async def download_all_zip(run_id: str):
     if not target_dir.exists() or not any(target_dir.iterdir()):
         try:
             pulled, _ver, _diag = await KaggleService.download_latest_outputs(
-                run["account_username"], run["kernel_ref"], run_id,
+                run["account_username"],
+                run["kernel_ref"],
+                run_id,
                 prefer_version=run.get("output_version"),
-                probe_previous_for_stop=_stopped_probe_flag(run)
+                probe_previous_for_stop=_stopped_probe_flag(run),
             )
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Kaggle output download failed: {e}")
-        if pulled is None and (not target_dir.exists() or not any(target_dir.iterdir())):
+            raise HTTPException(
+                status_code=502, detail=f"Kaggle output download failed: {e}"
+            )
+        if pulled is None and (
+            not target_dir.exists() or not any(target_dir.iterdir())
+        ):
             raise HTTPException(status_code=502, detail="Kaggle output download failed")
 
     if not target_dir.exists() or not any(target_dir.iterdir()):
-        raise HTTPException(status_code=404, detail="No output files available to download")
+        raise HTTPException(
+            status_code=404, detail="No output files available to download"
+        )
 
     # Stream from a temp file instead of buffering the whole archive in RAM
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
@@ -174,8 +210,9 @@ async def download_all_zip(run_id: str):
         path=tmp.name,
         media_type="application/zip",
         filename=f"{safe_slug}_outputs.zip",
-        background=BackgroundTask(os.unlink, tmp.name)
+        background=BackgroundTask(os.unlink, tmp.name),
     )
+
 
 # ------------------------------------------------------------------
 # Local output deletion (keeps remote Kaggle artifacts untouched)
@@ -192,6 +229,7 @@ async def delete_single_output_file(run_id: str, filename: str):
         raise HTTPException(status_code=500, detail=f"Could not delete file: {e}")
     return {"success": True, "message": f"Deleted {filename} from local outputs."}
 
+
 @router.delete("/{run_id}/files")
 async def delete_all_output_files(run_id: str):
     """Deletes the entire local output folder for a run (Kaggle copy untouched)."""
@@ -202,9 +240,15 @@ async def delete_all_output_files(run_id: str):
 
     target_dir = OUTPUTS_DIR / run_id
     if not target_dir.exists():
-        raise HTTPException(status_code=404, detail="No local output files stored for this run")
+        raise HTTPException(
+            status_code=404, detail="No local output files stored for this run"
+        )
     shutil.rmtree(target_dir, ignore_errors=True)
-    return {"success": True, "message": f"Deleted all local output files for run {run_id}."}
+    return {
+        "success": True,
+        "message": f"Deleted all local output files for run {run_id}.",
+    }
+
 
 # ------------------------------------------------------------------
 # Global clear: wipe all local outputs and/or logs (server storage only)
@@ -224,7 +268,10 @@ async def clear_all_outputs():
                     count += 1
             except OSError:
                 continue
-    return {"success": True, "message": f"Cleared {count} output folder(s)/file(s) from server."}
+    return {
+        "success": True,
+        "message": f"Cleared {count} output folder(s)/file(s) from server.",
+    }
 
 
 @router.delete("/files/clear-all-logs")
@@ -261,8 +308,10 @@ class MergeItem(BaseModel):
     run_id: str
     filename: str
 
+
 class MergeRequest(BaseModel):
     items: List[MergeItem]
+
 
 @router.post("/files/merge-download")
 async def merge_selected_files(request: MergeRequest):
@@ -273,7 +322,9 @@ async def merge_selected_files(request: MergeRequest):
     The output extension follows the most common suffix among inputs.
     """
     if not request.items:
-        raise HTTPException(status_code=400, detail="Cart is empty - select at least one file.")
+        raise HTTPException(
+            status_code=400, detail="Cart is empty - select at least one file."
+        )
 
     # 1. Resolve every selected file locally; auto-pull missing runs from Kaggle.
     resolved: List[Path] = []
@@ -285,21 +336,33 @@ async def merge_selected_files(request: MergeRequest):
             seen_runs.add(item.run_id)
             run = get_run_by_id(_validate_run_id(item.run_id))
             if not run:
-                raise HTTPException(status_code=404, detail=f"Run {item.run_id} not found")
+                raise HTTPException(
+                    status_code=404, detail=f"Run {item.run_id} not found"
+                )
             try:
                 pulled, _ver, _diag = await KaggleService.download_latest_outputs(
-                    run["account_username"], run["kernel_ref"], item.run_id,
+                    run["account_username"],
+                    run["kernel_ref"],
+                    item.run_id,
                     prefer_version=run.get("output_version"),
-                    probe_previous_for_stop=_stopped_probe_flag(run)
+                    probe_previous_for_stop=_stopped_probe_flag(run),
                 )
             except Exception as e:
-                raise HTTPException(status_code=502, detail=f"Output pull for run {item.run_id} failed: {e}")
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Output pull for run {item.run_id} failed: {e}",
+                )
             if pulled is None:
                 pull_failed_runs.add(item.run_id)
         if not path.is_file():
             if item.run_id in pull_failed_runs:
-                raise HTTPException(status_code=502, detail=f"Output pull for run {item.run_id} failed")
-            raise HTTPException(status_code=404, detail=f"File '{item.filename}' not found in run {item.run_id}")
+                raise HTTPException(
+                    status_code=502, detail=f"Output pull for run {item.run_id} failed"
+                )
+            raise HTTPException(
+                status_code=404,
+                detail=f"File '{item.filename}' not found in run {item.run_id}",
+            )
         resolved.append(path)
 
     # 2. Output name: most common input suffix (sanitized), else .bin
@@ -329,5 +392,5 @@ async def merge_selected_files(request: MergeRequest):
         path=tmp.name,
         filename=f"merged{ext}",
         media_type=media_type,
-        background=BackgroundTask(os.unlink, tmp.name)
+        background=BackgroundTask(os.unlink, tmp.name),
     )

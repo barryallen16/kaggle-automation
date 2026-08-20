@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.services.ops_tracker import tracker
+from services.ops_tracker import tracker
 
 router = APIRouter(prefix="/api/ops", tags=["Operations"])
 

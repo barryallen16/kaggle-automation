@@ -40,10 +40,12 @@ def setUpModule():
     os.environ["INTER_PUSH_STAGGER_SECONDS"] = "0"
 
     import app.services.kaggle_service as ks
+
     ks.get_kaggle_cli_path = lambda: _make_stub_cli()
 
     async def _noop_stream(*a, **k):
         return
+
     ks.KaggleService.start_background_log_stream = staticmethod(_noop_stream)
 
 
@@ -60,6 +62,7 @@ def _fresh():
     import app.config as cfg
     import app.database as db
     import app.services.kaggle_service as ks
+
     db_file = cfg.DB_PATH
     for suffix in ("", "-wal", "-shm"):
         try:
@@ -73,6 +76,7 @@ def _fresh():
 
     async def _noop_stream(*a, **k):
         return
+
     ks.KaggleService.start_background_log_stream = staticmethod(_noop_stream)
     db.init_db()
     return db
@@ -81,10 +85,22 @@ def _fresh():
 def _seed_account(db, username, used, limit, error=False):
     """Seeds an accounts row with a GPU quota (unit = hours), mirroring the
     shape AccountManager.fetch_quota stores via save_account()."""
-    quota = {"gpu": {"name": "GPU (T4 x 2)", "used": used, "limit": limit,
-                     "unit": "hours", "percent": round(used / limit * 100, 1)},
-             "tpu": {"name": "TPU VM v3-8", "used": 0, "limit": 20,
-                     "unit": "hours", "percent": 0}}
+    quota = {
+        "gpu": {
+            "name": "GPU (T4 x 2)",
+            "used": used,
+            "limit": limit,
+            "unit": "hours",
+            "percent": round(used / limit * 100, 1),
+        },
+        "tpu": {
+            "name": "TPU VM v3-8",
+            "used": 0,
+            "limit": 20,
+            "unit": "hours",
+            "percent": 0,
+        },
+    }
     if error:
         quota["error"] = "quota lookup timed out"
     db.save_account(f"id_{username}", username, f"key_{username}", quota)
@@ -92,9 +108,13 @@ def _seed_account(db, username, used, limit, error=False):
 
 def _gpu_kwargs(title="CapTest", account="accA", **over):
     kw = dict(
-        base_title=title, code_content='print("x")', filename="main.py",
-        accounts=[account], total_items=10, accelerator="nvidia-tesla-t4-x2",
-        sessions_per_account=1
+        base_title=title,
+        code_content='print("x")',
+        filename="main.py",
+        accounts=[account],
+        total_items=10,
+        accelerator="nvidia-tesla-t4-x2",
+        sessions_per_account=1,
     )
     kw.update(over)
     return kw
@@ -102,6 +122,7 @@ def _gpu_kwargs(title="CapTest", account="accA", **over):
 
 def asyncio_run(coro):
     import asyncio
+
     return asyncio.run(coro)
 
 
@@ -109,8 +130,11 @@ class TestBudgetMath(unittest.TestCase):
     """Pure function: no DB, no env - just the arithmetic."""
 
     def _compute(self, used, limit, concurrent):
-        from app.services.account_manager import AccountManager
-        return AccountManager.compute_gpu_runtime_budget_minutes(used, limit, concurrent)
+        from services.account_manager import AccountManager
+
+        return AccountManager.compute_gpu_runtime_budget_minutes(
+            used, limit, concurrent
+        )
 
     def test_split_remaining_across_concurrent_sessions(self):
         # 10h left: alone = 530 min (600 - 60 pre-loop - 10 slop); shared = 230.
@@ -121,11 +145,11 @@ class TestBudgetMath(unittest.TestCase):
     def test_never_caps_when_remaining_is_at_least_12h_per_session(self):
         # Kaggle's 12h session cap ends the run first (auto-stop publishes
         # output), so a >=12h runway means the quota can never bind.
-        self.assertIsNone(self._compute(0, 30, 1))    # 30h / 1
-        self.assertIsNone(self._compute(0, 30, 2))    # 15h / 2
-        self.assertIsNone(self._compute(1, 30, 1))    # 29h / 1
-        self.assertIsNone(self._compute(17, 30, 1))   # 13h / 1
-        self.assertIsNone(self._compute(18, 30, 1))   # 12h exactly
+        self.assertIsNone(self._compute(0, 30, 1))  # 30h / 1
+        self.assertIsNone(self._compute(0, 30, 2))  # 15h / 2
+        self.assertIsNone(self._compute(1, 30, 1))  # 29h / 1
+        self.assertIsNone(self._compute(17, 30, 1))  # 13h / 1
+        self.assertIsNone(self._compute(18, 30, 1))  # 12h exactly
         # a full fresh 30h quota split across 3 sessions = 10h < 12h -> caps
         self.assertEqual(self._compute(0, 30, 3), 530)
 
@@ -141,7 +165,7 @@ class TestBudgetMath(unittest.TestCase):
         self.assertEqual(self._compute(18.01, 30, 1), 649)
 
     def test_spent_or_tiny_remaining_no_cap(self):
-        self.assertIsNone(self._compute(30, 30, 1))    # fully spent
+        self.assertIsNone(self._compute(30, 30, 1))  # fully spent
         self.assertIsNone(self._compute(29.6, 30, 2))  # 0.4h/2 - below min useful
         self.assertIsNone(self._compute(29.5, 30, 1))  # 0.5h - allowance eats it all
         self.assertIsNone(self._compute(29.2, 30, 1))  # 0.8h = 48 - 70 < 0
@@ -162,18 +186,24 @@ class TestBudgetMath(unittest.TestCase):
     def test_budget_never_exceeds_scripts_11h_ceiling(self):
         # For any cappable runway (< 12h), budget must stay < 660 so the env
         # override never lengthens the scripts' own 11h self-finish default.
-        from app.services.account_manager import AccountManager
+        from services.account_manager import AccountManager
+
         for used_tenths in range(1801, 3000, 37):  # used 18.01h .. 30h
             used = used_tenths / 100.0
             for burners in (1, 2, 3):
-                budget = AccountManager.compute_gpu_runtime_budget_minutes(used, 30, burners)
+                budget = AccountManager.compute_gpu_runtime_budget_minutes(
+                    used, 30, burners
+                )
                 if budget is not None:
                     self.assertLess(budget, 660, f"used={used} burners={burners}")
                     # and the script's flush must precede quota death for any
                     # cold start up to the 60-min allowance:
                     remaining = (30 - used) * 60.0 / burners  # runway minutes
-                    self.assertLess(60 + budget, remaining,
-                                    f"used={used} burners={burners} budget={budget}")
+                    self.assertLess(
+                        60 + budget,
+                        remaining,
+                        f"used={used} burners={burners} budget={budget}",
+                    )
 
 
 class TestTimingMatrix(unittest.TestCase):
@@ -181,7 +211,7 @@ class TestTimingMatrix(unittest.TestCase):
     the kernel self-finishes BEFORE quota death (leaving >= 1 min)."""
 
     def test_exit_always_precedes_quota_death(self):
-        from app.services.account_manager import AccountManager, PRE_LOOP_ALLOWANCE_MINUTES
+        from services.account_manager import AccountManager, PRE_LOOP_ALLOWANCE_MINUTES
 
         final_item_min = 2  # worst-case one item still finishing when the deadline hits
         cold_starts = [0, 5, 11, 30, 45, 59.9]  # measured ~11 min + queue on top
@@ -193,7 +223,9 @@ class TestTimingMatrix(unittest.TestCase):
                 continue
             for burners in (1, 2, 3):
                 runway_min = remaining_h * 60.0 / burners
-                budget = AccountManager.compute_gpu_runtime_budget_minutes(used, 30, burners)
+                budget = AccountManager.compute_gpu_runtime_budget_minutes(
+                    used, 30, burners
+                )
                 if budget is None:
                     # No cap must ONLY happen when the quota can't bind before
                     # the 12h session cap (>= 720 min runway) or when even the
@@ -204,26 +236,37 @@ class TestTimingMatrix(unittest.TestCase):
                 checked_capped += 1
                 for L in cold_starts:
                     self.assertLessEqual(
-                        L, PRE_LOOP_ALLOWANCE_MINUTES,
-                        "test assumes cold starts within the 60-min allowance")
+                        L,
+                        PRE_LOOP_ALLOWANCE_MINUTES,
+                        "test assumes cold starts within the 60-min allowance",
+                    )
                     exit_session_min = L + budget + final_item_min
                     self.assertLess(
-                        exit_session_min, runway_min,
+                        exit_session_min,
+                        runway_min,
                         f"remaining={remaining_h}h burners={burners} L={L}min "
                         f"budget={budget}: exit {exit_session_min:.1f}min "
-                        f"not before quota death {runway_min:.1f}min")
-        self.assertGreater(checked_capped, 500, "matrix must meaningfully exercise caps")
-        self.assertGreater(checked_uncapped, 500, "matrix must exercise the no-cap zone")
+                        f"not before quota death {runway_min:.1f}min",
+                    )
+        self.assertGreater(
+            checked_capped, 500, "matrix must meaningfully exercise caps"
+        )
+        self.assertGreater(
+            checked_uncapped, 500, "matrix must exercise the no-cap zone"
+        )
 
 
 def _age_account(db, username, minutes):
     """Backdates an accounts row's last_checked so it reads as stale."""
     from datetime import datetime, timezone, timedelta
-    from app.database import get_db_connection
+    from database import get_db_connection
+
     old = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
     conn = get_db_connection()
     with conn:
-        conn.execute("UPDATE accounts SET last_checked = ? WHERE username = ?", (old, username))
+        conn.execute(
+            "UPDATE accounts SET last_checked = ? WHERE username = ?", (old, username)
+        )
     conn.close()
 
 
@@ -232,17 +275,23 @@ def _patch_refresh(testcase, fake):
     The fake is a staticmethod: callers invoke cls.refresh_account_quota(username),
     and a classmethod would pass cls positionally."""
     import app.services.account_manager as am
+
     orig = am.AccountManager.refresh_account_quota.__func__
     am.AccountManager.refresh_account_quota = staticmethod(fake)
-    testcase.addCleanup(setattr, am.AccountManager, "refresh_account_quota", classmethod(orig))
+    testcase.addCleanup(
+        setattr, am.AccountManager, "refresh_account_quota", classmethod(orig)
+    )
 
 
 class TestAccountLookup(unittest.TestCase):
     """DB-backed lookup: fresh rows never hit the CLI; stale rows refresh once."""
 
     def _budget(self, username, concurrent):
-        from app.services.account_manager import AccountManager
-        return asyncio_run(AccountManager.gpu_runtime_budget_minutes(username, concurrent))
+        from services.account_manager import AccountManager
+
+        return asyncio_run(
+            AccountManager.gpu_runtime_budget_minutes(username, concurrent)
+        )
 
     def test_missing_account_no_cap(self):
         db = _fresh()
@@ -257,6 +306,7 @@ class TestAccountLookup(unittest.TestCase):
         db = _fresh()
         _seed_account(db, "accA", used=20, limit=30)
         import app.services.account_manager as am
+
         saved = am.QUOTA_CAP_ENABLED
         try:
             am.QUOTA_CAP_ENABLED = False
@@ -274,6 +324,7 @@ class TestAccountLookup(unittest.TestCase):
         async def boom(*a, **k):
             calls.append(a)
             raise AssertionError("fresh row must not trigger a live quota refresh")
+
         _patch_refresh(self, boom)
         self.assertEqual(self._budget("accA", 1), 530)
         self.assertEqual(calls, [])
@@ -288,8 +339,11 @@ class TestAccountLookup(unittest.TestCase):
 
         async def fake_refresh(username):
             calls.append(username)
-            return {"gpu": {"used": 25, "limit": 30, "unit": "hours", "percent": 83.3},
-                    "tpu": {"used": 0, "limit": 20, "unit": "hours", "percent": 0}}
+            return {
+                "gpu": {"used": 25, "limit": 30, "unit": "hours", "percent": 83.3},
+                "tpu": {"used": 0, "limit": 20, "unit": "hours", "percent": 0},
+            }
+
         _patch_refresh(self, fake_refresh)
         self.assertEqual(self._budget("accA", 1), 230)  # 5h left -> 300 - 70
         self.assertEqual(calls, ["accA"])
@@ -303,6 +357,7 @@ class TestAccountLookup(unittest.TestCase):
 
         async def boom(*a, **k):
             raise RuntimeError("kaggle CLI down")
+
         _patch_refresh(self, boom)
         self.assertEqual(self._budget("accA", 1), 530)  # stored 10h-left figure
 
@@ -316,6 +371,7 @@ class TestAccountLookup(unittest.TestCase):
         async def boom(*a, **k):
             calls.append(a)
             raise AssertionError("14-min-old row must not trigger a live refresh")
+
         _patch_refresh(self, boom)
         self.assertEqual(self._budget("accA", 1), 530)
         self.assertEqual(calls, [])
@@ -329,7 +385,9 @@ def _patch_push(testcase, module_obj):
     so the cls binding survives for later callers."""
     KS = module_obj.KaggleService
     bound = KS.push_kernel
-    orig_fn = getattr(bound, "__func__", None) or bound  # bound method -> fn; plain fn -> itself
+    orig_fn = (
+        getattr(bound, "__func__", None) or bound
+    )  # bound method -> fn; plain fn -> itself
     captured = []
 
     async def fake_push(**kw):
@@ -346,12 +404,19 @@ def _patch_push(testcase, module_obj):
 class TestDistributorInjection(unittest.TestCase):
     """distribute_and_launch folds the per-account budget into each shard env."""
 
-    def _launch(self, db, account="accA", accelerator="nvidia-tesla-t4-x2", env_vars=None):
+    def _launch(
+        self, db, account="accA", accelerator="nvidia-tesla-t4-x2", env_vars=None
+    ):
         import app.services.workload_distributor as wd
+
         captured = _patch_push(self, wd)
-        res = asyncio_run(wd.WorkloadDistributor.distribute_and_launch(
-            **_gpu_kwargs(account=account, accelerator=accelerator, env_vars=env_vars)
-        ))
+        res = asyncio_run(
+            wd.WorkloadDistributor.distribute_and_launch(
+                **_gpu_kwargs(
+                    account=account, accelerator=accelerator, env_vars=env_vars
+                )
+            )
+        )
         return res, captured
 
     def test_gpu_launch_injects_quota_cap(self):
@@ -390,10 +455,13 @@ class TestDistributorInjection(unittest.TestCase):
         db = _fresh()
         _seed_account(db, "accA", used=20, limit=30)  # 10h left / 2 burners = 230
         import app.services.workload_distributor as wd
+
         captured = _patch_push(self, wd)
-        res = asyncio_run(wd.WorkloadDistributor.distribute_and_launch(
-            **_gpu_kwargs(sessions_per_account=2)
-        ))
+        res = asyncio_run(
+            wd.WorkloadDistributor.distribute_and_launch(
+                **_gpu_kwargs(sessions_per_account=2)
+            )
+        )
         self.assertTrue(res["success"])
         self.assertEqual(len(captured), 2)
         for kw in captured:
@@ -403,12 +471,19 @@ class TestDistributorInjection(unittest.TestCase):
 class TestSingleRunInjection(unittest.TestCase):
     """The /api/runs launch-json endpoint applies the same cap."""
 
-    def _launch(self, db, account="accA", accelerator="nvidia-tesla-t4-x2", env_vars=None):
+    def _launch(
+        self, db, account="accA", accelerator="nvidia-tesla-t4-x2", env_vars=None
+    ):
         import app.routers.runs as R
+
         captured = _patch_push(self, R)
         req = R.LaunchRunJSONRequest(
-            account_username=account, title="T", code_content='print("x")',
-            filename="main.py", accelerator=accelerator, env_vars=env_vars
+            account_username=account,
+            title="T",
+            code_content='print("x")',
+            filename="main.py",
+            accelerator=accelerator,
+            env_vars=env_vars,
         )
         asyncio_run(R.launch_run_json(req))
         return captured
@@ -423,16 +498,28 @@ class TestSingleRunInjection(unittest.TestCase):
         db = _fresh()
         _seed_account(db, "accA", used=20, limit=30)
         # One kernel already running on the account -> concurrent = 2 -> 230.
-        db.create_run_record({
-            "id": "run_seed", "account_username": "accA", "kernel_slug": "busy",
-            "kernel_ref": "accA/busy", "title": "Busy", "code_file": "x.py",
-            "accelerator": "nvidia-tesla-t4-x2", "enable_internet": 1,
-            "is_trial": 0, "timeout_seconds": 43200, "status": "running",
-            "status_message": "", "start_time": "2026-08-23T00:00:00+00:00",
-            "kaggle_url": "https://www.kaggle.com/code/accA/busy",
-            "workload_id": None, "shard_index": None, "total_shards": None,
-            "log_file": "",
-        })
+        db.create_run_record(
+            {
+                "id": "run_seed",
+                "account_username": "accA",
+                "kernel_slug": "busy",
+                "kernel_ref": "accA/busy",
+                "title": "Busy",
+                "code_file": "x.py",
+                "accelerator": "nvidia-tesla-t4-x2",
+                "enable_internet": 1,
+                "is_trial": 0,
+                "timeout_seconds": 43200,
+                "status": "running",
+                "status_message": "",
+                "start_time": "2026-08-23T00:00:00+00:00",
+                "kaggle_url": "https://www.kaggle.com/code/accA/busy",
+                "workload_id": None,
+                "shard_index": None,
+                "total_shards": None,
+                "log_file": "",
+            }
+        )
         captured = self._launch(db)
         self.assertEqual(captured[0]["env_vars"]["MAX_RUNTIME_MINUTES"], "230")
 

@@ -11,20 +11,20 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from jinja2 import Environment, FileSystemLoader
 
-from app.config import BASE_DIR, APP_AUTH_TOKEN
-from app.database import init_db
-from app.services.account_manager import AccountManager
-from app.services.session_monitor import SessionMonitor
-from app import auth
+from config import BASE_DIR, APP_AUTH_TOKEN
+from database import init_db
+from services.account_manager import AccountManager
+from services.session_monitor import SessionMonitor
+import auth
 
 # Import routers
-from app.routers import accounts, runs, distributed, logs, files, settings, kernels, ops
+from routers import accounts, runs, distributed, logs, files, settings, kernels, ops
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 logger = logging.getLogger("app.main")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -46,18 +46,19 @@ async def lifespan(app: FastAPI):
 
     # Start background 12-hour session monitor
     await SessionMonitor.start()
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Shutting down Kaggle Automation Backend...")
     await SessionMonitor.stop()
+
 
 app = FastAPI(
     title="Kaggle Multi-Account Automation Platform",
     description="Centralized dashboard and API for managing multiple Kaggle accounts, streaming outputs, trial runs, and distributed workloads.",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # Enable CORS (same-origin UI only; the dashboard is served from this server,
@@ -89,21 +90,25 @@ templates_dir = BASE_DIR / "app" / "templates"
 templates_dir.mkdir(parents=True, exist_ok=True)
 jinja_env = Environment(loader=FileSystemLoader(str(templates_dir)))
 
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_index(request: Request):
     template = jinja_env.get_template("index.html")
     return template.render(auth_enabled=bool(APP_AUTH_TOKEN))
 
+
 @app.get("/api/health")
 async def health_check():
-    from app.config import KAGGLE_CLI_PATH
+    from config import KAGGLE_CLI_PATH
+
     cli_available = os.path.exists(KAGGLE_CLI_PATH) or bool(shutil.which("kaggle"))
     return {
         "status": "ok",
         "service": "kaggle-nb-automation",
         "cli_available": cli_available,
-        "auth_enabled": bool(APP_AUTH_TOKEN)
+        "auth_enabled": bool(APP_AUTH_TOKEN),
     }
+
 
 # ------------------------------------------------------------------
 # Authentication (shared secret -> signed HttpOnly cookie)
@@ -123,6 +128,7 @@ async def login_page(request: Request, error: str = ""):
         return RedirectResponse(next_url, status_code=303)
     template = jinja_env.get_template("login.html")
     return template.render(error=error)
+
 
 @app.post("/login", include_in_schema=False)
 async def login_submit(request: Request, access_token: str = Form(...)):
@@ -148,11 +154,13 @@ async def login_submit(request: Request, access_token: str = Form(...)):
     )
     return response
 
+
 @app.post("/logout", include_in_schema=False)
 async def logout():
     response = RedirectResponse("/login", status_code=303)
     response.set_cookie(**auth.clear_session_cookie())
     return response
+
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
@@ -170,7 +178,9 @@ async def auth_middleware(request: Request, call_next):
     # WebSockets bypass HTTP middleware; guarded separately in the endpoint.
     if request.url.path.startswith("/api/"):
         if not auth.is_request_authenticated(request, APP_AUTH_TOKEN):
-            return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+            return JSONResponse(
+                status_code=401, content={"detail": "Not authenticated"}
+            )
         return response
 
     if not auth.is_request_authenticated(request, APP_AUTH_TOKEN):
