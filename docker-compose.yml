@@ -1,0 +1,12 @@
+services:
+  backend:
+    image: kaggle-auto
+    pull_policy: never
+    container_name: kaggle-auto
+    build:
+      context: ./
+      dockerfile: Dockerfile
+      target: runner
+    ports:
+      - 8000:8000
+

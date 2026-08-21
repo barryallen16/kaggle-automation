@@ -6,7 +6,7 @@ COPY pyproject.toml uv.lock .
 RUN uv sync --locked
 COPY app /app
 
-FROM python:3.12-slim-trixie 
+FROM python:3.12-slim-trixie AS runner
 WORKDIR /app
 COPY --from=builder /app /app
 EXPOSE 8000
