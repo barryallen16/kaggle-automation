@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
     logger.info("Initializing Kaggle Automation Backend...")
     init_db()
     
-    # Auto-initialize accounts from .env if present
+    # Auto-initialize accounts from .env KAGGLE_APIKEYS on startup
     try:
         await AccountManager.initialize_from_env()
     except Exception as e:

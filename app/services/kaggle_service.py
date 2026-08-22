@@ -9,7 +9,7 @@ import re
 from pathlib import Path
 from datetime import datetime
 from typing import Dict, List, Any, Optional, AsyncGenerator
-from app.config import NOTEBOOKS_DIR, LOGS_DIR, OUTPUTS_DIR
+from app.config import NOTEBOOKS_DIR, LOGS_DIR, OUTPUTS_DIR, get_kaggle_cli_path
 from app.services.account_manager import AccountManager
 from app.database import create_run_record, update_run_status, get_run_by_id
 
@@ -20,6 +20,58 @@ class KaggleService:
     _active_stream_processes: Dict[str, asyncio.subprocess.Process] = {}
     # Subscribers for live log broadcasting: run_id -> List[asyncio.Queue]
     _log_subscribers: Dict[str, List[asyncio.Queue]] = {}
+
+    # Mapping from user-friendly accelerator names to Kaggle API machine_shape enum values.
+    # Full list: https://github.com/Kaggle/kaggle-cli/blob/main/docs/kernels_metadata.md
+    # WARNING: NvidiaTeslaP100 is broken with default Kaggle image PyTorch (cu128) - avoid.
+    ACCELERATOR_MAP = {
+        # T4 variants (gives 2x T4 by default)
+        "nvidia-tesla-t4": "NvidiaTeslaT4",
+        "nvidia-tesla-t4-x2": "NvidiaTeslaT4",
+        "t4": "NvidiaTeslaT4",
+        "t4-x2": "NvidiaTeslaT4",
+        "gpu-tesla-t4": "NvidiaTeslaT4",
+        "gpu-tesla-t4-x2": "NvidiaTeslaT4",
+        # T4 High Memory
+        "nvidia-tesla-t4-highmem": "NvidiaTeslaT4Highmem",
+        "t4-highmem": "NvidiaTeslaT4Highmem",
+        "t4highmem": "NvidiaTeslaT4Highmem",
+        # P100 (broken with PyTorch cu128 - use T4 instead)
+        "nvidia-tesla-p100": "NvidiaTeslaP100",
+        "gpu-p100": "NvidiaTeslaP100",
+        "p100": "NvidiaTeslaP100",
+        # A100
+        "a100": "NvidiaTeslaA100",
+        "nvidia-a100": "NvidiaTeslaA100",
+        # L4
+        "l4": "NvidiaL4",
+        "nvidia-l4": "NvidiaL4",
+        "l4x1": "NvidiaL4X1",
+        "nvidia-l4-x1": "NvidiaL4X1",
+        # H100
+        "h100": "NvidiaH100",
+        "nvidia-h100": "NvidiaH100",
+        # RTX Pro 6000
+        "rtx-pro-6000": "NvidiaRtxPro6000",
+        "nvidia-rtx-pro-6000": "NvidiaRtxPro6000",
+        # TPU variants
+        "v3-8": "TpuV38",
+        "tpu-v3-8": "TpuV38",
+        "tpu1vm-v3-8": "Tpu1VmV38",
+        "tpu1vmv38": "Tpu1VmV38",
+        "tpu-v5e-8": "TpuV5E8",
+        "tpu-v5e8": "TpuV5E8",
+        "tpu-v6e-8": "TpuV6E8",
+        "tpu-v6e8": "TpuV6E8",
+    }
+
+    @classmethod
+    def resolve_accelerator(cls, accelerator: str) -> str:
+        """Maps a user-friendly accelerator name to the correct Kaggle CLI accelerator ID."""
+        if not accelerator or accelerator.lower() in ("none", "default", "cpu"):
+            return ""
+        key = accelerator.lower().strip()
+        return cls.ACCELERATOR_MAP.get(key, key)
 
     @classmethod
     def sanitize_slug(cls, title: str, unique_suffix: Optional[str] = None) -> str:
@@ -71,6 +123,9 @@ class KaggleService:
         is_notebook = filename.endswith(".ipynb")
         kernel_type = "notebook" if is_notebook else "script"
         
+        # Resolve machine_shape for metadata
+        resolved_machine = cls.resolve_accelerator(accelerator)
+
         metadata = {
             "id": kernel_ref,
             "title": clean_title,
@@ -81,6 +136,7 @@ class KaggleService:
             "enable_gpu": enable_gpu,
             "enable_tpu": enable_tpu,
             "enable_internet": "true" if enable_internet else "false",
+            "machine_shape": resolved_machine or "",
             "dataset_sources": [],
             "competition_sources": [],
             "kernel_sources": [],
@@ -92,11 +148,13 @@ class KaggleService:
             json.dump(metadata, f, indent=2)
 
         # Build CLI command
-        cmd = ["kaggle", "kernels", "push", "-p", str(run_dir)]
+        cli = get_kaggle_cli_path()
+        cmd = [cli, "kernels", "push", "-p", str(run_dir)]
         
-        # Accelerator CLI option
-        if accelerator and accelerator != "none" and accelerator != "default":
-            cmd.extend(["--accelerator", accelerator])
+        # Accelerator CLI option (map user-friendly name to Kaggle CLI ID)
+        resolved_acc = cls.resolve_accelerator(accelerator)
+        if resolved_acc:
+            cmd.extend(["--accelerator", resolved_acc])
         
         # Timeout handling (for trial run or custom timeout)
         effective_timeout = timeout_seconds or (300 if is_trial else 43200)
@@ -195,7 +253,8 @@ class KaggleService:
     @classmethod
     async def get_kernel_status(cls, account_username: str, kernel_ref: str) -> Dict[str, Any]:
         """Queries `kaggle kernels status <kernel_ref>`."""
-        cmd = ["kaggle", "kernels", "status", kernel_ref]
+        cli = get_kaggle_cli_path()
+        cmd = [cli, "kernels", "status", kernel_ref]
         env = AccountManager.get_account_env(account_username)
 
         try:
@@ -234,7 +293,8 @@ class KaggleService:
     @classmethod
     async def fetch_full_logs(cls, account_username: str, kernel_ref: str) -> str:
         """Fetches the latest execution logs using `kaggle kernels logs <kernel_ref>`."""
-        cmd = ["kaggle", "kernels", "logs", kernel_ref]
+        cli = get_kaggle_cli_path()
+        cmd = [cli, "kernels", "logs", kernel_ref]
         env = AccountManager.get_account_env(account_username)
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -253,7 +313,8 @@ class KaggleService:
     @classmethod
     async def start_background_log_stream(cls, run_id: str, account_username: str, kernel_ref: str, log_file: Path):
         """Streams live logs via `kaggle kernels logs -f <kernel_ref>` to file and WebSocket subscribers."""
-        cmd = ["kaggle", "kernels", "logs", "-f", "--interval", "3", kernel_ref]
+        cli = get_kaggle_cli_path()
+        cmd = [cli, "kernels", "logs", "-f", "--interval", "3", kernel_ref]
         env = AccountManager.get_account_env(account_username)
 
         try:
@@ -309,7 +370,8 @@ class KaggleService:
     @classmethod
     async def list_output_files(cls, account_username: str, kernel_ref: str) -> List[Dict[str, Any]]:
         """Lists output files generated by the kernel run."""
-        cmd = ["kaggle", "kernels", "files", "-v", kernel_ref]
+        cli = get_kaggle_cli_path()
+        cmd = [cli, "kernels", "files", "-v", kernel_ref]
         env = AccountManager.get_account_env(account_username)
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -337,7 +399,8 @@ class KaggleService:
         target_dir = OUTPUTS_DIR / run_id
         target_dir.mkdir(parents=True, exist_ok=True)
         
-        cmd = ["kaggle", "kernels", "output", "-p", str(target_dir), "-o", kernel_ref]
+        cli = get_kaggle_cli_path()
+        cmd = [cli, "kernels", "output", "-p", str(target_dir), "-o", kernel_ref]
         env = AccountManager.get_account_env(account_username)
         
         proc = await asyncio.create_subprocess_exec(
@@ -391,7 +454,8 @@ class KaggleService:
         with open(stop_dir / "kernel-metadata.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
 
-        cmd = ["kaggle", "kernels", "push", "-p", str(stop_dir), "-t", "1"]
+        cli = get_kaggle_cli_path()
+        cmd = [cli, "kernels", "push", "-p", str(stop_dir), "-t", "1"]
         env = AccountManager.get_account_env(account_username)
 
         try:

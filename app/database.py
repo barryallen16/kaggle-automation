@@ -168,6 +168,9 @@ def update_run_status(run_id: str, status: str, status_message: str = "", end_ti
     conn.close()
 
 def update_run_telegram_flag(run_id: str, flag_name: str, value: int = 1):
+    allowed_flags = {"telegram_notified_start", "telegram_notified_11h", "telegram_notified_12h", "telegram_notified_end"}
+    if flag_name not in allowed_flags:
+        raise ValueError(f"Invalid flag name: {flag_name}")
     conn = get_db_connection()
     with conn:
         conn.execute(f"UPDATE runs SET {flag_name} = ? WHERE id = ?", (value, run_id))
