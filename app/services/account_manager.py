@@ -58,44 +58,88 @@ class AccountManager:
         return env
 
     @classmethod
+    def extract_username_from_token(cls, key: str) -> Optional[str]:
+        """Tries to extract username from kaggle.json or JWT token claims."""
+        stripped = key.strip()
+        if stripped.startswith("{") and stripped.endswith("}"):
+            try:
+                data = json.loads(stripped)
+                if "username" in data:
+                    return data["username"]
+            except Exception:
+                pass
+        
+        # Check if JWT format (header.payload.signature)
+        parts = stripped.split(".")
+        if len(parts) == 3:
+            try:
+                import base64
+                payload = parts[1]
+                # Add padding if needed
+                payload += "=" * ((4 - len(payload) % 4) % 4)
+                decoded = base64.urlsafe_b64decode(payload)
+                claims = json.loads(decoded)
+                for field in ["username", "user_name", "sub", "preferred_username"]:
+                    if field in claims and isinstance(claims[field], str) and not claims[field].isdigit():
+                        return claims[field]
+            except Exception:
+                pass
+        return None
+
+    @classmethod
     async def fetch_username_for_key(cls, temp_id: str, key: str) -> str:
-        """Resolves Kaggle username by querying `kaggle kernels list -m -v`."""
+        """Resolves Kaggle username by querying JWT claims or Kaggle CLI."""
+        extracted = cls.extract_username_from_token(key)
+        if extracted:
+            return extracted
+
         acc_dir = cls.get_account_config_dir(temp_id)
         token_path = acc_dir / "access_token"
         with open(token_path, "w", encoding="utf-8") as f:
             f.write(key.strip())
-        
-        # Also backup to ~/.kaggle/access_token if needed
-        kaggle_home = Path.home() / ".kaggle"
-        kaggle_home.mkdir(parents=True, exist_ok=True)
-        try:
-            with open(kaggle_home / "access_token", "w", encoding="utf-8") as f:
-                f.write(key.strip())
-        except Exception:
-            pass
 
-        cmd = ["kaggle", "kernels", "list", "-m", "-v"]
         env = cls.get_account_env(temp_id)
         
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env
-            )
-            stdout, stderr = await proc.communicate()
-            out_str = stdout.decode("utf-8", errors="ignore")
-            
-            if out_str:
-                csv_reader = csv.DictReader(io.StringIO(out_str))
-                rows = list(csv_reader)
-                if rows and "ref" in rows[0]:
-                    return rows[0]["ref"].split("/")[0]
-        except Exception as e:
-            logger.error(f"Error fetching username for key: {e}")
+        # Try kernels list
+        for subcmd in [["kaggle", "kernels", "list", "-m", "-v"], ["kaggle", "datasets", "list", "-m", "-v"], ["kaggle", "models", "list", "-m", "-v"]]:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *subcmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env
+                )
+                stdout, stderr = await proc.communicate()
+                out_str = stdout.decode("utf-8", errors="ignore")
+                
+                if out_str:
+                    csv_reader = csv.DictReader(io.StringIO(out_str))
+                    rows = list(csv_reader)
+                    if rows and "ref" in rows[0]:
+                        return rows[0]["ref"].split("/")[0]
+            except Exception as e:
+                logger.error(f"Error querying {subcmd}: {e}")
 
         return f"kaggle_user_{uuid.uuid4().hex[:6]}"
+
+    @classmethod
+    def update_username(cls, old_username: str, new_username: str):
+        """Renames an account's folder and updates database records."""
+        from app.database import update_account_username
+        if old_username == new_username:
+            return
+        
+        # Update config directory
+        old_dir = cls.get_account_config_dir(old_username)
+        new_dir = cls.get_account_config_dir(new_username)
+        if old_dir.exists() and not new_dir.exists():
+            try:
+                import shutil
+                shutil.copytree(old_dir, new_dir)
+            except Exception as e:
+                logger.error(f"Failed to copy config dir: {e}")
+
+        update_account_username(old_username, new_username)
 
     @classmethod
     async def fetch_quota(cls, username: str) -> Dict[str, Any]:

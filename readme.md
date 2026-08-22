@@ -41,8 +41,9 @@ TELEGRAM_CHAT_ID=-1001234567890
 
 ### 3. Start the Server
 ```bash
-uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+python run.py
 ```
+*(Or with uvicorn directly: `uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload --reload-dir app`)*
 
 ### 4. Open the Dashboard
 Navigate to [http://localhost:8000](http://localhost:8000) in your browser.
