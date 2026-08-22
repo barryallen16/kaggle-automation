@@ -172,16 +172,36 @@ class KaggleService:
 
         env = AccountManager.get_account_env(account_username)
         
+        # Retry logic for 409 Conflict errors (Kaggle rate-limits when a kernel
+        # is still starting/running on the same account)
+        MAX_RETRIES = 4
+        RETRY_BASE_DELAY = 5  # seconds
+        
+        out_str = ""
+        err_str = ""
+        proc = None
+        
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env
-            )
-            stdout, stderr = await proc.communicate()
-            out_str = stdout.decode("utf-8", errors="ignore")
-            err_str = stderr.decode("utf-8", errors="ignore")
+            for attempt in range(MAX_RETRIES):
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env
+                )
+                stdout, stderr = await proc.communicate()
+                out_str = stdout.decode("utf-8", errors="ignore")
+                err_str = stderr.decode("utf-8", errors="ignore")
+
+                # Check for 409 Conflict — retry with exponential backoff
+                if proc.returncode != 0 and "409" in err_str and attempt < MAX_RETRIES - 1:
+                    delay = RETRY_BASE_DELAY * (2 ** attempt)
+                    logger.warning(f"Kaggle 409 Conflict on attempt {attempt + 1}/{MAX_RETRIES}, retrying in {delay}s...")
+                    with open(log_file_path, "a", encoding="utf-8") as f:
+                        f.write(f"[RETRY] 409 Conflict on attempt {attempt + 1}, retrying in {delay}s...\n")
+                    await asyncio.sleep(delay)
+                    continue
+                break
 
             with open(log_file_path, "a", encoding="utf-8") as f:
                 if out_str:
@@ -458,16 +478,25 @@ class KaggleService:
         cmd = [cli, "kernels", "push", "-p", str(stop_dir), "-t", "1"]
         env = AccountManager.get_account_env(account_username)
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env
-            )
-            await proc.communicate()
-        except Exception as e:
-            logger.warning(f"Stop push completed with warning: {e}")
+        # Retry on 409 Conflict (kernel may still be transitioning)
+        for attempt in range(3):
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env
+                )
+                _, stderr = await proc.communicate()
+                err_str = stderr.decode("utf-8", errors="ignore")
+                if proc.returncode != 0 and "409" in err_str and attempt < 2:
+                    logger.warning(f"Stop push 409 Conflict, retry {attempt + 1}/3 in 5s...")
+                    await asyncio.sleep(5)
+                    continue
+                break
+            except Exception as e:
+                logger.warning(f"Stop push completed with warning: {e}")
+                break
 
         update_run_status(run_id, "stopped", "Explicitly stopped by user", datetime.utcnow().isoformat())
         return {"success": True, "message": f"Run {run_id} ({kernel_ref}) stopped successfully."}
