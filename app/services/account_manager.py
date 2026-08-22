@@ -1,25 +1,34 @@
-import os
-import io
-import csv
-import json
-import uuid
-import hashlib
-import sys
 import asyncio
-import shutil
+import csv
+import hashlib
+import io
+import json
 import logging
+import os
+import shutil
+import sys
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
-from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional
+from typing import Any, ClassVar
+
 from config import ACCOUNTS_DIR, KAGGLE_APIKEYS_RAW, get_kaggle_cli_path
 from database import (
-    save_account,
-    get_all_accounts,
-    get_account_by_username,
     delete_account as db_delete_account,
+)
+from database import (
+    get_account_by_username,
+    get_all_accounts,
+    save_account,
 )
 
 logger = logging.getLogger("account_manager")
+
+
+def _write_text_file(path: Path, text: str) -> None:
+    """Writes a small token/config file (sync helper - see to_thread callers)."""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(text)
 
 # ---------------------------------------------------------------------------
 # Quota-aware runtime caps (self-finishing kernels)
@@ -74,7 +83,7 @@ class AccountManager:
     # This map lets any later call translate a stale name to the current one
     # (see resolve_effective_username). The old config dir is also kept, so a
     # subprocess still built around the old name keeps authenticating.
-    _username_aliases: Dict[str, str] = {}
+    _username_aliases: ClassVar[dict[str, str]] = {}
 
     # Quota lookups each spawn a full kaggle CLI process (~50-150MB). Firing
     # one per account SIMULTANEOUSLY (15+ accounts) spikes RAM until the OS
@@ -82,13 +91,13 @@ class AccountManager:
     # All quota subprocesses therefore funnel through this global cap.
     QUOTA_CONCURRENCY_LIMIT = max(1, int(os.getenv("QUOTA_REFRESH_CONCURRENCY", "3")))
     QUOTA_CALL_TIMEOUT_SECONDS = int(os.getenv("QUOTA_CALL_TIMEOUT_SECONDS", "90"))
-    _quota_semaphore: Optional[asyncio.Semaphore] = None
+    _quota_semaphore: asyncio.Semaphore | None = None
 
     # Single-flight guard: overlapping refresh-all triggers (double-clicks,
     # monitor quota probes, dashboard polling) share ONE run instead of
     # stacking another N subprocess batches on top of the first.
-    _refresh_all_lock: Optional[asyncio.Lock] = None
-    _sync_primitive_loop_id: Optional[int] = None
+    _refresh_all_lock: asyncio.Lock | None = None
+    _sync_primitive_loop_id: int | None = None
 
     @classmethod
     def _get_quota_semaphore(cls) -> asyncio.Semaphore:
@@ -159,7 +168,7 @@ class AccountManager:
         return acc_dir
 
     @staticmethod
-    def _read_access_token(acc_dir: Path) -> Optional[str]:
+    def _read_access_token(acc_dir: Path) -> str | None:
         """Reads the access token written for this account's isolated config dir."""
         try:
             token = (acc_dir / "access_token").read_text(encoding="utf-8").strip()
@@ -168,7 +177,7 @@ class AccountManager:
             return None
 
     @classmethod
-    def get_account_env(cls, username: str) -> Dict[str, str]:
+    def get_account_env(cls, username: str) -> dict[str, str]:
         """Builds subprocess environment variables for the specified account."""
         # Resolve renames first: once a placeholder (kaggle_xxxx) account has
         # been auto-corrected to its real username, an env built under the old
@@ -200,7 +209,7 @@ class AccountManager:
         return env
 
     @classmethod
-    def extract_username_from_token(cls, key: str) -> Optional[str]:
+    def extract_username_from_token(cls, key: str) -> str | None:
         """Tries to extract username from kaggle.json or JWT token claims."""
         stripped = key.strip()
         if stripped.startswith("{") and stripped.endswith("}"):
@@ -242,8 +251,7 @@ class AccountManager:
 
         acc_dir = cls.get_account_config_dir(temp_id)
         token_path = acc_dir / "access_token"
-        with open(token_path, "w", encoding="utf-8") as f:
-            f.write(key.strip())
+        await asyncio.to_thread(_write_text_file, token_path, key.strip())
 
         env = cls.get_account_env(temp_id)
         cli = get_kaggle_cli_path()
@@ -262,7 +270,7 @@ class AccountManager:
                     stderr=asyncio.subprocess.PIPE,
                     env=env,
                 )
-                stdout, stderr = await proc.communicate()
+                stdout, _stderr = await proc.communicate()
                 out_str = stdout.decode("utf-8", errors="ignore")
 
                 if out_str:
@@ -320,7 +328,7 @@ class AccountManager:
         update_account_username(old_username, new_username)
 
     @classmethod
-    async def fetch_quota(cls, username: str) -> Dict[str, Any]:
+    async def fetch_quota(cls, username: str) -> dict[str, Any]:
         """Runs `kaggle quota -v`, throttled globally and bounded by a timeout.
 
         The semaphore caps how many kaggle CLI processes can exist at once
@@ -333,7 +341,7 @@ class AccountManager:
                     cls._fetch_quota_unthrottled(username),
                     timeout=cls.QUOTA_CALL_TIMEOUT_SECONDS,
                 )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 f"kaggle quota timed out after {cls.QUOTA_CALL_TIMEOUT_SECONDS}s for {username}"
             )
@@ -357,7 +365,7 @@ class AccountManager:
             }
 
     @classmethod
-    async def _fetch_quota_unthrottled(cls, username: str) -> Dict[str, Any]:
+    async def _fetch_quota_unthrottled(cls, username: str) -> dict[str, Any]:
         """Runs `kaggle quota -v` and parses the output into structured quota info."""
         cli = get_kaggle_cli_path()
         cmd = [cli, "quota", "-v"]
@@ -383,8 +391,7 @@ class AccountManager:
             if out_str:
                 try:
                     csv_reader = csv.DictReader(io.StringIO(out_str))
-                    for row in csv_reader:
-                        quotas.append(row)
+                    quotas.extend(csv_reader)
                 except Exception as e:
                     logger.error(f"Failed to parse quota CSV for {username}: {e}")
 
@@ -407,7 +414,7 @@ class AccountManager:
                 },
             }
 
-            def _hours(value_str) -> Optional[float]:
+            def _hours(value_str) -> float | None:
                 """Parses quota hour strings like '12.50h' / '30.00 hours' / '0'."""
                 if value_str is None:
                     return None
@@ -472,8 +479,8 @@ class AccountManager:
 
     @classmethod
     async def add_account(
-        cls, api_key_or_token: str, custom_username: Optional[str] = None
-    ) -> Dict[str, Any]:
+        cls, api_key_or_token: str, custom_username: str | None = None
+    ) -> dict[str, Any]:
         """Registers a new Kaggle account, discovers its username, writes configs and saves to DB.
 
         Idempotent: if the exact same key is already registered (and no custom username
@@ -534,7 +541,7 @@ class AccountManager:
                 logger.error(f"Failed to auto-init account from .env: {e}")
 
     @classmethod
-    async def refresh_all_quotas(cls) -> List[Dict[str, Any]]:
+    async def refresh_all_quotas(cls) -> list[dict[str, Any]]:
         """Refreshes quota data for all saved accounts (throttled, single-flight).
 
         Concurrent callers join the in-flight run rather than stacking a second
@@ -559,7 +566,7 @@ class AccountManager:
             return get_all_accounts()
 
     @classmethod
-    async def refresh_account_quota(cls, username: str) -> Dict[str, Any]:
+    async def refresh_account_quota(cls, username: str) -> dict[str, Any]:
         acc = get_account_by_username(username)
         if not acc:
             return {}
@@ -571,7 +578,7 @@ class AccountManager:
     @staticmethod
     def compute_gpu_runtime_budget_minutes(
         used_hours, limit_hours, concurrent_sessions: int
-    ) -> Optional[int]:
+    ) -> int | None:
         """Minutes a NEW GPU session may run before the account's remaining
         weekly GPU quota would kill it - or None when the quota is not the
         binding constraint (or cannot be trusted). Pure math, unit-testable.
@@ -620,7 +627,7 @@ class AccountManager:
     @classmethod
     async def gpu_runtime_budget_minutes(
         cls, username: str, concurrent_sessions: int
-    ) -> Optional[int]:
+    ) -> int | None:
         """Quota-aware MAX_RUNTIME_MINUTES for a NEW GPU kernel on `username`.
 
         Reads the account's stored last_quota, refreshing it LIVE first when the
@@ -643,8 +650,8 @@ class AccountManager:
             if checked:
                 dt = datetime.fromisoformat(str(checked))
                 if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                age_min = (datetime.now(timezone.utc) - dt).total_seconds() / 60.0
+                    dt = dt.replace(tzinfo=UTC)
+                age_min = (datetime.now(UTC) - dt).total_seconds() / 60.0
             else:
                 age_min = None  # legacy row, no timestamp -> treat as stale
             if age_min is None or age_min > QUOTA_CAP_MAX_QUOTA_AGE_MINUTES:

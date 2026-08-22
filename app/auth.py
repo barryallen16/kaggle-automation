@@ -10,7 +10,6 @@ Design:
 """
 import hashlib
 import hmac
-import os
 import time
 
 from fastapi import Request

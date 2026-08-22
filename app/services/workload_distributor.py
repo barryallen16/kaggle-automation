@@ -1,14 +1,16 @@
-import os
-import json
-import uuid
 import asyncio
+import json
 import logging
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional, Union, Set
-from services.kaggle_service import KaggleService
-from services.account_manager import AccountManager
-from database import create_distributed_workload, update_workload_status, utcnow_iso
+import os
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
 from config import LOGS_DIR
+from database import create_distributed_workload, update_workload_status, utcnow_iso
+
+from services.account_manager import AccountManager
+from services.kaggle_service import KaggleService
 
 logger = logging.getLogger("workload_distributor")
 
@@ -31,7 +33,7 @@ class WorkloadDistributor:
         start_index: int,
         end_index: int,
         total_items: int,
-        custom_params: Optional[Dict[str, Any]] = None,
+        custom_params: dict[str, Any] | None = None,
     ) -> str:
         """Injects shard parameters at the top of the .ipynb or .py code."""
         custom_json = json.dumps(custom_params or {})
@@ -75,7 +77,7 @@ class WorkloadDistributor:
     # Availability / runner-plan helpers
     # ------------------------------------------------------------------
     @staticmethod
-    def _is_gpu(accelerator: Optional[str]) -> bool:
+    def _is_gpu(accelerator: str | None) -> bool:
         return bool(accelerator) and str(accelerator).lower() not in (
             "none",
             "default",
@@ -84,8 +86,8 @@ class WorkloadDistributor:
 
     @classmethod
     async def _busy_gpu_sessions(
-        cls, accounts: List[str], launch_is_gpu: bool
-    ) -> Dict[str, int]:
+        cls, accounts: list[str], launch_is_gpu: bool
+    ) -> dict[str, int]:
         """Counts busy GPU session slots per account.
 
         Queries live Kaggle status for active (queued/running) GPU runs in the DB.
@@ -97,10 +99,9 @@ class WorkloadDistributor:
         calls so 16 accounts with 30+ active runs don't spawn 30 CLI processes
         at once (the same OOM that kills pushes).
         """
-        from datetime import datetime, timezone
         from database import get_active_runs, update_run_status, utcnow_iso
 
-        busy: Dict[str, Set[str]] = {a: set() for a in accounts}
+        busy: dict[str, set[str]] = {a: set() for a in accounts}
         if not launch_is_gpu:
             return {a: 0 for a in accounts}
 
@@ -147,8 +148,8 @@ class WorkloadDistributor:
 
     @classmethod
     def _normalize_sessions_map(
-        cls, sessions_per_account: Union[int, Dict[str, int], None], accounts: List[str]
-    ) -> Dict[str, int]:
+        cls, sessions_per_account: int | dict[str, int] | None, accounts: list[str]
+    ) -> dict[str, int]:
         """Accepts a global count OR per-account overrides {username: 1|2}.
 
         Per-account values are clamped to Kaggle's 1..2 batch-GPU range;
@@ -176,11 +177,11 @@ class WorkloadDistributor:
     @classmethod
     def _build_runner_plan(
         cls,
-        accounts: List[str],
-        sessions_map: Dict[str, int],
+        accounts: list[str],
+        sessions_map: dict[str, int],
         accelerator: str,
-        busy: Dict[str, int],
-    ) -> List[Dict[str, Any]]:
+        busy: dict[str, int],
+    ) -> list[dict[str, Any]]:
         """Expands accounts into runners based on free slots (silent reduction).
 
         Account capacity is Kaggle's hard limit of 2 concurrent GPU sessions:
@@ -206,7 +207,7 @@ class WorkloadDistributor:
     RECLAIM_WINDOW_MINUTES = 30  # how far back we look for slot-holding kernels
 
     @classmethod
-    async def reclaim_slots(cls, accounts: List[str]) -> Dict[str, Any]:
+    async def reclaim_slots(cls, accounts: list[str]) -> dict[str, Any]:
         """Actively hunts GPU slot-holders on the given accounts and cancels them.
 
         Kaggle keeps a stopped session's slot occupied while the worker tears
@@ -218,13 +219,15 @@ class WorkloadDistributor:
         kernels are reported as warnings, never auto-cancelled.
         """
         from datetime import datetime, timedelta
+
         from database import get_all_runs, get_run_by_id
+
         from services.kaggle_service import KaggleService
 
-        cutoff = datetime.now(timezone.utc) - timedelta(
+        cutoff = datetime.now(UTC) - timedelta(
             minutes=cls.RECLAIM_WINDOW_MINUTES
         )
-        candidates: Dict[str, List[Dict[str, Any]]] = {a: [] for a in accounts}
+        candidates: dict[str, list[dict[str, Any]]] = {a: [] for a in accounts}
         seen_refs = set()
 
         for r in get_all_runs(limit=200):
@@ -239,7 +242,7 @@ class WorkloadDistributor:
             try:
                 when = datetime.fromisoformat(str(stamp))
                 if when.tzinfo is None:
-                    when = when.replace(tzinfo=timezone.utc)
+                    when = when.replace(tzinfo=UTC)
                 if when < cutoff:
                     continue
             except Exception:
@@ -253,7 +256,7 @@ class WorkloadDistributor:
         sem = asyncio.Semaphore(STATUS_CHECK_CONCURRENCY)
         stop_sem = asyncio.Semaphore(DISTRIBUTED_PUSH_CONCURRENCY)
 
-        async def check_and_maybe_stop(acc: str, row: Dict[str, Any]):
+        async def check_and_maybe_stop(acc: str, row: dict[str, Any]):
             async with sem:
                 resp = await KaggleService.get_kernel_status(acc, row["kernel_ref"])
             st = resp.get("status", "unknown")
@@ -307,17 +310,17 @@ class WorkloadDistributor:
         base_title: str,
         code_content: str,
         filename: str,
-        accounts: List[str],
+        accounts: list[str],
         total_items: int,
         start_offset: int = 0,
         accelerator: str = "none",
         enable_internet: bool = True,
         is_trial: bool = False,
-        timeout_seconds: Optional[int] = None,
-        env_vars: Optional[Dict[str, Any]] = None,
-        sessions_per_account: Union[int, Dict[str, int]] = 2,
-        manual_shards: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
+        timeout_seconds: int | None = None,
+        env_vars: dict[str, Any] | None = None,
+        sessions_per_account: int | dict[str, int] = 2,
+        manual_shards: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         """Partitions the workload across expanded per-account GPU runners.
 
         Each account may run up to its `sessions_per_account` value (1..2)
@@ -369,7 +372,7 @@ class WorkloadDistributor:
         # 1. Live availability check
         busy = await cls._busy_gpu_sessions(accounts, cls._is_gpu(accelerator))
 
-        workload_id = f"workload_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        workload_id = f"workload_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
         if manual_shards:
             # Validate manual shards
@@ -413,7 +416,7 @@ class WorkloadDistributor:
 
             # Check per-account GPU slot capacity in manual mode
             if cls._is_gpu(accelerator):
-                for acc in set(s["account_username"] for s in shards_info):
+                for acc in {s["account_username"] for s in shards_info}:
                     assigned = sum(
                         1 for s in shards_info if s["account_username"] == acc
                     )
@@ -441,7 +444,7 @@ class WorkloadDistributor:
         else:
             # Automatic uniform partition
             plan = cls._build_runner_plan(accounts, sessions_map, accelerator, busy)
-            runners: List[Dict[str, Any]] = []
+            runners: list[dict[str, Any]] = []
             for p in plan:
                 for _ in range(p["slots"]):
                     runners.append({"account": p["account"]})
@@ -490,9 +493,9 @@ class WorkloadDistributor:
         #    self-finish cleanly instead of hanging on a dead quota and needing
         #    a stop-stub (which loses the version's output snapshot). Only when
         #    the quota is the binding constraint; user-pinned env vars win.
-        runtime_budgets: Dict[str, Optional[int]] = {}
+        runtime_budgets: dict[str, int | None] = {}
         if cls._is_gpu(accelerator):
-            new_sessions: Dict[str, int] = {}
+            new_sessions: dict[str, int] = {}
             for s in shards_info:
                 acc = s["account_username"]
                 new_sessions[acc] = new_sessions.get(acc, 0) + 1
@@ -589,7 +592,7 @@ class WorkloadDistributor:
         # push_sem caps global concurrent pushes to DISTRIBUTED_PUSH_CONCURRENCY.
         push_sem = asyncio.Semaphore(DISTRIBUTED_PUSH_CONCURRENCY)
 
-        async def launch_shard(shard: Dict[str, Any]):
+        async def launch_shard(shard: dict[str, Any]):
             idx = shard["shard_index"]
             account = shard["account_username"]
             shard_title = f"{base_title} [Shard {idx + 1}/{R}]"
@@ -636,13 +639,13 @@ class WorkloadDistributor:
                 "push_result": result,
             }
 
-        by_account: Dict[str, List[Dict[str, Any]]] = {}
+        by_account: dict[str, list[dict[str, Any]]] = {}
         for s in shards_info:
             by_account.setdefault(s["account_username"], []).append(s)
 
         stagger_seconds = int(os.getenv("INTER_PUSH_STAGGER_SECONDS", "20"))
 
-        async def launch_account_group(acc: str, group: List[Dict[str, Any]]):
+        async def launch_account_group(acc: str, group: list[dict[str, Any]]):
             out = []
             for j, s in enumerate(group):
                 if j > 0 and stagger_seconds > 0:

@@ -9,10 +9,11 @@ Kaggle.
 """
 
 import os
-import sys
 import shutil
+import sys
 import tempfile
 import unittest
+from datetime import UTC
 
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TEST_DIR)
@@ -39,7 +40,7 @@ def setUpModule():
     os.environ["AUTOMATION_DATA_DIR"] = DATA_TMP
     os.environ["INTER_PUSH_STAGGER_SECONDS"] = "0"
 
-    import app.services.kaggle_service as ks
+    import services.kaggle_service as ks
 
     ks.get_kaggle_cli_path = lambda: _make_stub_cli()
 
@@ -59,9 +60,10 @@ def tearDownModule():
 def _fresh():
     """Fresh DB + modules for each test (config paths bind at import)."""
     import importlib
-    import app.config as cfg
-    import app.database as db
-    import app.services.kaggle_service as ks
+
+    import config as cfg
+    import database as db
+    import services.kaggle_service as ks
 
     db_file = cfg.DB_PATH
     for suffix in ("", "-wal", "-shm"):
@@ -107,15 +109,15 @@ def _seed_account(db, username, used, limit, error=False):
 
 
 def _gpu_kwargs(title="CapTest", account="accA", **over):
-    kw = dict(
-        base_title=title,
-        code_content='print("x")',
-        filename="main.py",
-        accounts=[account],
-        total_items=10,
-        accelerator="nvidia-tesla-t4-x2",
-        sessions_per_account=1,
-    )
+    kw = {
+        "base_title": title,
+        "code_content": 'print("x")',
+        "filename": "main.py",
+        "accounts": [account],
+        "total_items": 10,
+        "accelerator": "nvidia-tesla-t4-x2",
+        "sessions_per_account": 1,
+    }
     kw.update(over)
     return kw
 
@@ -211,7 +213,7 @@ class TestTimingMatrix(unittest.TestCase):
     the kernel self-finishes BEFORE quota death (leaving >= 1 min)."""
 
     def test_exit_always_precedes_quota_death(self):
-        from services.account_manager import AccountManager, PRE_LOOP_ALLOWANCE_MINUTES
+        from services.account_manager import PRE_LOOP_ALLOWANCE_MINUTES, AccountManager
 
         final_item_min = 2  # worst-case one item still finishing when the deadline hits
         cold_starts = [0, 5, 11, 30, 45, 59.9]  # measured ~11 min + queue on top
@@ -258,10 +260,11 @@ class TestTimingMatrix(unittest.TestCase):
 
 def _age_account(db, username, minutes):
     """Backdates an accounts row's last_checked so it reads as stale."""
-    from datetime import datetime, timezone, timedelta
+    from datetime import datetime, timedelta
+
     from database import get_db_connection
 
-    old = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+    old = (datetime.now(UTC) - timedelta(minutes=minutes)).isoformat()
     conn = get_db_connection()
     with conn:
         conn.execute(
@@ -274,7 +277,7 @@ def _patch_refresh(testcase, fake):
     """Replace AccountManager.refresh_account_quota with `fake`, restoring after.
     The fake is a staticmethod: callers invoke cls.refresh_account_quota(username),
     and a classmethod would pass cls positionally."""
-    import app.services.account_manager as am
+    import services.account_manager as am
 
     orig = am.AccountManager.refresh_account_quota.__func__
     am.AccountManager.refresh_account_quota = staticmethod(fake)
@@ -294,7 +297,7 @@ class TestAccountLookup(unittest.TestCase):
         )
 
     def test_missing_account_no_cap(self):
-        db = _fresh()
+        _fresh()
         self.assertIsNone(self._budget("ghost", 1))
 
     def test_failed_lookup_never_caps(self):
@@ -305,7 +308,7 @@ class TestAccountLookup(unittest.TestCase):
     def test_disabled_flag_no_cap(self):
         db = _fresh()
         _seed_account(db, "accA", used=20, limit=30)
-        import app.services.account_manager as am
+        import services.account_manager as am
 
         saved = am.QUOTA_CAP_ENABLED
         try:
@@ -407,7 +410,7 @@ class TestDistributorInjection(unittest.TestCase):
     def _launch(
         self, db, account="accA", accelerator="nvidia-tesla-t4-x2", env_vars=None
     ):
-        import app.services.workload_distributor as wd
+        import services.workload_distributor as wd
 
         captured = _patch_push(self, wd)
         res = asyncio_run(
@@ -454,7 +457,7 @@ class TestDistributorInjection(unittest.TestCase):
     def test_two_sessions_share_the_remaining_quota(self):
         db = _fresh()
         _seed_account(db, "accA", used=20, limit=30)  # 10h left / 2 burners = 230
-        import app.services.workload_distributor as wd
+        import services.workload_distributor as wd
 
         captured = _patch_push(self, wd)
         res = asyncio_run(
@@ -474,7 +477,7 @@ class TestSingleRunInjection(unittest.TestCase):
     def _launch(
         self, db, account="accA", accelerator="nvidia-tesla-t4-x2", env_vars=None
     ):
-        import app.routers.runs as R
+        import routers.runs as R
 
         captured = _patch_push(self, R)
         req = R.LaunchRunJSONRequest(

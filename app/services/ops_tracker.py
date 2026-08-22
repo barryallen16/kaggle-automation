@@ -16,7 +16,6 @@ anyway.
 
 import threading
 import time
-from typing import Dict, List
 
 _RUN_STOP = "run_stop:"          # + run_id -> a Kaggle run is being stopped
 _WORKLOAD_STOP = "workload_stop:"  # + workload_id -> Stop All running on a workload
@@ -32,8 +31,8 @@ class OpsTracker:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         # key -> number of concurrent owners (>=1 means active)
-        self._counts: Dict[str, int] = {}
-        self._started: Dict[str, float] = {}
+        self._counts: dict[str, int] = {}
+        self._started: dict[str, float] = {}
 
     def begin(self, key: str) -> None:
         with self._lock:
@@ -53,7 +52,7 @@ class OpsTracker:
         with self._lock:
             return self._counts.get(key, 0) > 0
 
-    def snapshot(self) -> Dict[str, object]:
+    def snapshot(self) -> dict[str, object]:
         with self._lock:
             keys = sorted(self._counts.keys())
         return {

@@ -3,20 +3,17 @@ even if it was not launched from this dashboard, and lets the user pull
 outputs/logs for it. Uses the same throttled versioned helper as dashboard
 runs so 16 accounts don't OOM the server."""
 
-import os
 import re
-import zipfile
 import tempfile
+import zipfile
 from pathlib import Path
-from typing import Optional, List, Dict, Any
 
+from config import OUTPUTS_DIR
+from database import get_account_by_username
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
-
-from config import OUTPUTS_DIR
 from services.kaggle_service import KaggleService
-from database import get_account_by_username
 
 router = APIRouter(prefix="/api/kernels", tags=["External Kernels"])
 
@@ -65,7 +62,8 @@ async def list_kernels(
             acc = get_account_by_username(account)
             if acc and acc.get("api_key"):
                 # Try JWT decode quick
-                import base64, json as _json
+                import base64
+                import json as _json
 
                 key = acc["api_key"]
                 real = None
@@ -100,14 +98,15 @@ async def list_kernels(
                     # We need to call helper with real as user param but credentials still from stored account
                     # Use helper directly with real user but same account's env (via _run_versioned_helper with stored account)
                     # For now, try listing with real username via same account's token
-                    retry = await KaggleService.list_account_kernels(
+                    await KaggleService.list_account_kernels(
                         account, search, page, pageSize
                     )
                     # Actually retry with real as user param by calling helper with real user but same account credentials
                     # To do that, we need to call helper with real user param but same account's env - our list_account_kernels uses account as both user and credentials
                     # So we call helper directly with real user
-                    from services.kaggle_service import KaggleService as KS
                     import json as _j
+
+                    from services.kaggle_service import KaggleService as KS
 
                     # Direct helper call with real user but credentials of stored account
                     out = await KS._run_versioned_helper(
@@ -211,7 +210,7 @@ async def kernel_files(account: str = Query(...), kernel_ref: str = Query(...)):
 async def kernel_logs(
     account: str = Query(...),
     kernel_ref: str = Query(...),
-    version: Optional[int] = Query(
+    version: int | None = Query(
         None, description="Specific version to fetch log for"
     ),
 ):
@@ -231,7 +230,7 @@ async def kernel_logs(
 class PullRequest(BaseModel):
     account_username: str
     kernel_ref: str
-    version: Optional[int] = None
+    version: int | None = None
 
 
 @router.post("/pull")
@@ -303,7 +302,7 @@ async def debug_current_version(
     """Debug helper: shows what current_version logic returns and raw GetKernel/ListKernels probes."""
     _require_account(account)
     ref = _parse_ref(kernel_ref)
-    owner, _, slug = ref.partition("/")
+    _owner, _, slug = ref.partition("/")
     # Try current_version via service
     cur = await KaggleService.get_kernel_current_version(account, ref)
     # Also try direct helper list_kernels raw for debugging
@@ -319,7 +318,7 @@ async def debug_current_version(
 class StopRequest(BaseModel):
     account_username: str
     kernel_ref: str
-    title: Optional[str] = None
+    title: str | None = None
 
 
 @router.post("/stop")
@@ -385,9 +384,10 @@ async def download_zip(account: str = Query(...), kernel_ref: str = Query(...)):
         raise HTTPException(
             status_code=404, detail="No local files to zip - pull first"
         )
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
-    tmp.close()
-    with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
+    with (
+        tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp,
+        zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf,
+    ):
         for p in target_dir.rglob("*"):
             if p.is_file():
                 zf.write(p, arcname=str(p.relative_to(target_dir)))

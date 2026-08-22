@@ -40,7 +40,7 @@ import os
 import sys
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, List, Dict, Any
+from typing import Any
 
 import httpx
 
@@ -83,7 +83,7 @@ def _post(client: httpx.Client, method: str, payload: dict):
         raise KaggleError(f"{method} -> HTTP {r.status_code}: {snippet}")
     try:
         data = r.json()
-    except Exception as e:
+    except Exception:
         snippet = r.text[:200].replace("\n", " ")
         raise KaggleError(f"{method} -> non-JSON response (HTML?): {snippet}")
     if isinstance(data, dict) and isinstance(data.get("code"), int) and data["code"] >= 400:
@@ -111,8 +111,7 @@ def _download_files(client: httpx.Client, files: list, out_dir: str) -> list:
         with client.stream("GET", url, timeout=TIMEOUT) as resp:
             resp.raise_for_status()
             with open(dest, "wb") as f:
-                for chunk in resp.iter_bytes(256 * 1024):
-                    f.write(chunk)
+                f.writelines(resp.iter_bytes(256 * 1024))
         saved.append(name)
     return saved
 
@@ -176,7 +175,7 @@ def list_kernels(owner: str, search: str = "", page: int = 1, page_size: int = 2
         return data.get("kernels") or [], data.get("nextPageToken") or ""
 
 
-def current_version(owner: str, slug: str) -> Optional[int]:
+def current_version(owner: str, slug: str) -> int | None:
     """Latest pushed version number of the kernel, or None if undeterminable.
 
     Prioritizes GetKernel as primary since ListKernels often returns null for
@@ -221,7 +220,7 @@ def current_version(owner: str, slug: str) -> Optional[int]:
     return None
 
 
-def _probe_single_version(owner: str, slug: str, v: int, token: str) -> Dict[str, Any]:
+def _probe_single_version(owner: str, slug: str, v: int, token: str) -> dict[str, Any]:
     """Probes status, file count, and timestamp for a single version snapshot."""
     candidates = [str(v), f"v{v}", f"{v}.0", f"version-{v}", f"version{v}", f"Version{v}"]
     entry = {
@@ -270,7 +269,7 @@ def _probe_single_version(owner: str, slug: str, v: int, token: str) -> Dict[str
                         times = [f.get("creationDate") or f.get("creation_date") or "" for f in files]
                         times = [t for t in times if t]
                         if times:
-                            entry["creationTime"] = sorted(times)[-1]
+                            entry["creationTime"] = max(times)
                     break
                 # Version exists but published 0 files
                 entry["label"] = label
@@ -297,7 +296,7 @@ def _probe_single_version(owner: str, slug: str, v: int, token: str) -> Dict[str
     return entry
 
 
-def list_versions(owner: str, slug: str, max_versions: int = 20) -> List[Dict[str, Any]]:
+def list_versions(owner: str, slug: str, max_versions: int = 20) -> list[dict[str, Any]]:
     """Lists per-version snapshots for a kernel, newest first.
 
     Uses high-concurrency ThreadPoolExecutor so scanning up to 50 versions
@@ -318,7 +317,7 @@ def list_versions(owner: str, slug: str, max_versions: int = 20) -> List[Dict[st
 
         if not cur:
             # Parallel probe 50..1 to find highest active version
-            def check_v(test_v: int) -> Optional[int]:
+            def check_v(test_v: int) -> int | None:
                 try:
                     with httpx.Client(timeout=TIMEOUT, headers={"Authorization": f"Bearer {token}"}) as c:
                         for lbl in (str(test_v), f"v{test_v}"):
@@ -360,7 +359,7 @@ def list_versions(owner: str, slug: str, max_versions: int = 20) -> List[Dict[st
         return []
 
     num_workers = min(10, max(1, len(versions_to_probe)))
-    results: Dict[int, Dict[str, Any]] = {}
+    results: dict[int, dict[str, Any]] = {}
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = {
@@ -371,7 +370,7 @@ def list_versions(owner: str, slug: str, max_versions: int = 20) -> List[Dict[st
             v = futures[fut]
             try:
                 results[v] = fut.result()
-            except Exception as exc:
+            except Exception:
                 results[v] = {
                     "version": v,
                     "label": str(v),
@@ -404,7 +403,7 @@ def fetch_version_log(owner: str, slug: str, version: int) -> str:
     return ""
 
 
-def _download_via_kernel_output_api(client: httpx.Client, owner: str, slug: str, version: int, out_dir: str) -> List[str]:
+def _download_via_kernel_output_api(client: httpx.Client, owner: str, slug: str, version: int, out_dir: str) -> list[str]:
     """Attempts to download version output via DownloadKernelOutput."""
     payload = {"ownerSlug": owner, "kernelSlug": slug, "versionNumber": int(version)}
     try:
@@ -417,7 +416,6 @@ def _download_via_kernel_output_api(client: httpx.Client, owner: str, slug: str,
                 redirect_url = f"{KAGGLE_BASE}{redirect_url}"
             with client.stream("GET", redirect_url, timeout=TIMEOUT) as resp:
                 if resp.status_code == 200:
-                    content_type = resp.headers.get("Content-Type", "").lower()
                     buffer = io.BytesIO()
                     for chunk in resp.iter_bytes(256 * 1024):
                         buffer.write(chunk)

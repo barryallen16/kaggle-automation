@@ -7,9 +7,8 @@ capture the exact cancelled version via version_label instead.
 """
 
 import os
-import sys
-import json
 import shutil
+import sys
 import tempfile
 import unittest
 
@@ -46,8 +45,9 @@ def tearDownModule():
 
 def _fresh():
     import importlib
-    import app.config as cfg
-    import app.database as db
+
+    import config as cfg
+    import database as db
     for suffix in ("", "-wal", "-shm"):
         try:
             os.remove(str(cfg.DB_PATH) + suffix)
@@ -55,7 +55,7 @@ def _fresh():
             pass
     cfg = importlib.reload(cfg)
     db = importlib.reload(db)
-    ks = importlib.reload(__import__("app.services.kaggle_service", fromlist=["x"]))
+    ks = importlib.reload(__import__("services.kaggle_service", fromlist=["x"]))
     stub = _make_stub_cli()
     ks.get_kaggle_cli_path = lambda: stub
 
@@ -102,17 +102,23 @@ class TestStopOutputCapture(unittest.TestCase):
 
         async def fake_plain_download(account, ref, run_id):
             # Latest pull before the stub: creates empty dir, no files
+            from pathlib import Path as _P
+
             d = os.path.join(cfg.OUTPUTS_DIR, run_id)
             os.makedirs(d, exist_ok=True)
-            from pathlib import Path as _P; return _P(d)
+            return _P(d)
 
         async def fake_versioned_download(account, ref, version, run_id):
+            from pathlib import Path as _P
+
             d = os.path.join(cfg.OUTPUTS_DIR, run_id)
             os.makedirs(d, exist_ok=True)
-            with open(os.path.join(d, "task_a_labeled_shard_0.jsonl"), "w") as f:
+            with open(  # noqa: ASYNC230 - tiny fixture write inside an async stand-in
+                os.path.join(d, "task_a_labeled_shard_0.jsonl"), "w"
+            ) as f:
                 f.write('{"id": "recovered"}\n')
             captured["versioned"] = (account, ref, version, run_id)
-            from pathlib import Path as _P; return _P(d)
+            return _P(d)
 
         KS.get_kernel_current_version = staticmethod(fake_version)
         KS.download_outputs = staticmethod(fake_plain_download)
@@ -137,15 +143,16 @@ class TestStopOutputCapture(unittest.TestCase):
             return None
 
         async def plain(account, ref, run_id):
+            from pathlib import Path as _P
+
             d = os.path.join(cfg.OUTPUTS_DIR, run_id)
             os.makedirs(d, exist_ok=True)
-            from pathlib import Path as _P; return _P(d)
+            return _P(d)
 
         calls = {"versioned": 0}
 
         async def versioned(account, ref, version, run_id):
             calls["versioned"] += 1
-            return None
 
         KS.get_kernel_current_version = staticmethod(no_version)
         KS.download_outputs = staticmethod(plain)

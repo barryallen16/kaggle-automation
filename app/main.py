@@ -4,21 +4,20 @@ import os
 import secrets
 import shutil
 from contextlib import asynccontextmanager
-from pathlib import Path
-from fastapi import FastAPI, Request, Form
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
+
+import auth
+from config import APP_AUTH_TOKEN, BASE_DIR
+from database import init_db
+from fastapi import FastAPI, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
 
-from config import BASE_DIR, APP_AUTH_TOKEN
-from database import init_db
+# Import routers
+from routers import accounts, distributed, files, kernels, logs, ops, runs, settings
 from services.account_manager import AccountManager
 from services.session_monitor import SessionMonitor
-import auth
-
-# Import routers
-from routers import accounts, runs, distributed, logs, files, settings, kernels, ops
 
 logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"

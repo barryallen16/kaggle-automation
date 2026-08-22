@@ -1,21 +1,21 @@
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
-from typing import Optional
+
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 from database import get_setting, set_setting
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from services.telegram_service import TelegramService
 
 router = APIRouter(prefix="/api/settings", tags=["Settings"])
 
 
 class SettingsPayload(BaseModel):
-    telegram_bot_token: Optional[str] = None
-    telegram_chat_id: Optional[str] = None
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
 
 
 class TelegramTestPayload(BaseModel):
-    bot_token: Optional[str] = None
-    chat_id: Optional[str] = None
+    bot_token: str | None = None
+    chat_id: str | None = None
 
 
 @router.get("")

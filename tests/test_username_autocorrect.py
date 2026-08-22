@@ -15,9 +15,8 @@ Uses a stub CLI + temp data dir - nothing touches production or real Kaggle.
 """
 
 import os
-import sys
-import json
 import shutil
+import sys
 import tempfile
 import unittest
 
@@ -108,10 +107,11 @@ def tearDownModule():
 def _fresh():
     """Fresh DB + modules for each test (config paths bind at import)."""
     import importlib
-    import app.config as cfg
-    import app.database as db
-    import app.services.account_manager as am
-    import app.services.kaggle_service as ks
+
+    import config as cfg
+    import database as db
+    import services.account_manager as am
+    import services.kaggle_service as ks
 
     db_file = cfg.DB_PATH
     for suffix in ("", "-wal", "-shm"):
@@ -147,7 +147,7 @@ def _asyncio_run(coro):
 class TestUsernameAutoCorrect(unittest.TestCase):
     def test_alias_env_and_db_survive_rename(self):
         """update_username keeps old credentials readable + registers an alias."""
-        import app.config as cfg
+        import config as cfg
         db, am = _fresh()
         db.save_account("id1", "kaggle_abc123", "tok_abc", None)
         am.AccountManager.setup_account_files("kaggle_abc123", "tok_abc")
@@ -212,8 +212,9 @@ class TestUsernameAutoCorrect(unittest.TestCase):
     def test_stop_kernel_globally_throttled(self):
         """Stop-All fans out over every active shard; the pipeline stays bounded."""
         import asyncio
-        import app.services.kaggle_service as ks
-        db, am = _fresh()
+
+        import services.kaggle_service as ks
+        _db, _am = _fresh()
         ks.KaggleService.STOP_CONCURRENCY_LIMIT = 2
 
         state = {"active": 0, "max": 0, "calls": 0}

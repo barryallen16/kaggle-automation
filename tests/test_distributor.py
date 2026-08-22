@@ -7,9 +7,8 @@ nothing touches production or real Kaggle.
 """
 
 import os
-import sys
-import json
 import shutil
+import sys
 import tempfile
 import unittest
 
@@ -43,7 +42,7 @@ def setUpModule():
     os.environ["AUTOMATION_DATA_DIR"] = DATA_TMP
     os.environ["INTER_PUSH_STAGGER_SECONDS"] = "0"
 
-    import app.services.kaggle_service as ks
+    import services.kaggle_service as ks
 
     ks.get_kaggle_cli_path = lambda: _make_stub_cli()
 
@@ -65,9 +64,10 @@ def tearDownModule():
 def _fresh():
     """Fresh DB + modules for each test (config paths bind at import)."""
     import importlib
-    import app.config as cfg
-    import app.database as db
-    import app.services.kaggle_service as ks
+
+    import config as cfg
+    import database as db
+    import services.kaggle_service as ks
 
     # Wipe DB files so row counts don't leak across tests
     db_file = cfg.DB_PATH
@@ -127,7 +127,7 @@ CODE = 'print("shard")'
 
 class TestMultiSessionDistributor(unittest.TestCase):
     def _dist(self):
-        import app.services.workload_distributor as wd
+        import services.workload_distributor as wd
 
         return wd.WorkloadDistributor, wd
 
@@ -250,7 +250,7 @@ class TestMultiSessionDistributor(unittest.TestCase):
 
     def test_5_remainder_split_across_runners(self):
         """7 items over 2 runners -> 4/3 with contiguous non-overlapping ranges."""
-        db = _fresh()
+        _fresh()
         WD, _ = self._dist()
         res = asyncio_run(
             WD.distribute_and_launch(
@@ -329,9 +329,9 @@ class TestMultiSessionDistributor(unittest.TestCase):
         self.assertEqual(db.get_all_workloads()[0]["status"], "stopped")
 
     def test_8_stop_workload_with_no_active_shards_404(self):
-        db = _fresh()
-        from routers.distributed import stop_workload
+        _fresh()
         from fastapi import HTTPException
+        from routers.distributed import stop_workload
 
         with self.assertRaises(HTTPException) as cm:
             asyncio_run(stop_workload("workload_does_not_exist"))
@@ -365,7 +365,7 @@ class TestMultiSessionDistributor(unittest.TestCase):
 
     def test_10_per_account_map_clamped_and_missing_defaults(self):
         """Out-of-range values clamp to 1..2; accounts absent from map default to 2."""
-        db = _fresh()
+        _fresh()
         WD, _ = self._dist()
         res = asyncio_run(
             WD.distribute_and_launch(
@@ -419,7 +419,7 @@ class TestMultiSessionDistributor(unittest.TestCase):
 
     def test_12_manual_shards_validation_invalids(self):
         """Rejects inverted range start > end or missing accounts."""
-        db = _fresh()
+        _fresh()
         WD, _ = self._dist()
         # Inverted range
         res = asyncio_run(

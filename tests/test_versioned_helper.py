@@ -5,10 +5,10 @@ stop-stub/latest trap), must try every plausible versionLabel spelling, and
 status parsing must fold enum-style CLI output into our five statuses.
 """
 
-import os
-import sys
 import json
+import os
 import shutil
+import sys
 import tempfile
 import unittest
 
@@ -53,6 +53,7 @@ class TestStatusNormalization(unittest.TestCase):
 class TestVersionedHelper(unittest.TestCase):
     def _run_fetch(self, handler, out_dir):
         import httpx
+
         import app.services.kaggle_versioned_output as helper
 
         real_client = httpx.Client
@@ -118,7 +119,6 @@ class TestVersionedHelper(unittest.TestCase):
         out_dir = tempfile.mkdtemp(prefix="vh_out2_")
 
         def handler(request):
-            body = json.loads(request.content or b"{}")
             if request.url.path == "/v1/kernels.KernelsApiService/ListKernelSessionOutput":
                 return httpx.Response(200, json={"files": [], "log": ""})
             return httpx.Response(404)
@@ -129,6 +129,7 @@ class TestVersionedHelper(unittest.TestCase):
 
     def test_3_meta_reads_current_version(self):
         import httpx
+
         import app.services.kaggle_versioned_output as helper
 
         def handler(request):
@@ -150,6 +151,7 @@ class TestVersionedHelper(unittest.TestCase):
 
     def test_4_auth_header_sent(self):
         import httpx
+
         import app.services.kaggle_versioned_output as helper
         headers_seen = {}
 
@@ -173,6 +175,7 @@ class TestVersionedHelper(unittest.TestCase):
 
     def test_5_get_kernel_primary_meta(self):
         import httpx
+
         import app.services.kaggle_versioned_output as helper
 
         def handler(request):
@@ -194,6 +197,7 @@ class TestVersionedHelper(unittest.TestCase):
 
     def test_6_list_versions_parallel_ordering(self):
         import httpx
+
         import app.services.kaggle_versioned_output as helper
 
         def handler(request):
@@ -230,7 +234,9 @@ class TestVersionedHelper(unittest.TestCase):
     def test_7_download_kernel_output_direct_zip(self):
         import io
         import zipfile
+
         import httpx
+
         import app.services.kaggle_versioned_output as helper
 
         out_dir = tempfile.mkdtemp(prefix="vh_zip_")
@@ -252,7 +258,7 @@ class TestVersionedHelper(unittest.TestCase):
         helper.httpx.Client = staticmethod(lambda *a, **kw: real_client(
             *a, transport=httpx.MockTransport(handler), **kw))
         try:
-            saved, notes = helper.fetch_version_output("owner", "my-slug", 7, out_dir)
+            saved, _notes = helper.fetch_version_output("owner", "my-slug", 7, out_dir)
         finally:
             helper.httpx.Client = real_client
 

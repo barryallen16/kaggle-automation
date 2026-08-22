@@ -1,7 +1,8 @@
 import html
-import httpx
 import logging
-from typing import Optional, Dict, Any
+from typing import Any
+
+import httpx
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 from database import get_setting
 
@@ -21,7 +22,7 @@ class TelegramService:
         return html.escape(str(value if value is not None else ""), quote=True)
 
     @classmethod
-    async def send_message(cls, text: str, parse_mode: str = "HTML") -> Dict[str, Any]:
+    async def send_message(cls, text: str, parse_mode: str = "HTML") -> dict[str, Any]:
         """Sends a bot direct-message to the configured Telegram USER ID."""
         token, chat_id = cls.get_credentials()
         if not token or not chat_id:
@@ -64,13 +65,13 @@ class TelegramService:
                     logger.error(f"Telegram API error: {description}")
                     return {"success": False, "error": description}
         except Exception as e:
-            logger.error(f"Failed to send Telegram notification: {str(e)}")
+            logger.error(f"Failed to send Telegram notification: {e!s}")
             return {"success": False, "error": str(e)}
 
     @classmethod
     async def send_test_message(
-        cls, test_token: Optional[str] = None, test_chat_id: Optional[str] = None
-    ) -> Dict[str, Any]:
+        cls, test_token: str | None = None, test_chat_id: str | None = None
+    ) -> dict[str, Any]:
         token = (
             test_token or get_setting("telegram_bot_token", TELEGRAM_BOT_TOKEN) or ""
         )
@@ -112,7 +113,7 @@ class TelegramService:
             return {"success": False, "error": str(e)}
 
     @classmethod
-    async def notify_run_started(cls, run: Dict[str, Any]):
+    async def notify_run_started(cls, run: dict[str, Any]):
         trial_badge = "🧪 <b>[TRIAL RUN]</b> " if run.get("is_trial") else "🚀 "
         acc = run.get("accelerator", "Default")
         acc_label = (
@@ -139,7 +140,7 @@ class TelegramService:
         await cls.send_message(msg)
 
     @classmethod
-    async def notify_11h_warning(cls, run: Dict[str, Any]):
+    async def notify_11h_warning(cls, run: dict[str, Any]):
         esc = cls._esc
         msg = (
             f"⚠️ <b>1-Hour Warning: Approaching 12h Kaggle Limit!</b>\n\n"
@@ -152,7 +153,7 @@ class TelegramService:
         await cls.send_message(msg)
 
     @classmethod
-    async def notify_12h_limit_reached(cls, run: Dict[str, Any]):
+    async def notify_12h_limit_reached(cls, run: dict[str, Any]):
         esc = cls._esc
         msg = (
             f"⏰ <b>12-Hour Continuous Session Cutoff Reached</b>\n\n"
@@ -164,7 +165,7 @@ class TelegramService:
         await cls.send_message(msg)
 
     @classmethod
-    async def notify_run_completed(cls, run: Dict[str, Any], status: str):
+    async def notify_run_completed(cls, run: dict[str, Any], status: str):
         esc = cls._esc
         icon = "✅" if status == "complete" else "❌"
         msg = (

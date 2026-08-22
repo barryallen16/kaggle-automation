@@ -1,11 +1,12 @@
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
-from fastapi.responses import PlainTextResponse, FileResponse
-from pathlib import Path
 import asyncio
 import re
-from services.kaggle_service import KaggleService
-from database import get_run_by_id
+from pathlib import Path
+
 from config import LOGS_DIR
+from database import get_run_by_id
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, PlainTextResponse
+from services.kaggle_service import KaggleService
 
 router = APIRouter(tags=["Logs"])
 
@@ -18,6 +19,18 @@ def _safe_log_path(run_id: str) -> Path:
     return LOGS_DIR / f"{run_id}.log"
 
 
+def _read_log_lossy(path: Path) -> str:
+    """Reads a log file, dropping undecodable bytes (sync; run via to_thread)."""
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        return f.read()
+
+
+def _write_log(path: Path, content: str) -> None:
+    """Writes a log file (sync; run via to_thread)."""
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
 @router.get("/api/runs/{run_id}/logs")
 async def get_logs(run_id: str, fetch_remote: bool = False):
     run = get_run_by_id(run_id)
@@ -27,8 +40,7 @@ async def get_logs(run_id: str, fetch_remote: bool = False):
     log_path = _safe_log_path(run_id)
     local_log = ""
     if log_path.exists():
-        with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-            local_log = f.read()
+        local_log = await asyncio.to_thread(_read_log_lossy, log_path)
 
     if fetch_remote:
         remote_logs = await KaggleService.fetch_full_logs(
@@ -36,8 +48,7 @@ async def get_logs(run_id: str, fetch_remote: bool = False):
         )
         if remote_logs and not remote_logs.startswith("Error"):
             local_log += "\n--- Remote Logs from Kaggle API ---\n" + remote_logs
-            with open(log_path, "w", encoding="utf-8") as f:
-                f.write(local_log)
+            await asyncio.to_thread(_write_log, log_path, local_log)
 
     return PlainTextResponse(content=local_log)
 
@@ -55,8 +66,8 @@ async def download_log_file(run_id: str):
 @router.websocket("/ws/runs/{run_id}/logs")
 async def websocket_logs(websocket: WebSocket, run_id: str, skip_initial: bool = False):
     # WebSockets bypass HTTP middleware - enforce the session cookie here
-    from config import APP_AUTH_TOKEN
     import auth as auth_mod
+    from config import APP_AUTH_TOKEN
 
     if APP_AUTH_TOKEN:
         cookie = websocket.cookies.get(auth_mod.SESSION_COOKIE_NAME)
@@ -75,10 +86,9 @@ async def websocket_logs(websocket: WebSocket, run_id: str, skip_initial: bool =
         log_path = LOGS_DIR / f"{run_id}.log"
         if log_path.exists():
             try:
-                with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-                    initial_lines = f.read()
-                    if initial_lines:
-                        await websocket.send_text(initial_lines)
+                initial_lines = await asyncio.to_thread(_read_log_lossy, log_path)
+                if initial_lines:
+                    await websocket.send_text(initial_lines)
             except Exception:
                 pass
 
@@ -100,7 +110,7 @@ async def websocket_logs(websocket: WebSocket, run_id: str, skip_initial: bool =
             try:
                 line = await asyncio.wait_for(queue.get(), timeout=1.0)
                 await websocket.send_text(line)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Keepalive heartbeat
                 await websocket.send_text("")
     except WebSocketDisconnect:

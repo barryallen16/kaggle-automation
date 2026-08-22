@@ -424,3 +424,39 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshGlobalData();
   setInterval(refreshGlobalData, 8000);
 });
+
+// ------------------------------------------------------------------
+// Vimium / keyboard-first dropdown support.
+//
+// Vimium-style extensions intercept Enter, Space and the arrow keys in
+// normal mode, and their link-hint "clicks" cannot open a native <select>
+// popup (a synthetic click is not a real user gesture). Net result: the
+// dropdowns never open from the keyboard. Fix: while a single-value
+// <select> is focused, our own keydown handler treats Enter/Space/arrows
+// as "open this picker" and calls select.showPicker() - a genuine user
+// gesture, so the browser opens the native popup. Once it is open the
+// popup owns the keyboard (arrows + typeahead + Enter all work, Vimium
+// keys no longer apply). Plain listboxes (size > 1) are left untouched.
+// ------------------------------------------------------------------
+function openSelectPicker(sel) {
+  if (!sel || sel.disabled || !sel.options || sel.options.length === 0) return false;
+  if (typeof sel.showPicker !== 'function') return false;
+  try {
+    sel.showPicker();
+    return true;
+  } catch (_) {
+    return false; // not user-activated, or hidden/iframed - let native behavior run
+  }
+}
+
+document.addEventListener('keydown', (e) => {
+  const t = e.target;
+  if (!t || t.tagName !== 'SELECT' || t.size > 1) return; // listbox: keep native arrows
+  if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  if (!openSelectPicker(t)) return; // fall back to the browser's default handling
+  // Picker opened: swallow the key so Vimium can't scroll (Space) or the
+  // surrounding <form> isn't accidentally submitted (Enter on a select).
+  e.preventDefault();
+  e.stopPropagation();
+}, true); // capture phase: run before Vimium's normal-mode handlers

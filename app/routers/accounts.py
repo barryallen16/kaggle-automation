@@ -1,30 +1,31 @@
+from typing import Any
+
+from database import get_active_runs, get_all_accounts
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
 from services.account_manager import AccountManager
 from services.ops_tracker import tracker
-from database import get_all_accounts, get_active_runs
 
 router = APIRouter(prefix="/api/accounts", tags=["Accounts"])
 
 
 class AddAccountRequest(BaseModel):
     api_key: str
-    username: Optional[str] = None
+    username: str | None = None
 
 
 def _mask_key(key: str) -> str:
     return key[:6] + "..." + key[-4:] if len(key) > 10 else "***"
 
 
-def _sanitize_account(acc: Dict[str, Any]) -> Dict[str, Any]:
+def _sanitize_account(acc: dict[str, Any]) -> dict[str, Any]:
     acc_copy = dict(acc)
     acc_copy["api_key_masked"] = _mask_key(acc.get("api_key", ""))
     acc_copy.pop("api_key", None)
     return acc_copy
 
 
-def _account_quota_left(acc: Dict[str, Any]) -> tuple:
+def _account_quota_left(acc: dict[str, Any]) -> tuple:
     last_q = acc.get("last_quota") or {}
     if not isinstance(last_q, dict):
         return (0.0, 0.0)
@@ -126,9 +127,11 @@ async def refresh_single(username: str):
 @router.get("/{username}/debug")
 async def debug_account(username: str):
     """Debug fallback usernames like kaggle_0694f485 - shows real Kaggle username via JWT and via CLI."""
+    import base64
+    import json as _json
+
     from database import get_account_by_username
     from services.account_manager import AccountManager
-    import base64, json as _json
 
     acc = get_account_by_username(username)
     if not acc:
