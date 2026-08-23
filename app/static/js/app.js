@@ -47,7 +47,7 @@ function showToast(message, type = 'info') {
   toast.querySelector('span').textContent = message;
 
   container.appendChild(toast);
-  lucide.createIcons();
+  refreshIcons();
 
   setTimeout(() => {
     toast.classList.remove('translate-x-5', 'opacity-0');
@@ -59,8 +59,11 @@ function showToast(message, type = 'info') {
   }, 4500);
 }
 
-// Tab navigation router
-function switchTab(tabId) {
+// Tab navigation router.
+// Tabs are pushed onto browser history (/?tab=<id>) so Back/Forward move
+// between app views instead of exiting to the stale /login entry - the whole
+// app lives on a single page, and without this the back button left the site.
+function switchTab(tabId, push = true) {
   AppState.activeTab = tabId;
   
   // Update nav buttons
@@ -94,6 +97,14 @@ function switchTab(tabId) {
   const titleEl = document.getElementById('page-title');
   if (titleEl) titleEl.innerText = titles[tabId] || 'Dashboard';
 
+  // Record the view in browser history (never for popstate-driven switches)
+  if (push && window.history && window.history.pushState) {
+    try {
+      const url = tabId === 'dashboard' ? '/' : '/?tab=' + encodeURIComponent(tabId);
+      window.history.pushState({ tab: tabId }, '', url);
+    } catch (err) { /* file:// or sandboxed - ignore */ }
+  }
+
   // Trigger tab-specific refresh
   if (tabId === 'dashboard') loadDashboardData();
   if (tabId === 'history') loadHistoryData();
@@ -101,6 +112,16 @@ function switchTab(tabId) {
   if (tabId === 'files') updateFilesRunDropdown();
   if (tabId === 'runner' || tabId === 'distributed') populateAccountSelects();
   if (tabId === 'settings') loadSettingsData();
+}
+
+const KNOWN_TABS = ['dashboard', 'runner', 'distributed', 'terminal', 'files', 'history', 'settings'];
+
+function tabFromLocation() {
+  const fromQuery = new URLSearchParams(window.location.search).get('tab');
+  if (fromQuery && KNOWN_TABS.includes(fromQuery)) return fromQuery;
+  const hash = window.location.hash.replace('#', '');
+  if (hash && KNOWN_TABS.includes(hash)) return hash;
+  return null;
 }
 
 // Engine indicator: reflect real CLI availability instead of a static label
@@ -117,22 +138,26 @@ function updateEngineIndicator(cliAvailable) {
   }
 }
 
+// Fetch JSON; on an expired session bounce to the login page immediately.
+async function fetchAuthedJson(url) {
+  const res = await fetch(url);
+  if (res.status === 401) {
+    window.location.href = '/login';
+    throw new Error('session expired');
+  }
+  return res.json();
+}
+
 // Global data refresh
 async function refreshGlobalData() {
   try {
     const [accRes, runsRes, healthRes] = await Promise.all([
-      fetch('/api/accounts').then(r => r.json()),
-      fetch('/api/runs').then(r => r.json()),
+      fetchAuthedJson('/api/accounts'),
+      fetchAuthedJson('/api/runs'),
       fetch('/api/health').then(r => r.json()).catch(() => null)
     ]);
 
     updateEngineIndicator(healthRes ? healthRes.cli_available : false);
-
-    // Session expired -> go log in again instead of failing silently forever
-    if (accRes.status === 401 || runsRes.status === 401) {
-      window.location.href = '/login';
-      return;
-    }
 
     if (accRes.success) {
       AppState.accounts = accRes.accounts || [];
@@ -157,6 +182,18 @@ async function refreshGlobalData() {
 
 // Auto polling loop every 8 seconds
 document.addEventListener('DOMContentLoaded', () => {
+  // Deep-link: activate the tab from the URL (?tab=... or #...) if present
+  const initialTab = tabFromLocation();
+  if (initialTab && initialTab !== 'dashboard') {
+    switchTab(initialTab, false);
+  }
+
+  // Back/Forward navigate between tabs without reloading the app
+  window.addEventListener('popstate', () => {
+    const tab = tabFromLocation() || 'dashboard';
+    switchTab(tab, false);
+  });
+
   refreshGlobalData();
   setInterval(refreshGlobalData, 8000);
 });

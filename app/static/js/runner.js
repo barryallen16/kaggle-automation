@@ -78,7 +78,7 @@ async function handleSingleRunSubmit(e) {
   const btn = document.getElementById('btn-launch-run');
   btn.disabled = true;
   btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Deploying to Kaggle CLI...</span>`;
-  lucide.createIcons();
+  refreshIcons();
 
   try {
     showToast(isTrial ? 'Initiating Trial Run on Kaggle...' : 'Deploying full notebook session to Kaggle...', 'info');
@@ -107,6 +107,6 @@ async function handleSingleRunSubmit(e) {
   } finally {
     btn.disabled = false;
     btn.innerHTML = `<i data-lucide="rocket" class="w-4 h-4"></i><span>Deploy & Launch to Kaggle</span>`;
-    lucide.createIcons();
+    refreshIcons();
   }
 }

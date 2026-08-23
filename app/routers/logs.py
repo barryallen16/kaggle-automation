@@ -45,7 +45,7 @@ async def download_log_file(run_id: str):
     return FileResponse(path=str(log_path), filename=f"{run_id}_logs.txt", media_type="text/plain")
 
 @router.websocket("/ws/runs/{run_id}/logs")
-async def websocket_logs(websocket: WebSocket, run_id: str):
+async def websocket_logs(websocket: WebSocket, run_id: str, skip_initial: bool = False):
     # WebSockets bypass HTTP middleware - enforce the session cookie here
     from app.config import APP_AUTH_TOKEN
     from app import auth as auth_mod
@@ -57,23 +57,34 @@ async def websocket_logs(websocket: WebSocket, run_id: str):
             return
 
     await websocket.accept()
-    
-    # Send existing log file contents first
-    if not SAFE_ID_RE.match(run_id or ""):
+
+    # Send existing log file contents first unless the client already
+    # loaded them over HTTP (skip_initial=1 avoids duplicated output).
+    if not skip_initial and not SAFE_ID_RE.match(run_id or ""):
         await websocket.close(code=1008)
         return
-    log_path = LOGS_DIR / f"{run_id}.log"
-    if log_path.exists():
-        try:
-            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
-                initial_lines = f.read()
-                if initial_lines:
-                    await websocket.send_text(initial_lines)
-        except Exception:
-            pass
+    if not skip_initial:
+        log_path = LOGS_DIR / f"{run_id}.log"
+        if log_path.exists():
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                    initial_lines = f.read()
+                    if initial_lines:
+                        await websocket.send_text(initial_lines)
+            except Exception:
+                pass
 
     # Subscribe to live streaming log queue
     queue = KaggleService.register_log_subscriber(run_id)
+
+    # Self-healing: if the run is still active but its background follower
+    # died (server restart, CLI crash), revive it so new lines keep coming.
+    try:
+        run = get_run_by_id(run_id)
+        if run:
+            KaggleService.ensure_log_stream(run)
+    except Exception:
+        pass
     
     try:
         while True:

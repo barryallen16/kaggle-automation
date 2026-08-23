@@ -52,13 +52,32 @@ class AccountManager:
 
         return acc_dir
 
+    @staticmethod
+    def _read_access_token(acc_dir: Path) -> Optional[str]:
+        """Reads the access token written for this account's isolated config dir."""
+        try:
+            token = (acc_dir / "access_token").read_text(encoding="utf-8").strip()
+            return token or None
+        except OSError:
+            return None
+
     @classmethod
     def get_account_env(cls, username: str) -> Dict[str, str]:
         """Builds subprocess environment variables for the specified account."""
         acc_dir = cls.get_account_config_dir(username)
         env = os.environ.copy()
         env["KAGGLE_CONFIG_DIR"] = str(acc_dir)
-        
+
+        # The kaggle CLI (>= 2.x / kagglesdk) authenticates access tokens ONLY from
+        # the KAGGLE_API_TOKEN env var or ~/.kaggle/access_token - it never reads
+        # $KAGGLE_CONFIG_DIR/access_token. Export the account's token here so each
+        # subprocess authenticates as the right account without touching ~/.kaggle.
+        token = cls._read_access_token(acc_dir)
+        if token and not token.startswith("{"):
+            env["KAGGLE_API_TOKEN"] = token
+        else:
+            env.pop("KAGGLE_API_TOKEN", None)
+
         # Ensure virtualenv Scripts/bin is at the front of PATH
         bin_folder = "Scripts" if os.name == "nt" else "bin"
         venv_bin = str(Path(sys.prefix) / bin_folder)
@@ -67,7 +86,7 @@ class AccountManager:
 
         # Force UTF-8 output encoding for kaggle CLI (fixes Windows cp1252 errors)
         env["PYTHONIOENCODING"] = "utf-8"
-        
+
         return env
 
     @classmethod
@@ -204,32 +223,37 @@ class AccountManager:
                 "tpu": {"name": "TPU VM v3-8", "used": 0, "limit": 20, "unit": "hours", "percent": 0}
             }
 
-            for q in quotas:
-                acc_name = q.get("accelerator", "").lower()
-                used_str = q.get("used", "0").replace("hours", "").strip()
-                limit_str = q.get("limit", "30").replace("hours", "").strip()
+            def _hours(value_str) -> Optional[float]:
+                """Parses quota hour strings like '12.50h' / '30.00 hours' / '0'."""
+                if value_str is None:
+                    return None
+                cleaned = str(value_str).lower().replace("hours", "").replace("hour", "").replace("h", "").strip()
                 try:
-                    used_val = float(used_str)
-                    limit_val = float(limit_str)
-                    pct = round((used_val / limit_val) * 100, 1) if limit_val > 0 else 0
-                    if "tpu" in acc_name:
-                        summary["tpu"] = {
-                            "name": q.get("accelerator", "TPU"),
-                            "used": used_val,
-                            "limit": limit_val,
-                            "unit": "hours",
-                            "percent": min(100.0, pct)
-                        }
-                    else:
-                        summary["gpu"] = {
-                            "name": q.get("accelerator", "GPU"),
-                            "used": used_val,
-                            "limit": limit_val,
-                            "unit": "hours",
-                            "percent": min(100.0, pct)
-                        }
-                except Exception:
-                    pass
+                    return float(cleaned)
+                except ValueError:
+                    return None
+
+            for q in quotas:
+                # New CLI schema: resource,used,remaining,total,refreshAt
+                # Legacy schema:  acceleratorMaxHours / accelerator,used,limit
+                acc_name = (q.get("resource") or q.get("accelerator") or "").lower()
+                raw_used = q.get("used")
+                limit_val = _hours(q.get("total")) if q.get("total") else _hours(q.get("limit"))
+                used_val = _hours(raw_used)
+                if used_val is None or limit_val is None or limit_val <= 0:
+                    continue
+                pct = round((used_val / limit_val) * 100, 1)
+                entry = {
+                    "name": q.get("resource") or q.get("accelerator") or "GPU",
+                    "used": used_val,
+                    "limit": limit_val,
+                    "unit": "hours",
+                    "percent": min(100.0, pct)
+                }
+                if "tpu" in acc_name:
+                    summary["tpu"] = entry
+                elif "gpu" in acc_name:
+                    summary["gpu"] = entry
 
             return summary
         except Exception as e:

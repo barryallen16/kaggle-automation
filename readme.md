@@ -20,8 +20,8 @@ A centralized dashboard and FastAPI backend to orchestrate, monitor, and distrib
 - **Output Artifacts Explorer**: Browse generated files and download single files or full `.zip` archives (streamed from disk, never buffered in RAM) with 1 click.
 - **Run Catalog**: Full execution history with direct clickable Kaggle notebook URLs.
 - **Authentication**: Optional shared-secret login (`APP_AUTH_TOKEN`) with HMAC-signed HttpOnly cookies — protects every route including WebSockets.
-- **Branding**: Geist Pixel display font, Geist body / Geist Mono terminal fonts and favicon pack served fully locally (no CDN font dependencies).
-- **Modern Dark UI**: Responsive dashboard with dark cyberpunk/slate styling.
+- **Branding**: Geist Pixel display font as the site-wide default, Geist Mono terminal font and favicon pack served fully locally (no CDN font/icon dependencies). Icons are bundled pixel-art glyphs (Pixelarticons v2.4.1, MIT) rendered in mono via `currentColor` — raw SVGs live in `app/static/icons/pixel/`.
+- **Modern Flat Dark UI**: Responsive dashboard with flat slate styling — no gradients, no glow effects.
 
 ---
 
@@ -56,6 +56,14 @@ The server binds to `127.0.0.1:8000` by default (safe). Override with `APP_HOST=
 
 ### 4. Open the Dashboard
 Navigate to [http://localhost:8000](http://localhost:8000) in your browser and sign in with your `APP_AUTH_TOKEN`.
+
+---
+
+## How Dispatch Works (Kaggle CLI 2.x)
+
+- **Auth**: each account's access token is exported to its own subprocess via the `KAGGLE_API_TOKEN` env var — the modern kaggle CLI does not read `$KAGGLE_CONFIG_DIR/access_token`. `~/.kaggle` is never touched, so accounts stay fully isolated.
+- **Kernel identity**: Kaggle keys notebooks by the slugified *title*. Relaunching a run with the same title on the same account creates a new **version** of that kernel; use a different title for a fresh kernel.
+- **Notebooks are normalized before push**: missing `kernelspec` is injected (python3) and raw Python pasted as `.ipynb` is wrapped into a valid notebook cell automatically.
 
 ---
 

@@ -3,6 +3,7 @@
 > Complete record of all changes made during development.
 > **Session 1** (August 22, 2026): initial diagnosis through infrastructure fixes.
 > **Session 2** (August 22–23, 2026): security audit & hardening, authentication, branding, Telegram DM alerts, and full Kaggle verification of the inference pipeline.
+> **Session 3** (August 23, 2026): dispatch failure root-caused & fixed; single + distributed workloads verified end-to-end on real Kaggle accounts.
 
 ---
 
@@ -37,6 +38,14 @@
 24. [Telegram Alerts → Direct Messages via User ID](#24-telegram-alerts--direct-messages-via-user-id)
 25. [Inference Script: Full Kaggle Verification (v1→v10)](#25-inference-script-full-kaggle-verification-v1v10)
 26. [Local Test Harness for Inference Script](#26-local-test-harness-for-inference-script)
+
+**Session 3 (August 23, 2026):**
+
+27. [Dispatch Failure: CLI Auth Channel Fix (root cause)](#27-dispatch-failure-cli-auth-channel-fix-root-cause)
+28. [Notebook Normalization: kernelspec + raw-code wrapping](#28-notebook-normalization-kernelspec--raw-code-wrapping)
+29. [Slug/Title Mismatch 409 Fix](#29-slugtitle-mismatch-409-fix)
+30. [Quota CSV Schema Update + Output Download Flag Fix](#30-quota-csv-schema-update--output-download-flag-fix)
+31. [Session 3 End-to-End Verification](#31-session-3-end-to-end-verification)
 
 ---
 
@@ -523,3 +532,265 @@ Static fixes carried into the script:
 | Account directories | 65+ | Recreated per-account at startup |
 | Fake usernames | `kaggle_user_*` pattern | Deterministic fallback only if unresolvable |
 | Test data | Orphaned runs & accounts | Removed; tests isolated to temp dirs |
+
+---
+
+# Session 3 — August 23, 2026
+
+## 27. Dispatch Failure: CLI Auth Channel Fix (root cause)
+
+**Symptom:** Every launch (single and distributed) returned `success: false` with
+`"Authentication required to call the Kaggle API."` — nothing was ever dispatched.
+
+**Root cause:** `kaggle` CLI 2.2.4 / `kagglesdk` 0.1.37 authenticates access tokens from
+ONLY two places: the `KAGGLE_API_TOKEN` env var or `~/.kaggle/access_token`.
+The platform wrote each account's token to `$KAGGLE_CONFIG_DIR/access_token`, which this
+CLI version never reads (it only honors `KAGGLE_CONFIG_DIR` for legacy `kaggle.json`).
+Result: every subprocess ran unauthenticated → every dispatch errored, quota fetches
+returned junk CSV rows parsed as "accounts", and usernames fell back to `kaggle_<hash>`.
+
+**Fix (`app/services/account_manager.py`):**
+- `get_account_env()` now reads the account's `access_token` file and exports it as
+  `KAGGLE_API_TOKEN` in the subprocess environment (skipped for JSON `kaggle.json`
+  credentials). Per-account isolation is fully preserved — `~/.kaggle` is never touched.
+- Side effect fixed automatically: username resolution at startup now works again;
+  accounts re-register with their real Kaggle usernames.
+
+## 28. Notebook Normalization: kernelspec + raw-code wrapping
+
+**File:** `app/services/kaggle_service.py`
+
+**Symptom:** Pushes succeeded but kernels died on Kaggle with
+`ValueError: No kernel name found in notebook and no override provided.`
+
+**Root cause:** Two gaps:
+1. Notebooks without `metadata.kernelspec` are rejected by Kaggle's papermill runner.
+2. The UI pastes raw Python with default filename `notebook.ipynb`; raw text pushed as a
+   "notebook" crashes the CLI's `json.loads` during push.
+
+**Fix:** New `ensure_executable_notebook()` normalizer applied to every `.ipynb` payload:
+- Injects a default `python3` kernelspec when missing (also added to the stop-kernel stub).
+- Wraps raw Python source into a valid single-cell notebook when the content is not JSON.
+
+## 29. Slug/Title Mismatch 409 Fix
+
+**File:** `app/services/kaggle_service.py`
+
+**Symptom:** Re-launching any run hit persistent `409 Client Error: Conflict` on
+SaveKernel; all 4 retry attempts failed even minutes after the previous run ended.
+
+**Diagnosis (verified against live API):** Kaggle keys notebooks by the slugified TITLE.
+The old `sanitize_slug()` appended a random hex suffix to the metadata `id`
+(`title-a1b2`), so the id pointed at a non-existent kernel while the title mapped to the
+existing one → every subsequent push conflicted. (Create tolerated the mismatch once;
+updates never do.)
+
+**Fix:** `sanitize_slug(title)` now derives the slug exactly like Kaggle does from the
+(truncated ≤50 char) title — no suffix. Same-title launches become clean new versions of
+the same kernel; distributed shard titles are already unique via `[Shard i/n]`.
+
+## 30. Quota CSV Schema Update + Output Download Flag Fix
+
+**Files:** `app/services/account_manager.py`, `app/services/kaggle_service.py`
+- `kaggle quota -v` now emits `resource,used,remaining,total,refreshAt` (e.g.
+  `GPU,2.58h,27.42h,30.00h,...`). The parser expected the old
+  `accelerator/used/limit` schema, so meters always showed zeros. Rewritten to handle
+  both schemas with tolerant hour-string parsing (`"2.58h"`).
+- `download_outputs()` passed the kernel ref as `-o <ref>`, but `-o` is a boolean force
+  flag in CLI ≥ 2.x — kernel ref must be positional. Fixed to
+  `kernels output <ref> -p <dir> -o`; artifact pulls verified working.
+- GPU/TPU boolean derivation now keys off the resolved accelerator map, so
+  `nvidia-l4`/`a100`/`h100` correctly set `enable_gpu=true` (they contain neither
+  `"gpu"` nor `"t4"` substrings).
+
+## 31. Session 3 End-to-End Verification
+
+| Test | Result |
+|---|---|
+| Single run push (`jayadithyx16`, T4 x2 trial) | ✅ Queued → Running → **COMPLETE**, 2x Tesla T4 allocated |
+| Distributed push (2 accounts, 100 items) | ✅ status `dispatched`, shards [0,50) + [50,100) |
+| Distributed execution on Kaggle | ✅ Both shards COMPLETE, 50 items each |
+| Shard partition integrity | ✅ Zero overlap; union = exactly 0..99 |
+| Artifact pull (`files/pull`) | ✅ `shard_result.json` downloaded & verified correct |
+| Stop endpoint (stub kernelspec path) | ✅ Stop push accepted, run marked stopped |
+| Quota parsing (new CSV schema) | ✅ GPU 2.58h/30h = 8.6% shown correctly |
+| Real username resolution at startup | ✅ `jayadithyx16` + `darkzone16` (was `kaggle_<hash>`) |
+| Unit suites (`test_automation.py`, `test_inference_script.py`) | ✅ 3/3 + 8/8 green |
+
+**Note:** data/ was wiped before verification (polluted DB held fake accounts from the
+broken-auth era); `.env` keys auto re-registered cleanly on startup.
+
+---
+
+# Session 4 — August 23, 2026 (UI/UX Overhaul + Auth Loop Fix)
+
+## 32. Back-Button Login Loop Fix
+
+**Symptom:** Pressing the browser back button after signing in always landed on the
+login page again, demanding re-authentication.
+
+**Root cause (two parts):**
+1. `GET /login` always rendered the form, even for already-authenticated users. The
+   history stack was `/ → /login?next=/ → /`, so "back" hit the stale login entry.
+2. No `Cache-Control` headers meant browsers could replay cached auth pages/redirects.
+
+**Fix (`app/main.py`):**
+- Authenticated users hitting `/login` are now 303-redirected to `next` (or `/`);
+  open redirects blocked (`//host`, scheme-relative) — falls back to `/`.
+- Middleware sets `Cache-Control: no-store` on every non-static response so cached
+  pages can never resurrect a stale login state. Static assets keep normal caching.
+
+**Related fix (`app/static/js/app.js`):** the session-expiry check was dead code —
+`fetch(...).then(r => r.json())` consumed the response before `r.status === 401`
+could be inspected, so expired sessions never redirected to login. New
+`fetchAuthedJson()` helper checks status first and bounces to `/login` on 401.
+
+## 33. Geist Pixel as Site-Wide Default Font
+
+**Files:** `app/static/css/custom.css`, `app/templates/index.html`, `login.html`
+
+Geist Pixel Square is now the default font for ALL text (was body = plain Geist,
+Pixel only on headings). Tailwind's `fontFamily.sans` maps to
+`['Geist Pixel Square', 'Geist', 'monospace']` and `mono` to `'Geist Mono'`, so
+every utility class renders with local fonts. Code/terminal stays Geist Mono.
+
+## 34. Pixel Icons (Pixelarticons) Replace Lucide
+
+Streamline's Pixel pack is behind an account/license wall (HTTP 429 + gated
+downloads), so the dashboard now bundles **Pixelarticons v2.4.1 (MIT)** instead:
+true pixel-art glyphs, monochrome via `fill="currentColor"`, rendered with
+`shape-rendering: crispEdges`.
+
+- New `app/static/js/pixel-icons.js`: all 41 needed icons inlined as SVG strings;
+  exposes `refreshIcons(root)` which replaces any `<i data-lucide="name"></i>` while
+  preserving its classes (`w-4 h-4 text-cyan-400 animate-spin`, etc.). Idempotent.
+- Raw SVGs also stored at `app/static/icons/pixel/<name>.svg` for inspection/swaps;
+  icon names are keyed by the original lucide names, so no markup changes were needed.
+- Lucide CDN script removed from both templates; all 9 `lucide.createIcons()`
+  call sites across templates + 6 JS modules switched to `refreshIcons()`.
+- Verified: zero missing icons across all templates/JS; runtime replacement tested
+  under node.
+
+## 35. Flat Theme — All Gradients & Glows Removed
+
+The blue-gradient look read as generic AI slop. Everything is flat solid colors now:
+
+| Before | After |
+|---|---|
+| Launch buttons: `bg-gradient-to-r from-cyan-500 to-blue-600` + glow shadows | Solid `bg-cyan-600 hover:bg-cyan-500`, no shadow |
+| Distributed button: purple→indigo gradient | Solid `bg-purple-600 hover:bg-purple-500` |
+| Quota bars: cyan→blue / purple→indigo gradients | Flat `bg-cyan-400` / `bg-purple-400` |
+| Account avatar tile: gradient fill | Flat `bg-cyan-500/10` |
+| Active nav tab: linear-gradient background | Flat `rgba(0,242,254,0.08)` |
+| Login page: two blurred ambient glow blobs | Removed |
+| Logo tiles: colored glow shadows | Plain border only |
+
+Verified: `grep -c gradient` returns 0 across served HTML, templates, JS and CSS.
+
+## Session 4 Verification
+
+| Check | Result |
+|---|---|
+| Unauth `/` → redirect `/login?next=/` | ✅ 303 |
+| Login POST issues signed cookie | ✅ 303 → `/` |
+| Authed GET `/login` (back button) | ✅ 303 → `/` — never re-prompts |
+| `next=/terminal` honored, `//evil.com` blocked | ✅ |
+| `Cache-Control: no-store` on pages; static caching preserved | ✅ |
+| Lucide CDN removed; pixel-icons.js serves 41 icons | ✅ |
+| All used icon names covered by bundle | ✅ 38/38 |
+| Gradient count in UI sources/served HTML | ✅ 0 |
+| Unit suites + API smoke | ✅ green |
+
+## 36. Run Catalog "Logs" Button + Back-Button Navigation + Logo Polish
+
+**Run Catalog Logs button did nothing visible (`app/static/js/terminal.js`):**
+`viewLogsForRun()` connected the WebSocket stream but never left the current tab -
+the terminal lived inside a hidden section, so clicking Logs (or launching a run)
+updated invisible state only. It now calls `switchTab('terminal')` first, matching
+the Outputs button's behavior.
+
+**Back button exited the app to `/login?next=/`:** the entire dashboard is a single
+page, so tab clicks created no browser history - Back always fell through to the
+stale pre-login entry. Fix (`app/static/js/app.js`):
+- `switchTab()` now pushes `/?tab=<id>` via the History API; Back/Forward move
+  between app views instead of leaving the site.
+- Deep-linking: `/?tab=history` (or `#history`) opens that tab directly;
+  `popstate` restores views without reloading.
+- Defense-in-depth for the login loop: login POST now honors `?next=` (validated),
+  and `login.html` force-reloads itself when restored from the back/forward cache
+  (`pageshow.persisted`), so a stale cached form can never appear.
+
+**Logo borders removed:** dropped the cyan ring around the sidebar logo and the
+login-page logo per design feedback.
+
+## 37. Logs Button Reliability (HTTP-first) + Action Button Alignment
+
+**Logs still blank behind the public proxy:** clicking Logs relied entirely on the
+WebSocket (`kernels logs -f`) for ALL output. Through `https://kabila-aws.isroot.in`
+the WS upgrade can fail (proxy without upgrade forwarding), leaving only
+"Connecting..." forever.
+
+**Fix (`terminal.js`, `logs.py`):**
+- Clicking Logs now FIRST loads the stored log file over plain HTTP
+  (`GET /api/runs/{id}/logs`) - always works, proxy or not - and renders it.
+- Live WebSocket attaches ONLY for queued/running runs, with a new
+  `?skip_initial=1` param so the server doesn't re-send the whole file (no more
+  duplicated output after the HTTP load).
+- `connectTerminalSocket` is append-only now (never wipes loaded logs), and its
+  error state says exactly what to do ("use Fetch Full Kaggle Log").
+- Verified via scripted WS clients: normal connect dumps the file; skip_initial=1
+  sends nothing until live lines/keepalives.
+
+**Action buttons touching/misaligned in Run Catalog:** the actions cell used
+`text-right space-x-2`; when the column got narrow the buttons wrapped vertically
+with zero vertical gap. Replaced with a flex container
+(`flex items-center justify-end flex-wrap gap-2`) in both the Run Catalog and the
+Dashboard active-runs table - consistent spacing horizontally AND when wrapped.
+
+## 38. Why Live Logging Stalled - Streamer Hardened
+
+**Symptom:** mid-run, live log updates stopped forever even though the kernel kept
+running; the terminal just showed keepalive silence.
+
+**Root causes (both real bugs in the old streamer):**
+1. **stderr never drained:** the follower CLI ran with `stderr=PIPE` that nobody
+   read. Once ~64KB of stderr accumulated, the OS pipe buffer filled and the CLI
+   *blocked on write* - stdout went permanently quiet while everything looked alive.
+2. **No recovery path:** if the follower exited (throttle/error/restart), streaming
+   was dead for good. Server restarts also orphaned all streamers silently.
+
+**Fix (`kaggle_service.py`, `logs.py`):**
+- Follower rewritten as a supervised loop: stderr drained concurrently (no more
+  pipe deadlock), exits trigger reconnect with backoff (3s..60s), productive
+  attempts reset the backoff, and terminal kernel states (complete/error/stopped)
+  end the loop cleanly instead of retrying forever.
+- Poll interval raised 3s -> 10s (Kaggle-API friendly for 12h sessions).
+- New `ensure_log_stream()`: opening the Logs view on an active run revives a dead
+  follower automatically - self-healing after crashes/restarts without re-pushing.
+- Verified live against the running inference job: WS connect revived the producer,
+  log file resumed growing (+43KB), live tail flowing.
+
+## 39. Silent Kaggle-Side Logs During Long Inference Loops
+
+**Symptom:** Kaggle's own notebook log page showed nothing after entry #28
+(~14 min mark) while the kernel kept RUNNING for 50+ minutes. Dashboard streaming
+was fine - it faithfully mirrors what Kaggle exposes.
+
+**Diagnosis:** kernel alive (`KernelWorkerStatus.RUNNING`). The inference loop
+communicated only via tqdm `\r` bar updates (~100 bytes per 85s item). Under
+papermill, stdout is block-buffered (~4-8KB) and `\r` writes never terminate a
+line, so neither Python's buffer nor Kaggle's log ingestion flushed an entry -
+the same effect that made "Loading weights" appear as one blob only after
+finishing. Byte-heavy startup phases flushed immediately, masking the issue.
+
+**Fix (`kaggle_batch_inference_task_a.py`):**
+- `sys.stdout/stderr.reconfigure(line_buffering=True)` right after imports -
+  every print reaches the log viewer immediately even when piped.
+- One newline-terminated `[PROGRESS i/N] starting id=... | ok=.. fail=.. | HH:MM:SS`
+  line per iteration (flush=True): guaranteed visible heartbeat at ~85s/item,
+  plus live ok/fail counters.
+- Verified: all 8 harness tests pass; script compiles.
+
+**Note:** the in-flight run (pushed before this fix) keeps the old behavior - its
+page stays quiet until its buffers flush or the session ends. All future pushes
+log every item.

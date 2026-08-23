@@ -74,13 +74,66 @@ class KaggleService:
         return cls.ACCELERATOR_MAP.get(key, key)
 
     @classmethod
-    def sanitize_slug(cls, title: str, unique_suffix: Optional[str] = None) -> str:
+    def sanitize_slug(cls, title: str) -> str:
+        """Derives the exact Kaggle kernel slug from a title.
+
+        Kaggle resolves notebooks by the slugified title - any extra suffix in
+        the metadata 'id' makes the id point to a non-existent kernel while the
+        title maps to an existing one, which surfaces as persistent 409
+        Conflicts on every re-push. The slug must therefore match Kaggle's own
+        title->slug derivation exactly.
+        """
         slug = re.sub(r"[^a-zA-Z0-9\-]", "-", title.lower()).strip("-")
-        slug = re.sub(r"-+", "-", slug)[:40].rstrip("-")
-        suffix = unique_suffix or uuid.uuid4().hex[:4]
-        if not slug:
-            return f"nb-{suffix}"
-        return f"{slug}-{suffix}"
+        slug = re.sub(r"-+", "-", slug)[:50].rstrip("-")
+        return slug or f"nb-{uuid.uuid4().hex[:4]}"
+
+    DEFAULT_KERNELSPEC = {
+        "name": "python3",
+        "display_name": "Python 3",
+        "language": "python"
+    }
+
+    @classmethod
+    def ensure_executable_notebook(cls, code_content: str) -> str:
+        """Normalizes .ipynb payloads so Kaggle can execute them.
+
+        Kaggle's runner (papermill) requires valid notebook JSON *and* a
+        metadata.kernelspec entry; otherwise the run dies at startup with
+        'No kernel name found in notebook and no override provided.'.
+        - Valid notebook without kernelspec -> inject the default python3 spec.
+        - Raw python source mislabeled as .ipynb -> wrapped into a real notebook.
+        """
+        try:
+            nb = json.loads(code_content)
+            if not isinstance(nb, dict):
+                raise ValueError("notebook JSON root must be an object")
+        except Exception:
+            source_lines = code_content.splitlines(keepends=True)
+            nb = {
+                "cells": [{
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {},
+                    "outputs": [],
+                    "source": source_lines
+                }],
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 2
+            }
+
+        metadata = nb.get("metadata")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata.setdefault("kernelspec", dict(cls.DEFAULT_KERNELSPEC))
+        nb["metadata"] = metadata
+
+        if not isinstance(nb.get("cells"), list):
+            nb["cells"] = []
+        nb.setdefault("nbformat", 4)
+        nb.setdefault("nbformat_minor", 2)
+
+        return json.dumps(nb)
 
     @classmethod
     async def push_kernel(
@@ -100,9 +153,11 @@ class KaggleService:
         """Prepares metadata, writes code, and executes `kaggle kernels push`."""
         run_hash = uuid.uuid4().hex[:6]
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{run_hash}"
-        slug = cls.sanitize_slug(title, unique_suffix=run_hash[:4])
-        # Ensure title fits Kaggle's 50-character limit
+        # Ensure title fits Kaggle's 50-character limit; derive the slug from
+        # exactly what we send as the title. Kaggle keys kernels by the
+        # slugified title - a mismatched metadata id makes every re-push 409.
         clean_title = title[:50]
+        slug = cls.sanitize_slug(clean_title)
         kernel_ref = f"{account_username}/{slug}"
         kaggle_url = f"https://www.kaggle.com/code/{kernel_ref}"
         
@@ -111,21 +166,22 @@ class KaggleService:
         run_dir.mkdir(parents=True, exist_ok=True)
         
         # Write notebook / script file
+        is_notebook = filename.endswith(".ipynb")
+        kernel_type = "notebook" if is_notebook else "script"
+        if is_notebook:
+            code_content = cls.ensure_executable_notebook(code_content)
         code_path = run_dir / filename
         with open(code_path, "w", encoding="utf-8") as f:
             f.write(code_content)
         
         # Accelerator flags
-        acc_lower = accelerator.lower()
-        enable_gpu = "true" if ("gpu" in acc_lower or "t4" in acc_lower) else "false"
-        enable_tpu = "true" if "tpu" in acc_lower else "false"
-        
-        is_notebook = filename.endswith(".ipynb")
-        kernel_type = "notebook" if is_notebook else "script"
-        
-        # Resolve machine_shape for metadata
+        # Resolve machine shape first so enable_gpu/enable_tpu stay consistent
+        # with it even for names lacking the 'gpu'/'tpu' substrings (l4/a100/h100...)
         resolved_machine = cls.resolve_accelerator(accelerator)
-
+        machine_lower = (resolved_machine or accelerator).lower()
+        enable_gpu = "true" if ("gpu" in machine_lower or "nvidia" in machine_lower or "t4" in machine_lower) else "false"
+        enable_tpu = "true" if "tpu" in machine_lower else "false"
+        
         metadata = {
             "id": kernel_ref,
             "title": clean_title,
@@ -334,45 +390,128 @@ class KaggleService:
 
     @classmethod
     async def start_background_log_stream(cls, run_id: str, account_username: str, kernel_ref: str, log_file: Path):
-        """Streams live logs via `kaggle kernels logs -f <kernel_ref>` to file and WebSocket subscribers."""
-        cli = get_kaggle_cli_path()
-        cmd = [cli, "kernels", "logs", "-f", "--interval", "3", kernel_ref]
-        env = AccountManager.get_account_env(account_username)
+        """Follows kernel logs and survives follower failures until the run ends.
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env
-            )
-            cls._active_stream_processes[run_id] = proc
+        Two failure modes used to kill logging silently:
+        1. stderr was piped but never drained - a full OS pipe buffer blocks the
+           kaggle CLI mid-write and stdout falls silent forever. Now drained.
+        2. A dead follower (API throttle/error) ended streaming permanently.
+           Now restarted with backoff until the kernel reaches a terminal state.
+        """
+        RETRY_DELAYS = [3, 5, 10, 20, 30, 60]
+        failure_count = 0
 
-            with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"\n--- Live Stream Connected [{utcnow_iso()}] ---\n")
+        async def drain_stderr(stream):
+            try:
+                while True:
+                    chunk = await stream.read(4096)
+                    if not chunk:
+                        return
+            except Exception:
+                return
 
-            while True:
-                line = await proc.stdout.readline()
-                if not line:
-                    break
-                decoded = line.decode("utf-8", errors="ignore")
-                
-                # Append to local log file
+        def append_and_broadcast(text: str):
+            try:
                 with open(log_file, "a", encoding="utf-8") as f:
-                    f.write(decoded)
+                    f.write(text)
                     f.flush()
+            except OSError:
+                pass
+            for q in list(cls._log_subscribers.get(run_id, [])):
+                q.put_nowait(text)
 
-                # Broadcast to active WebSocket queues
-                if run_id in cls._log_subscribers:
-                    for q in list(cls._log_subscribers[run_id]):
-                        await q.put(decoded)
+        first_attach = True
+        try:
+            while True:
+                cli = get_kaggle_cli_path()
+                cmd = [cli, "kernels", "logs", "-f", "--interval", "10", kernel_ref]
+                env = AccountManager.get_account_env(account_username)
 
-            await proc.wait()
+                proc = None
+                drainer = None
+                produced = False
+                rc = None
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env=env
+                    )
+                    cls._active_stream_processes[run_id] = proc
+                    drainer = asyncio.create_task(drain_stderr(proc.stderr))
+
+                    if first_attach:
+                        append_and_broadcast(f"\n--- Live Stream Connected [{utcnow_iso()}] ---\n")
+                        first_attach = False
+                    else:
+                        append_and_broadcast(f"\n--- Live Stream Re-attached [{utcnow_iso()}] ---\n")
+
+                    while True:
+                        line = await proc.stdout.readline()
+                        if not line:
+                            break
+                        produced = True
+                        append_and_broadcast(line.decode("utf-8", errors="ignore"))
+                    rc = await proc.wait()
+                finally:
+                    if drainer:
+                        drainer.cancel()
+                    if cls._active_stream_processes.get(run_id) is proc:
+                        del cls._active_stream_processes[run_id]
+                    if proc and proc.returncode is None:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+
+                # Terminal kernel state? Nothing more will ever arrive.
+                status_resp = await cls.get_kernel_status(account_username, kernel_ref)
+                status = status_resp.get("status", "unknown")
+                if status in ("complete", "error", "stopped"):
+                    append_and_broadcast(f"\n--- Stream ended: kernel {status} [{utcnow_iso()}] ---\n")
+                    return
+
+                if produced:
+                    failure_count = 0
+                delay = RETRY_DELAYS[min(failure_count, len(RETRY_DELAYS) - 1)]
+                failure_count += 1
+                append_and_broadcast(
+                    f"\n[STREAM] follower exited (rc={rc}, kernel={status}); reconnecting in {delay}s...\n"
+                )
+                await asyncio.sleep(delay)
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            logger.error(f"Live log streaming ended with error for {run_id}: {e}")
+            logger.error(f"Log streaming ended with error for {run_id}: {e}")
+            append_and_broadcast(f"\n[STREAM] terminated with error: {e}\n")
         finally:
-            if run_id in cls._active_stream_processes:
-                del cls._active_stream_processes[run_id]
+            cls._active_stream_processes.pop(run_id, None)
+
+    @classmethod
+    def ensure_log_stream(cls, run: Dict[str, Any]) -> None:
+        """(Re)starts the background log follower for an active run if none is alive.
+
+        Self-healing for streamers lost to server restarts or crashes: opening
+        the Logs view (or the WebSocket) on an active run revives the producer
+        without re-pushing anything.
+        """
+        run_id = run.get("id")
+        if not run_id:
+            return
+        existing = cls._active_stream_processes.get(run_id)
+        if existing is not None and existing.returncode is None:
+            return  # a follower is already alive
+        if run.get("status") not in ("queued", "running"):
+            return  # finished runs have no live output
+        log_file = run.get("log_file")
+        if not log_file:
+            return
+        asyncio.create_task(
+            cls.start_background_log_stream(
+                run_id, run["account_username"], run["kernel_ref"], Path(log_file)
+            )
+        )
 
     @classmethod
     def register_log_subscriber(cls, run_id: str) -> asyncio.Queue:
@@ -422,7 +561,9 @@ class KaggleService:
         target_dir.mkdir(parents=True, exist_ok=True)
         
         cli = get_kaggle_cli_path()
-        cmd = [cli, "kernels", "output", "-p", str(target_dir), "-o", kernel_ref]
+        # NOTE: kernel ref must be the positional argument; `-o` is a boolean
+        # force flag in kaggle CLI >= 2.x (not a value-taking option).
+        cmd = [cli, "kernels", "output", kernel_ref, "-p", str(target_dir), "-o"]
         env = AccountManager.get_account_env(account_username)
 
         proc = await asyncio.create_subprocess_exec(
@@ -473,7 +614,7 @@ class KaggleService:
                     "outputs": [],
                     "source": ["import sys\n", "print('Session explicitly stopped by Kaggle Automation Dashboard.')\n", "sys.exit(0)\n"]
                 }],
-                "metadata": {},
+                "metadata": {"kernelspec": dict(cls.DEFAULT_KERNELSPEC)},
                 "nbformat": 4,
                 "nbformat_minor": 2
             }
