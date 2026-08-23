@@ -18,7 +18,7 @@ jobs:
           version: "0.12.10"
 
       - name: Install Project
-        run: uv sync --locked --all-extra --dev
+        run: uv sync --locked 
 
       - name: Lint (ruff)
         run: uv run ruff check .
