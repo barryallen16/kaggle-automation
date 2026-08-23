@@ -133,6 +133,13 @@ else:
 
 CHECKPOINT_INTERVAL = 25  # Flush progress to disk every N items
 
+# Generation cap: outputs are structured JSON (category/gender/occasion/
+# description) used as fine-tuning data for a smaller student model. Thinking
+# mode is off, so clean labels land well under this. 384 keeps ~2x headroom
+# over typical output while roughly halving worst-case decode time vs 768.
+# The truncation guard below guarantees nothing cut mid-JSON enters the dataset.
+MAX_NEW_TOKENS = 384
+
 print(f"Input file path:  {INPUT_FILE}")
 print(f"Output file path: {OUTPUT_FILE}")
 print(f"Active GPU count: {torch.cuda.device_count()}")
@@ -297,6 +304,7 @@ print(f"Remaining items to process on this shard: {len(items_to_process)}")
 out_handle = open(OUTPUT_FILE, "a", encoding="utf-8")
 success_count = 0
 failed_count = 0
+completion_lengths = []  # generated-token counts, for headroom tuning
 
 start_time = time.time()
 
@@ -306,9 +314,14 @@ try:
         # One newline-terminated line per item: this is what keeps Kaggle's log
         # viewer alive during slow (~90s) iterations - tqdm's \r-only updates
         # never flush a log entry on their own.
+        tok_stat = ""
+        if completion_lengths:
+            avg_tok = sum(completion_lengths) / len(completion_lengths)
+            tok_stat = f" | tok avg={avg_tok:.0f} max={max(completion_lengths)}"
         print(
             f"[PROGRESS {idx}/{total_on_shard}] starting id={item.get('id')} "
-            f"| ok={success_count} fail={failed_count} | {time.strftime('%H:%M:%S')}",
+            f"| ok={success_count} fail={failed_count}{tok_stat} "
+            f"| {time.strftime('%H:%M:%S')}",
             flush=True
         )
         item_id = item["id"]
@@ -361,13 +374,15 @@ try:
         with torch.no_grad():
             generated_ids = model.generate(
                 **inputs,
-                max_new_tokens=768,  # room for full JSON even if some reasoning slips through
+                max_new_tokens=MAX_NEW_TOKENS,
                 do_sample=False  # Deterministic output for structured JSON
             )
             
         generated_ids_trimmed = [
             out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
         ]
+        completion_tokens = len(generated_ids_trimmed[0])
+        completion_lengths.append(completion_tokens)
         response_text = processor.batch_decode(
             generated_ids_trimmed,
             skip_special_tokens=True,
@@ -375,6 +390,22 @@ try:
         )[0]
         
         parsed_json = extract_json_response(response_text)
+        
+        # Fine-tuning data guard: a truncated generation (hit the token cap) or
+        # an unparseable one must NEVER land in the teacher dataset - the
+        # extractor returns {"raw_output": ...} instead of raising, so without
+        # this check truncation would silently poison training data. Such items
+        # are skipped here and picked up again by the resume logic on rerun.
+        parse_failed = set(parsed_json.keys()) == {"raw_output"}
+        if parse_failed or completion_tokens >= MAX_NEW_TOKENS:
+            failed_count += 1
+            print(
+                f"[SKIP] id={item_id}: "
+                + ("unparseable output" if parse_failed else "truncated at cap")
+                + f" ({completion_tokens} tokens) - will retry on next run",
+                flush=True
+            )
+            continue
         
         # 5. Build labeled record
         labeled_record = {

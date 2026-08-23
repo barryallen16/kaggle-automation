@@ -794,3 +794,21 @@ finishing. Byte-heavy startup phases flushed immediately, masking the issue.
 **Note:** the in-flight run (pushed before this fix) keeps the old behavior - its
 page stays quiet until its buffers flush or the session ends. All future pushes
 log every item.
+
+## 40. max_new_tokens Cut (384) + Fine-Tuning Dataset Guards
+
+Teacher outputs feed a smaller student model, so dataset purity matters more
+than raw recall:
+
+- `MAX_NEW_TOKENS = 768 -> 384`: thinking mode is off and labels are structured
+  JSON, so clean output lands well under the old cap; worst-case decode time
+  roughly halves.
+- **Truncation/unparseable guard**: `extract_json_response` returns
+  `{"raw_output": ...}` instead of raising, so cut-off generations previously
+  entered the dataset silently as garbage. Now: parse failure OR hitting the
+  token cap -> item skipped, counted as failed, retried via resume on rerun.
+- `[PROGRESS]` lines now include completion-token avg/max, so the cap can be
+  re-tuned from real data.
+- Harness updated to the new contract (unparseable = skipped) + new regression
+  test: valid-JSON-but-truncated generations never reach the output file.
+  Suites: 9/9 inference + 3/3 automation green.

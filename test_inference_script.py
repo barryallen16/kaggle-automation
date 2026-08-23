@@ -52,6 +52,7 @@ STATE = {
     "gpu_count": 2,
     "responses": [],       # popped once per batch_decode call
     "commands": [],        # recorded subprocess commands
+    "gen_tail": [91, 92],  # token tail appended by FakeModel.generate
 }
 
 class FakeBatchFeature(dict):
@@ -97,7 +98,8 @@ def _build_fakes():
             cls.loaded_with = {"model_id": model_id, **kw}
             return cls()
         def generate(self, input_ids=None, **kw):
-            return [row + [91, 92] for row in input_ids]
+            tail = list(STATE.get("gen_tail", [91, 92]))
+            return [row + tail for row in input_ids]
     tr.AutoModelForImageTextToText = FakeModel
 
     class FakeProcessor:
@@ -235,21 +237,23 @@ class TestScript(unittest.TestCase):
     def test_B_single_shard_end_to_end(self):
         items = make_items(6)  # ids 1,3 -> bad URLs
         with sandbox(items, responses=RESPONSES_B, gpu_count=2) as ns:
-            self.assertEqual(ns["success_count"], 4)
-            self.assertEqual(ns["failed_count"], 2)
+            # id1/id3 fail on image download; id5 emits unparseable text and is
+            # SKIPPED by the fine-tuning guard instead of being written raw.
+            self.assertEqual(ns["success_count"], 3)
+            self.assertEqual(ns["failed_count"], 3)
             self.assertEqual(len(ns["items_to_process"]), 6)
 
             out_path = ns["OUTPUT_FILE"]
             self.assertTrue(os.path.exists(out_path))
             rows = [json.loads(l) for l in open(out_path, encoding="utf-8") if l.strip()]
-            self.assertEqual(len(rows), 4)
-            self.assertEqual([r["id"] for r in rows], ["id0", "id2", "id4", "id5"])
+            self.assertEqual(len(rows), 3)
+            self.assertEqual([r["id"] for r in rows], ["id0", "id2", "id4"])
 
-            # teacher_output parsing matrix
+            # teacher_output parsing matrix (clean JSON only - no raw_output row:
+            # unparseable generations must never enter the fine-tuning dataset)
             self.assertEqual(rows[0]["teacher_output"], {"fit": "casual", "colors": ["blue", "white"]})
             self.assertEqual(rows[1]["teacher_output"], {"style": "sporty"})
             self.assertEqual(rows[2]["teacher_output"], {"nested": {"deep": 1}, "top": 2})
-            self.assertIn("raw_output", rows[3]["teacher_output"])
             # enable_thinking=False must be requested on the chat template
             self.assertIn("enable_thinking=False", SRC)
 
@@ -279,15 +283,18 @@ class TestScript(unittest.TestCase):
                 ns = {"__name__": "__main__"}
                 exec(compile(SRC, SCRIPT_PATH, "exec"), ns)
                 out_path = ns["OUTPUT_FILE"]
-                self.assertEqual(len(open(out_path, encoding="utf-8").readlines()), 4)
+                # 3 clean rows; id5's unparseable output was skipped, not written
+                self.assertEqual(len(open(out_path, encoding="utf-8").readlines()), 3)
 
-                # second execution in SAME dir -> everything already done except failures
-                STATE["responses"] = []
+                # second execution in SAME dir -> everything already done except
+                # failures. id1/id3 fail on images again; id5 is retried and its
+                # fresh (still unparseable) response is skipped by the guard.
+                STATE["responses"] = ["also no json"]
                 ns2 = {"__name__": "__main__"}
                 exec(compile(SRC, SCRIPT_PATH, "exec"), ns2)
                 self.assertEqual(ns2["success_count"], 0)
-                self.assertEqual(ns2["failed_count"], 2)  # bad-url items retried, still fail
-                self.assertEqual(len(open(ns2["OUTPUT_FILE"], encoding="utf-8").readlines()), 4)
+                self.assertEqual(ns2["failed_count"], 3)
+                self.assertEqual(len(open(ns2["OUTPUT_FILE"], encoding="utf-8").readlines()), 3)
             finally:
                 os.chdir(saved_cwd)
                 subprocess.run = _orig_run
@@ -352,6 +359,25 @@ class TestScript(unittest.TestCase):
                 os.chdir(saved); subprocess.run = _orig_run; _teardown_fakes()
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_H_truncated_generation_is_skipped(self):
+        # Regression guard for the fine-tuning dataset: a generation that hits
+        # MAX_NEW_TOKENS must NOT be written even if its text parses as JSON -
+        # truncated labels would poison student-model training data.
+        items = make_items(2, good_predicate=lambda i: True)
+        old_tail = STATE["gen_tail"]
+        try:
+            STATE.update({
+                "gen_tail": [7] * (384 + 50),  # completion length > MAX_NEW_TOKENS
+                "commands": [],
+            })
+            with sandbox(items, responses=['{"fit":"x"}', '{"fit":"y"}'], gpu_count=2) as ns:
+                self.assertEqual(ns["success_count"], 0)
+                self.assertEqual(ns["failed_count"], 2)
+                self.assertFalse(os.path.exists(ns["OUTPUT_FILE"]) and
+                                 open(ns["OUTPUT_FILE"], encoding="utf-8").read().strip())
+        finally:
+            STATE["gen_tail"] = old_tail
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
