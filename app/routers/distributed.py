@@ -50,6 +50,8 @@ async def launch_distributed_json(payload: DistributedLaunchJSON):
             timeout_seconds=payload.timeout_seconds
         )
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -68,7 +70,12 @@ async def upload_and_launch_distributed(
     try:
         # Parse accounts list
         if accounts.strip().startswith("["):
-            acc_list = json.loads(accounts)
+            try:
+                acc_list = json.loads(accounts)
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="accounts must be a valid JSON array or comma-separated string")
+            if not isinstance(acc_list, list):
+                raise HTTPException(status_code=400, detail="accounts JSON must be an array of usernames")
         else:
             acc_list = [a.strip() for a in accounts.split(",") if a.strip()]
 
@@ -92,5 +99,7 @@ async def upload_and_launch_distributed(
             timeout_seconds=timeout_seconds
         )
         return result
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -6,8 +6,8 @@ let uploadedFileName = "notebook.ipynb";
 function populateAccountSelects() {
   const runnerSelect = document.getElementById('runner-account-select');
   if (runnerSelect) {
-    runnerSelect.innerHTML = '<option value="">-- Select Target Account --</option>' + 
-      AppState.accounts.map(a => `<option value="${a.username}">@${a.username}</option>`).join('');
+    runnerSelect.innerHTML = '<option value="">-- Select Target Account --</option>' +
+      AppState.accounts.map(a => `<option value="${esc(a.username)}">@${esc(a.username)}</option>`).join('');
   }
 }
 

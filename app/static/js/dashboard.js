@@ -45,10 +45,10 @@ function renderDashboard() {
     const activeList = activeRuns.map(r => `
       <div class="mt-2 p-2 rounded-lg bg-[#0a0d14] border border-[#1e293b] flex items-center justify-between text-xs">
         <div class="truncate max-w-[200px]">
-          <p class="font-bold text-white truncate">${r.title}</p>
-          <p class="text-[10px] text-slate-400 font-mono">${r.accelerator}</p>
+          <p class="font-bold text-white truncate">${esc(r.title)}</p>
+          <p class="text-[10px] text-slate-400 font-mono">${esc(r.accelerator)}</p>
         </div>
-        <button onclick="stopRun('${r.id}')" class="px-2 py-1 rounded text-[10px] font-bold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 transition">
+        <button onclick="stopRun('${esc(r.id)}')" class="px-2 py-1 rounded text-[10px] font-bold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 transition">
           Stop
         </button>
       </div>
@@ -60,16 +60,16 @@ function renderDashboard() {
         <div class="flex items-start justify-between">
           <div class="flex items-center space-x-3">
             <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-cyan-500/20 to-blue-600/20 border border-cyan-500/30 flex items-center justify-center font-bold text-cyan-400">
-              ${acc.username.charAt(0).toUpperCase()}
+              ${esc(acc.username.charAt(0).toUpperCase())}
             </div>
             <div>
-              <h4 class="text-sm font-bold text-white">@${acc.username}</h4>
-              <p class="text-[10px] text-slate-500 font-mono">Key: ${acc.api_key_masked}</p>
+              <h4 class="text-sm font-bold text-white">@${esc(acc.username)}</h4>
+              <p class="text-[10px] text-slate-500 font-mono">Key: ${esc(acc.api_key_masked)}</p>
             </div>
           </div>
           <div class="flex items-center space-x-2">
             ${activeBadge}
-            <button onclick="deleteAccount('${acc.username}')" title="Delete Account" class="text-slate-600 hover:text-rose-400 transition p-1">
+            <button onclick="deleteAccount('${esc(acc.username)}')" title="Delete Account" class="text-slate-600 hover:text-rose-400 transition p-1">
               <i data-lucide="trash" class="w-3.5 h-3.5"></i>
             </button>
           </div>
@@ -111,11 +111,11 @@ function renderDashboard() {
 
         <!-- Footer Actions -->
         <div class="pt-2 border-t border-[#1e293b] flex items-center justify-between text-xs">
-          <button onclick="refreshSingleQuota('${acc.username}')" class="text-slate-400 hover:text-cyan-400 flex items-center space-x-1 transition text-[11px]">
+          <button onclick="refreshSingleQuota('${esc(acc.username)}')" class="text-slate-400 hover:text-cyan-400 flex items-center space-x-1 transition text-[11px]">
             <i data-lucide="rotate-cw" class="w-3 h-3"></i>
             <span>Refresh Quota</span>
           </button>
-          <a href="https://kaggle.com/${acc.username}" target="_blank" class="text-slate-400 hover:text-blue-400 flex items-center space-x-1 transition text-[11px]">
+          <a href="https://kaggle.com/${encodeURIComponent(acc.username)}" target="_blank" class="text-slate-400 hover:text-blue-400 flex items-center space-x-1 transition text-[11px]">
             <span>Profile</span>
             <i data-lucide="external-link" class="w-3 h-3"></i>
           </a>
@@ -126,6 +126,14 @@ function renderDashboard() {
 
   renderActiveRunsTable();
   lucide.createIcons();
+}
+
+function formatMaxRuntime(run) {
+  // Trials have short timeouts; showing "/ 12h" for them was misleading
+  const secs = run.timeout_seconds;
+  if (!secs) return '12h';
+  if (secs < 3600) return `${Math.round(secs / 60)}m`;
+  return `${(secs / 3600).toFixed(secs % 3600 ? 1 : 0)}h`;
 }
 
 function renderActiveRunsTable() {
@@ -147,26 +155,26 @@ function renderActiveRunsTable() {
 
     return `
       <tr class="hover:bg-slate-800/30 transition">
-        <td class="px-6 py-4 font-medium text-white">@${run.account_username}</td>
+        <td class="px-6 py-4 font-medium text-white">@${esc(run.account_username)}</td>
         <td class="px-6 py-4">
-          <div class="font-bold text-white flex items-center">${trialBadge} ${run.title}</div>
-          <a href="${run.kaggle_url}" target="_blank" class="text-xs text-cyan-400 hover:underline flex items-center space-x-1 mt-0.5">
-            <span>${run.kernel_ref}</span>
+          <div class="font-bold text-white flex items-center">${trialBadge} ${esc(run.title)}</div>
+          <a href="${esc(run.kaggle_url)}" target="_blank" rel="noopener noreferrer" class="text-xs text-cyan-400 hover:underline flex items-center space-x-1 mt-0.5">
+            <span>${esc(run.kernel_ref)}</span>
             <i data-lucide="external-link" class="w-3 h-3 inline"></i>
           </a>
         </td>
-        <td class="px-6 py-4 font-mono text-xs text-purple-300">${run.accelerator}</td>
-        <td class="px-6 py-4 font-mono text-xs text-amber-300">${elapsedHours}h / 12h</td>
+        <td class="px-6 py-4 font-mono text-xs text-purple-300">${esc(run.accelerator)}</td>
+        <td class="px-6 py-4 font-mono text-xs text-amber-300">${elapsedHours}h / ${formatMaxRuntime(run)}</td>
         <td class="px-6 py-4">
           <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-950 text-emerald-400 border border-emerald-800">
-            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 pulsing-dot"></span> ${run.status.toUpperCase()}
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 pulsing-dot"></span> ${esc(run.status.toUpperCase())}
           </span>
         </td>
         <td class="px-6 py-4 text-right space-x-2">
-          <button onclick="viewLogsForRun('${run.id}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 transition">
+          <button onclick="viewLogsForRun('${esc(run.id)}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 text-slate-200 hover:bg-slate-700 transition">
             Live Stream
           </button>
-          <button onclick="stopRun('${run.id}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 border border-rose-500/30 transition">
+          <button onclick="stopRun('${esc(run.id)}')" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 border border-rose-500/30 transition">
             Stop
           </button>
         </td>

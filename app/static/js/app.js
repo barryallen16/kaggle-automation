@@ -8,6 +8,16 @@ const AppState = {
   selectedFilesRunId: null
 };
 
+// HTML escaping helper - ALWAYS use for user-controlled data inserted into innerHTML
+function esc(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 // Toast notification helper
 function showToast(message, type = 'info') {
   const container = document.getElementById('toast-container');
@@ -31,8 +41,10 @@ function showToast(message, type = 'info') {
   toast.className = `pointer-events-auto flex items-center space-x-3 px-4 py-3 rounded-xl border shadow-xl backdrop-blur-md transition-all duration-300 translate-x-5 opacity-0 ${bgColors[type] || bgColors.info}`;
   toast.innerHTML = `
     <i data-lucide="${icons[type] || 'info'}" class="w-4 h-4 flex-shrink-0"></i>
-    <span class="text-xs font-semibold">${message}</span>
+    <span class="text-xs font-semibold"></span>
   `;
+  // Set user-controlled text safely (never via innerHTML)
+  toast.querySelector('span').textContent = message;
 
   container.appendChild(toast);
   lucide.createIcons();
@@ -91,13 +103,36 @@ function switchTab(tabId) {
   if (tabId === 'settings') loadSettingsData();
 }
 
+// Engine indicator: reflect real CLI availability instead of a static label
+function updateEngineIndicator(cliAvailable) {
+  const el = document.getElementById('live-indicator');
+  if (!el) return;
+  if (cliAvailable === undefined || cliAvailable === null) return; // unknown - keep as-is
+  if (cliAvailable) {
+    el.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-950/80 text-emerald-400 border border-emerald-800/60';
+    el.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 pulsing-dot"></span> CLI Engine Online';
+  } else {
+    el.className = 'inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-rose-950/80 text-rose-400 border border-rose-800/60';
+    el.innerHTML = '<span class="w-1.5 h-1.5 rounded-full bg-rose-500 mr-1.5"></span> Kaggle CLI Not Found';
+  }
+}
+
 // Global data refresh
 async function refreshGlobalData() {
   try {
-    const [accRes, runsRes] = await Promise.all([
+    const [accRes, runsRes, healthRes] = await Promise.all([
       fetch('/api/accounts').then(r => r.json()),
-      fetch('/api/runs').then(r => r.json())
+      fetch('/api/runs').then(r => r.json()),
+      fetch('/api/health').then(r => r.json()).catch(() => null)
     ]);
+
+    updateEngineIndicator(healthRes ? healthRes.cli_available : false);
+
+    // Session expired -> go log in again instead of failing silently forever
+    if (accRes.status === 401 || runsRes.status === 401) {
+      window.location.href = '/login';
+      return;
+    }
 
     if (accRes.success) {
       AppState.accounts = accRes.accounts || [];

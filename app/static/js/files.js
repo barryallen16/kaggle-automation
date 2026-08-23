@@ -11,7 +11,8 @@ function updateFilesRunDropdown() {
 
   runs.forEach(r => {
     const selected = r.id === currentFilesRunId ? 'selected' : '';
-    html += `<option value="${r.id}" ${selected}>[${r.account_username}] ${r.title} (${r.status})</option>`;
+    const label = `[${r.account_username}] ${r.title} (${r.status})`;
+    html += `<option value="${esc(r.id)}" ${selected}>${esc(label)}</option>`;
   });
 
   select.innerHTML = html;
@@ -95,7 +96,7 @@ function renderFilesTable(data) {
       <tr class="hover:bg-slate-800/30 transition">
         <td class="px-6 py-3.5 font-mono text-xs font-semibold text-white flex items-center space-x-2">
           <i data-lucide="file" class="w-4 h-4 text-amber-400"></i>
-          <span>${f.name}</span>
+          <span>${esc(f.name)}</span>
         </td>
         <td class="px-6 py-3.5 text-xs text-slate-400 font-mono">${f.size}</td>
         <td class="px-6 py-3.5">

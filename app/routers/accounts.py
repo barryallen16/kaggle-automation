@@ -10,6 +10,15 @@ class AddAccountRequest(BaseModel):
     api_key: str
     username: Optional[str] = None
 
+def _mask_key(key: str) -> str:
+    return key[:6] + "..." + key[-4:] if len(key) > 10 else "***"
+
+def _sanitize_account(acc: Dict[str, Any]) -> Dict[str, Any]:
+    acc_copy = dict(acc)
+    acc_copy["api_key_masked"] = _mask_key(acc.get("api_key", ""))
+    acc_copy.pop("api_key", None)
+    return acc_copy
+
 @router.get("")
 async def list_accounts():
     accounts = get_all_accounts()
@@ -26,10 +35,7 @@ async def list_accounts():
     results = []
     for acc in accounts:
         user = acc["username"]
-        acc_copy = dict(acc)
-        # Hide full API key in response for security
-        acc_copy["api_key_masked"] = acc["api_key"][:6] + "..." + acc["api_key"][-4:] if len(acc["api_key"]) > 10 else "***"
-        del acc_copy["api_key"]
+        acc_copy = _sanitize_account(acc)
         acc_copy["active_runs"] = active_by_user.get(user, [])
         results.append(acc_copy)
 
@@ -58,7 +64,7 @@ async def remove_account(username: str):
 async def refresh_all():
     try:
         updated = await AccountManager.refresh_all_quotas()
-        return {"success": True, "accounts": updated}
+        return {"success": True, "accounts": [_sanitize_account(a) for a in updated]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

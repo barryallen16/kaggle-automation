@@ -1,5 +1,5 @@
 /* Dark Modern Theme - Kaggle Automation Dashboard */
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap');
+/* Fonts served locally from /static/fonts (see fonts.css): Geist body, Geist Mono code, Geist Pixel display */
 
 :root {
   --bg-primary: #0a0d14;
@@ -16,13 +16,13 @@
 }
 
 body {
-  font-family: 'Plus Jakarta Sans', sans-serif;
+  font-family: 'Geist', 'Plus Jakarta Sans', sans-serif;
   background-color: var(--bg-primary);
   color: #e2e8f0;
 }
 
 code, pre, .terminal-font {
-  font-family: 'JetBrains Mono', monospace;
+  font-family: 'Geist Mono', 'JetBrains Mono', monospace;
 }
 
 /* Custom Scrollbars */

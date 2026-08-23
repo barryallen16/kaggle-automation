@@ -7,11 +7,11 @@ import asyncio
 import logging
 import re
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, AsyncGenerator
 from app.config import NOTEBOOKS_DIR, LOGS_DIR, OUTPUTS_DIR, get_kaggle_cli_path
 from app.services.account_manager import AccountManager
-from app.database import create_run_record, update_run_status, get_run_by_id
+from app.database import create_run_record, update_run_status, get_run_by_id, utcnow_iso
 
 logger = logging.getLogger("kaggle_service")
 
@@ -99,7 +99,7 @@ class KaggleService:
     ) -> Dict[str, Any]:
         """Prepares metadata, writes code, and executes `kaggle kernels push`."""
         run_hash = uuid.uuid4().hex[:6]
-        run_id = f"run_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}_{run_hash}"
+        run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{run_hash}"
         slug = cls.sanitize_slug(title, unique_suffix=run_hash[:4])
         # Ensure title fits Kaggle's 50-character limit
         clean_title = title[:50]
@@ -163,7 +163,7 @@ class KaggleService:
 
         log_file_path = LOGS_DIR / f"{run_id}.log"
         with open(log_file_path, "w", encoding="utf-8") as f:
-            f.write(f"=== Kaggle Run Initialized: {datetime.utcnow().isoformat()} ===\n")
+            f.write(f"=== Kaggle Run Initialized: {utcnow_iso()} ===\n")
             f.write(f"Kernel: {kernel_ref}\n")
             f.write(f"Title: {title}\n")
             f.write(f"Accelerator: {accelerator}\n")
@@ -209,7 +209,9 @@ class KaggleService:
                 if err_str:
                     f.write(f"[STDERR]\n{err_str}\n")
 
-            is_error = proc.returncode != 0 or "Kernel push error" in out_str or "Error" in err_str
+            # A run only fails if the CLI itself failed or Kaggle explicitly reported
+            # a push error. Never infer failure from arbitrary words in stderr.
+            is_error = proc.returncode != 0 or "Kernel push error" in out_str
             status = "error" if is_error else "queued"
             status_msg = err_str if is_error else out_str.strip()
 
@@ -239,7 +241,7 @@ class KaggleService:
                 "timeout_seconds": effective_timeout,
                 "status": status,
                 "status_message": status_msg,
-                "start_time": datetime.utcnow().isoformat(),
+                "start_time": utcnow_iso(),
                 "kaggle_url": kaggle_url,
                 "workload_id": workload_id,
                 "shard_index": shard_index,
@@ -347,7 +349,7 @@ class KaggleService:
             cls._active_stream_processes[run_id] = proc
 
             with open(log_file, "a", encoding="utf-8") as f:
-                f.write(f"\n--- Live Stream Connected [{datetime.utcnow().isoformat()}] ---\n")
+                f.write(f"\n--- Live Stream Connected [{utcnow_iso()}] ---\n")
 
             while True:
                 line = await proc.stdout.readline()
@@ -422,7 +424,7 @@ class KaggleService:
         cli = get_kaggle_cli_path()
         cmd = [cli, "kernels", "output", "-p", str(target_dir), "-o", kernel_ref]
         env = AccountManager.get_account_env(account_username)
-        
+
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -430,6 +432,9 @@ class KaggleService:
             env=env
         )
         stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            err_tail = stderr.decode("utf-8", errors="ignore").strip()[-500:]
+            raise RuntimeError(f"kaggle kernels output failed (rc={proc.returncode}): {err_tail}")
         return target_dir
 
     @classmethod
@@ -452,20 +457,39 @@ class KaggleService:
                 pass
             del cls._active_stream_processes[run_id]
 
-        # Push immediate exit stub to stop Kaggle execution worker
+        # Push an immediate-exit stub as a new version to stop the Kaggle worker.
+        # Preserve the original kernel type so we don't corrupt the notebook.
         stop_dir = NOTEBOOKS_DIR / f"stop_{run_id}"
         stop_dir.mkdir(parents=True, exist_ok=True)
 
-        stop_code = "import sys\nprint('Session explicitly stopped by Kaggle Automation Dashboard.')\nsys.exit(0)\n"
-        with open(stop_dir / "main.py", "w", encoding="utf-8") as f:
-            f.write(stop_code)
+        is_notebook = (run["code_file"] or "").endswith(".ipynb")
+        stub_filename = "cell.ipynb" if is_notebook else "main.py"
+        if is_notebook:
+            stub_nb = {
+                "cells": [{
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {},
+                    "outputs": [],
+                    "source": ["import sys\n", "print('Session explicitly stopped by Kaggle Automation Dashboard.')\n", "sys.exit(0)\n"]
+                }],
+                "metadata": {},
+                "nbformat": 4,
+                "nbformat_minor": 2
+            }
+            with open(stop_dir / stub_filename, "w", encoding="utf-8") as f:
+                json.dump(stub_nb, f, indent=2)
+        else:
+            stop_code = "import sys\nprint('Session explicitly stopped by Kaggle Automation Dashboard.')\nsys.exit(0)\n"
+            with open(stop_dir / stub_filename, "w", encoding="utf-8") as f:
+                f.write(stop_code)
 
         metadata = {
             "id": kernel_ref,
             "title": title,
-            "code_file": "main.py",
+            "code_file": stub_filename,
             "language": "python",
-            "kernel_type": "script",
+            "kernel_type": "notebook" if is_notebook else "script",
             "is_private": "true",
             "enable_gpu": "false",
             "enable_tpu": "false",
@@ -479,6 +503,8 @@ class KaggleService:
         env = AccountManager.get_account_env(account_username)
 
         # Retry on 409 Conflict (kernel may still be transitioning)
+        push_ok = False
+        last_err = ""
         for attempt in range(3):
             try:
                 proc = await asyncio.create_subprocess_exec(
@@ -489,14 +515,23 @@ class KaggleService:
                 )
                 _, stderr = await proc.communicate()
                 err_str = stderr.decode("utf-8", errors="ignore")
-                if proc.returncode != 0 and "409" in err_str and attempt < 2:
+                last_err = err_str.strip()[-500:]
+                if proc.returncode == 0:
+                    push_ok = True
+                    break
+                if "409" in err_str and attempt < 2:
                     logger.warning(f"Stop push 409 Conflict, retry {attempt + 1}/3 in 5s...")
                     await asyncio.sleep(5)
                     continue
                 break
             except Exception as e:
                 logger.warning(f"Stop push completed with warning: {e}")
+                last_err = str(e)
                 break
 
-        update_run_status(run_id, "stopped", "Explicitly stopped by user", datetime.utcnow().isoformat())
-        return {"success": True, "message": f"Run {run_id} ({kernel_ref}) stopped successfully."}
+        if push_ok:
+            update_run_status(run_id, "stopped", "Explicitly stopped by user", utcnow_iso())
+            return {"success": True, "message": f"Run {run_id} ({kernel_ref}) stopped successfully."}
+
+        update_run_status(run_id, run["status"], f"Stop failed: {last_err}")
+        return {"success": False, "error": f"Failed to stop run {run_id}: {last_err or 'unknown CLI error'}"}

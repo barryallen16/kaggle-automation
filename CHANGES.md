@@ -1,7 +1,8 @@
 # Kaggle Automation Platform — Changelog
 
-> Complete record of all changes made during this session (August 22, 2026).
-> From initial diagnosis through bug fixes, infrastructure improvements, and script testing.
+> Complete record of all changes made during development.
+> **Session 1** (August 22, 2026): initial diagnosis through infrastructure fixes.
+> **Session 2** (August 22–23, 2026): security audit & hardening, authentication, branding, Telegram DM alerts, and full Kaggle verification of the inference pipeline.
 
 ---
 
@@ -19,8 +20,23 @@
 10. [Frontend Accelerator Dropdown Update](#10-frontend-accelerator-dropdown-update)
 11. [409 Conflict Retry Logic](#11-409-conflict-retry-logic)
 12. [Kaggle Package Upgrade](#12-kaggle-package-upgrade)
-13. [Script Fixes (kaggle_batch_inference_task_a.py)](#13-script-fixes)
-14. [End-to-End Verification](#14-end-to-end-verification)
+13. [Script Fixes (kaggle_batch_inference_task_a.py) — Session 1](#13-script-fixes)
+14. [End-to-End Verification — Session 1](#14-end-to-end-verification)
+
+**Session 2 (August 22–23, 2026):**
+
+15. [Security Audit — Critical Fixes](#15-security-audit--critical-fixes)
+16. [Correctness Fixes](#16-correctness-fixes)
+17. [Test Suite Isolation](#17-test-suite-isolation)
+18. [Streaming ZIP Downloads](#18-streaming-zip-downloads)
+19. [requirements.txt Trimmed](#19-requirestxt-trimmed)
+20. [CDN Dependencies Pinned](#20-cdn-dependencies-pinned)
+21. [Branding: Geist Pixel Fonts, Logo & Favicon](#21-branding-geist-pixel-fonts-logo--favicon)
+22. [Authentication (Shared-Secret Cookie)](#22-authentication-shared-secret-cookie)
+23. [UI/UX Consistency Fixes](#23-uiux-consistency-fixes)
+24. [Telegram Alerts → Direct Messages via User ID](#24-telegram-alerts--direct-messages-via-user-id)
+25. [Inference Script: Full Kaggle Verification (v1→v10)](#25-inference-script-full-kaggle-verification-v1v10)
+26. [Local Test Harness for Inference Script](#26-local-test-harness-for-inference-script)
 
 ---
 
@@ -236,6 +252,9 @@ env["PYTHONIOENCODING"] = "utf-8"
 ### 13a. Wrong Model Class Import
 **Before:** Tried `from transformers import Qwen2_5_VLForConditionalGeneration` — wrong class for `Qwen/Qwen3.6-35B-A3B`.
 **After:** Uses `AutoModelForCausalLM` with `trust_remote_code=True` which auto-selects the correct class.
+> ⚠️ **Superseded in Session 2 (§25):** `AutoModelForCausalLM` turned out to be wrong too — the model is an
+> image-text-to-text architecture (`Qwen3_5MoeForConditionalGeneration`) and now loads via `AutoModelForImageTextToText`.
+> The production model was also switched to `Qwen/Qwen3.6-27B`.
 
 ### 13b. Broken Shard Config Fallback
 **Before:**
@@ -310,23 +329,197 @@ PIP = "uv pip install" if subprocess.run("uv --version", ...).returncode == 0 el
 
 ---
 
+# Session 2 — August 22–23, 2026
+
+## 15. Security Audit — Critical Fixes
+
+A full audit of all ~2,200 lines found 19 flaws. Critical ones fixed and verified:
+
+### Path Traversal (verified exploitable, then fixed)
+**File:** `app/routers/files.py`, `app/routers/logs.py`
+- `GET /api/runs/{run_id}/files/download/{filename}` built paths with zero sanitization — a crafted request could serve **any file on disk**, including `.env` (all API keys + Telegram token). Proven working with a live exploit before fixing.
+- **Fix:** run-id regex allowlist (`^[A-Za-z0-9_\-]+$`) + resolve-and-verify containment inside the run's output dir. Re-verified over live HTTP: traversal attempts now return `400`.
+
+### API Key Leak
+**File:** `app/routers/accounts.py`
+- `POST /api/accounts/refresh` returned raw DB rows including **full plaintext api_key** for every account (the list endpoint masked keys; refresh didn't).
+- **Fix:** shared `_sanitize_account()` masking helper used by both endpoints.
+
+### LAN Exposure & CORS
+**Files:** `run.py`, `app/main.py`
+- Server bound `0.0.0.0` with zero auth — anyone on the network could launch kernels, delete accounts, read logs.
+- CORS was `allow_origins=["*"]` **plus** `allow_credentials=True` (invalid combo).
+- **Fix:** loopback bind by default (`APP_HOST` env override for deliberate exposure), CORS restricted to localhost origins with credentials off.
+
+### Stored XSS
+**Files:** `app/static/js/*.js` (6 files)
+- Notebook titles / usernames / kernel refs were interpolated into `innerHTML` unescaped — a malicious notebook title executed JS in the dashboard.
+- **Fix:** `esc()` helper applied to every user-controlled interpolation; toasts switched to `textContent`.
+
+---
+
+## 16. Correctness Fixes
+
+| Bug | File | Fix |
+|---|---|---|
+| Account rename corrupted credentials (`copytree` into pre-created dir → swallowed `FileExistsError`) | `account_manager.py` | `copytree(..., dirs_exist_ok=True)` + remove old dir |
+| Ghost accounts: restart re-added every env key under random names (`kaggle_user_xxx`) when username couldn't be resolved | `account_manager.py` | Idempotent init (same key → reuse account) + deterministic SHA-256 fallback name |
+| Runs marked failed if stderr merely contained the word "Error" | `kaggle_service.py` | Failure = non-zero exit code or explicit push error only |
+| `download_outputs` ignored CLI failures → UI reported success with 0 files | `kaggle_service.py`, `files.py` | Raise on failure; pull endpoints return `502` with real error |
+| Stop button always claimed success, even when the stop-push failed; also destroyed notebooks (script stub replacing `.ipynb`) | `kaggle_service.py` | Preserves kernel type via ipynb stub; marks stopped only on confirmed success |
+| `except Exception` converted intended 400s into 500s; bad accounts JSON crashed | `runs.py`, `distributed.py` | `HTTPException` passthrough + JSON decode → 400; `limit` clamped 1–500 |
+| Distributed workloads stuck at `"running"` forever; total failures reported as success | `workload_distributor.py`, `database.py` | Final status `dispatched/partial/failed`; rejects items < shards |
+| One bad run stalled the whole monitor cycle; trial runs got 11h/12h alerts | `session_monitor.py` | Per-run isolation; long-session alerts skip trials; legacy naive-timestamp parsing handled |
+| SQLite "database is locked" under concurrent writes | `database.py` | WAL journal mode + 30s busy timeout |
+| Naive UTC timestamps broke JS elapsed display in non-UTC timezones; deprecated `utcnow()` | everywhere | Timezone-aware `utcnow_iso()` helper |
+
+---
+
+## 17. Test Suite Isolation
+
+**Files:** `app/config.py`, `test_automation.py`
+- Tests wrote directly into the production DB and `data/accounts/`.
+- **Fix:** `AUTOMATION_DATA_DIR` env var redirects ALL data paths; tests use a per-run temp dir with fresh DB per test and teardown cleanup.
+- Edge case found & fixed while testing: set-but-empty `AUTOMATION_DATA_DIR=""` made `Path("")` resolve to cwd — empty values now treated as unset.
+
+---
+
+## 18. Streaming ZIP Downloads
+
+**File:** `app/routers/files.py`
+- ZIP archives were buffered fully in RAM (OOM risk on large outputs).
+- **Fix:** archive written to a temp file, streamed via `FileResponse`, deleted by `BackgroundTask` after the response. Verified live: correct contents, payload intact, temp file auto-deleted.
+
+---
+
+## 19. requirements.txt Trimmed
+
+68-line full freeze (incl. unrelated `sentry-sdk`, `fastapi-cloud-cli`, `fastar`, …) reduced to the 7 real direct dependencies with known-good ranges: `fastapi`, `uvicorn[standard]`, `jinja2`, `python-dotenv`, `python-multipart`, `httpx`, `kaggle`. All ranges verified against the installed environment.
+
+---
+
+## 20. CDN Dependencies Pinned
+
+`index.html`: tailwind `cdn.tailwindcss.com` → pinned `3.4.17`; lucide `@latest` → pinned `1.33.0` (exactly what `latest` resolved to — zero behavior change, no surprise majors).
+
+---
+
+## 21. Branding: Geist Pixel Fonts, Logo & Favicon
+
+**Files:** `app/static/fonts/*`, `app/static/icons/*`, `css/fonts.css` (new), `custom.css`, `index.html`
+- Unzipped `geist-font-v1.7.2.zip` → all 5 Geist Pixel variants (Square/Circle/Grid/Line/Triangle) + Geist + Geist Mono served locally from `/static/fonts`.
+- Body text now Geist, code/terminal Geist Mono (Google Fonts CDN import removed — dashboard works fully offline).
+- Display font `.font-pixel` (Square) applied to sidebar brand and page title; other variants available via utility classes.
+- Unzipped `favicon_io.zip` → favicon.ico + PNG sizes + apple-touch + android-chrome wired into `<head>`; `site.webmanifest` paths corrected and themed `#0a0d14`; sidebar logo box replaced with the actual logo image.
+
+---
+
+## 22. Authentication (Shared-Secret Cookie)
+
+**Files:** `app/auth.py` (new), `app/main.py`, `app/routers/logs.py`, `templates/login.html` (new), `index.html`
+- `APP_AUTH_TOKEN` in `.env` enables auth; unset = disabled (local dev) with loud startup warning.
+- Login page posts the token → server sets an HMAC-SHA256-signed HttpOnly `SameSite=Strict` cookie (7-day TTL). Signing key derived from the token hash, so **rotating the token invalidates all sessions instantly**.
+- HTTP middleware guards everything except `/login`, `/static/*`, `/api/health`: pages redirect to login, APIs get `401`.
+- **WebSockets guarded separately** (`close(1008)`) — they bypass HTTP middleware and were previously open to cross-site hijacking.
+- Branded login page; Sign Out button in header (hidden when auth disabled); frontend auto-redirects to login when a session expires mid-polling; 0.6s dampener on failed logins.
+- Verified live E2E: redirect flow, cookie issue/verify, tampered-cookie rejection, logout clearing, disabled-mode unchanged.
+
+---
+
+## 23. UI/UX Consistency Fixes
+
+1. Accelerator dropdowns ordered differently between tabs → unified (CPU first).
+2. "Elapsed / Max" showed hardcoded `/ 12h` even for 5-minute trial runs → derives from each run's `timeout_seconds`.
+3. "CLI Engine Online" badge was static → now polls `/api/health` and shows red *"Kaggle CLI Not Found"* when missing.
+4. Toasts could render underneath the modal (both z-50) → toast layer raised above.
+5. Add-Account modal: ESC key and backdrop-click close added.
+6. All three data tables wrapped in horizontal-scroll containers for narrow screens.
+7. Terminal "Clear" button border/hover matched to sibling buttons.
+
+---
+
+## 24. Telegram Alerts → Direct Messages via User ID
+
+**Files:** `telegram_service.py`, `settings` UI copy, `readme.md`
+- Alerts are bot **direct messages to a numeric Telegram User ID** instead of channel posts (Bot API `chat_id` accepts both natively — no schema change).
+- Actionable error hints added and surfaced in UI toasts:
+  - `403 can't initiate conversation` → *"press START on the bot first"*
+  - `chat not found` → *"get your numeric ID from @userinfobot"*
+- Settings tab relabeled with built-in 2-step instructions; test-message copy rewritten for DMs.
+
+---
+
+## 25. Inference Script: Full Kaggle Verification (v1→v10)
+
+**File:** `kaggle_batch_inference_task_a.py`
+
+The script was pushed to real Kaggle GPUs ten times, each error diagnosed from logs and fixed:
+
+| Ver | Kaggle-reported failure | Fix |
+|---|---|---|
+| 1 | `AutoModelForCausalLM` can't load `Qwen3_5MoeForConditionalGeneration` (image-text-to-text arch) | → `AutoModelForImageTextToText` |
+| 2 | offload kwarg leaked into model `__init__` | moved inside `BitsAndBytesConfig` |
+| 3–4 | disk-offloaded meta tensors crash at forward | explicit per-GPU memory budgets |
+| 5 | disk spill again during dispatch save | dropped CPU-offload flag entirely |
+| — | operator decision: smaller teacher | model → `Qwen/Qwen3.6-27B` (27.8B, NF4 ≈ 17 GB) |
+| 7–8 | CUDA OOM inside SDPA attention | budget → 13.5 GiB/GPU (activation headroom) |
+| 9 | COMPLETE but output was chain-of-thought truncated at 256 tokens | thinking-mode handling |
+| **10** | ✅ **COMPLETE with clean structured JSON** | see below |
+
+Static fixes carried into the script:
+- Shard vars coerced to int from env (raw strings crashed slicing/comparisons)
+- `uv pip install --system` (Kaggle has no venv); `--no-deps` strategy protecting pre-installed torch
+- `/kaggle/working` fallback to CWD; fetch retry backoff; preview blank-line guard
+- OOM root cause: 4 images/item × default pixel budgets → thousands of visual tokens. Fixed via 768 px download cap + processor `min_pixels/max_pixels=768*28*28`
+- Thinking mode disabled (`enable_thinking=False`), `max_new_tokens=768`, `<think>` stripping in JSON extraction
+- Fast downloads: `hf_transfer` enabled when available (multi-connection HF pulls; aria2c/GGUF considered and rejected — bottleneck was VRAM, not bandwidth)
+
+**Final verified state:** smoke kernel `fitcheck-taska-smoke-2-items` v10 — 2/2 items labeled with clean JSON (`category`/`gender`/`occasion`/`description`) in 2.77 min inference time (~14 min wall incl. model download). Model download via hf_transfer confirmed active.
+
+---
+
+## 26. Local Test Harness for Inference Script
+
+**File:** `test_inference_script.py` (new)
+- Executes the real script end-to-end with mocked torch/transformers/qwen_vl_utils/PIL, patched subprocess (installs recorded), REAL `requests` against a local HTTP image server, real file I/O.
+- 8 tests: compile+install flags, model-class regression guard, single-shard pipeline (success/fail counting, output schema, JSON extraction matrix), resume idempotency, exact multi-shard partition (zero overlap/duplication), env-var int coercion, JSON extractor edge cases, no-GPU exit path.
+- Suite total across project: **11/11 green**.
+
+---
+
 ## Summary of All Files Modified
 
 | File | Changes |
 |---|---|
-| `app/config.py` | Pre-existing: `get_kaggle_cli_path()` function |
-| `app/database.py` | SQL injection allowlist in `update_run_telegram_flag()` |
-| `app/main.py` | Cleaned up startup flow (removed `fix_fake_usernames` call) |
-| `app/services/account_manager.py` | `PYTHONIOENCODING=utf-8`, quota error handling, temp dir cleanup, removed dead code |
-| `app/services/kaggle_service.py` | Accelerator mapping (30 inputs → 12 API values), `machine_shape` in metadata, 409 retry logic (4x push + 3x stop) |
-| `app/templates/index.html` | Updated accelerator dropdowns (3 → 9 options) |
-| `kaggle_batch_inference_task_a.py` | Fixed model class, shard fallback, GPU guard, subprocess errors, uv support, dependency install strategy |
+| `app/config.py` | Session 1: `get_kaggle_cli_path()`. Session 2: `AUTOMATION_DATA_DIR` override (empty-safe), `APP_AUTH_TOKEN` |
+| `app/database.py` | SQL injection allowlist; WAL + busy timeout; tz-aware `utcnow_iso()`; `update_workload_status()` |
+| `app/main.py` | Cleaned startup flow; auth middleware + login/logout routes; CLI-aware health check; CORS lockdown |
+| `app/auth.py` | **NEW** — HMAC-signed session cookie helpers, WS/HTTP guards |
+| `app/routers/files.py` | Path traversal fix (verified exploit), 502 on download failures, streaming ZIP via temp file |
+| `app/routers/logs.py` | Log-path traversal guard, WebSocket auth guard (close 1008) |
+| `app/routers/accounts.py` | API-key masking on refresh endpoints (leak fix) |
+| `app/routers/runs.py`, `distributed.py` | HTTPException passthrough, 400 validation, limit clamp |
+| `app/services/account_manager.py` | PYTHONIOENCODING, quota error handling, temp cleanup, rename copytree fix, idempotent env init, deterministic fallback names, add-account lock |
+| `app/services/kaggle_service.py` | Accelerator map, machine_shape, 409 retries, false-error fix, download rc check, type-preserving honest stop_kernel, utcnow_iso |
+| `app/services/session_monitor.py` | Per-run isolation, trial-aware alerts, legacy timestamp parsing |
+| `app/services/workload_distributor.py` | Workload finalization, degenerate-split guard |
+| `app/services/telegram_service.py` | HTML escaping, User-ID DM orientation + actionable error hints |
+| `app/templates/index.html` | Accelerator dropdowns, favicons/logo, pixel fonts, Sign Out, modal ESC/backdrop, toast z-order, table scroll wrappers |
+| `app/templates/login.html` | **NEW** — branded login page |
+| `app/static/css/fonts.css`, `fonts/*`, `icons/*` | **NEW** — local Geist/Geist Mono/Geist Pixel + favicon pack |
+| `app/static/js/*.js` (6 files) | XSS escaping (`esc()`), timeout-derived elapsed display, CLI indicator truthfulness, 401 redirect |
+| `run.py` | Loopback bind by default (`APP_HOST`/`APP_PORT` overrides) |
+| `requirements.txt` | 68-line freeze → 7 direct deps with ranges |
+| `test_automation.py` | Full isolation via temp data dir |
+| `test_inference_script.py` | **NEW** — 8-test mocked end-to-end harness |
+| `kaggle_batch_inference_task_a.py` | Model class fix, Qwen3.6-27B, memory budgets, OOM/pixel budgets, thinking-mode off, hf_transfer, shard/env/install/path fixes |
+| `readme.md` | Auth + production notes, Telegram User-ID docs |
 
 ## Data Cleanup
 
 | Item | Before | After |
 |---|---|---|
-| Accounts in DB | 21 (20 fake + 1 test) | 1 (`@darkzone16`) |
-| Account directories | 65+ | 1 |
-| Fake usernames | `kaggle_user_*` pattern | None |
-| Test data | Orphaned runs & accounts | Removed |
+| Accounts in DB | 21 (20 fake + 1 test) | 0 (production keys added at startup) |
+| Account directories | 65+ | Recreated per-account at startup |
+| Fake usernames | `kaggle_user_*` pattern | Deterministic fallback only if unresolvable |
+| Test data | Orphaned runs & accounts | Removed; tests isolated to temp dirs |

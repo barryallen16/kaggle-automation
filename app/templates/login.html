@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In - Kaggle Auto</title>
+  <link rel="icon" type="image/x-icon" href="/static/icons/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32x32.png">
+  <meta name="theme-color" content="#0a0d14">
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://unpkg.com/lucide@1.33.0/dist/umd/lucide.js"></script>
+  <link rel="stylesheet" href="/static/css/fonts.css">
+  <link rel="stylesheet" href="/static/css/custom.css">
+</head>
+<body class="bg-[#0a0d14] text-slate-100 min-h-screen antialiased flex items-center justify-center p-4">
+
+  <!-- Ambient glow -->
+  <div class="pointer-events-none fixed inset-0 overflow-hidden">
+    <div class="absolute -top-40 left-1/2 -translate-x-1/2 w-[600px] h-[400px] bg-cyan-500/10 blur-[120px] rounded-full"></div>
+    <div class="absolute bottom-0 right-0 w-[400px] h-[300px] bg-blue-600/10 blur-[100px] rounded-full"></div>
+  </div>
+
+  <div class="relative w-full max-w-sm">
+    <!-- Brand -->
+    <div class="flex flex-col items-center mb-8 space-y-3">
+      <img src="/static/icons/android-chrome-192x192.png" alt="Logo"
+           class="w-16 h-16 rounded-2xl shadow-lg shadow-cyan-500/20 border border-cyan-500/30">
+      <h1 class="font-pixel text-xl text-white">KAGGLE AUTO</h1>
+      <p class="text-xs text-cyan-400 uppercase tracking-[0.2em]">Multi-Account Hub</p>
+    </div>
+
+    <!-- Login Card -->
+    <form method="post" action="/login"
+          class="glass-card rounded-2xl border border-[#222d4a] shadow-2xl p-7 space-y-5">
+      <div>
+        <h2 class="text-sm font-bold text-white">Restricted Access</h2>
+        <p class="text-xs text-slate-400 mt-1">Enter your dashboard access token to continue.</p>
+      </div>
+
+      {% if error %}
+      <div class="flex items-center space-x-2 px-3 py-2.5 rounded-xl bg-rose-950/60 border border-rose-800/60 text-xs text-rose-300">
+        <i data-lucide="alert-circle" class="w-4 h-4 flex-shrink-0"></i>
+        <span>{{ error }}</span>
+      </div>
+      {% endif %}
+
+      <div>
+        <label for="access_token" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Access Token</label>
+        <input type="password" id="access_token" name="access_token" required autofocus autocomplete="current-password"
+               placeholder="APP_AUTH_TOKEN from .env"
+               class="w-full font-mono text-sm bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-white focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500/40 transition">
+      </div>
+
+      <button type="submit"
+              class="w-full inline-flex items-center justify-center space-x-2 px-6 py-3 rounded-xl text-sm font-bold bg-gradient-to-r from-cyan-500 to-blue-600 text-white hover:from-cyan-400 hover:to-blue-500 shadow-lg shadow-cyan-500/25 transition">
+        <i data-lucide="lock" class="w-4 h-4"></i>
+        <span>Unlock Dashboard</span>
+      </button>
+
+      <p class="text-[11px] text-slate-500 text-center pt-1">Session stays valid for 7 days on this browser.</p>
+    </form>
+  </div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', () => lucide.createIcons());
+  </script>
+</body>
+</html>

@@ -3,8 +3,10 @@ import io
 import csv
 import json
 import uuid
+import hashlib
 import sys
 import asyncio
+import shutil
 import logging
 from pathlib import Path
 from typing import Dict, List, Any, Optional
@@ -133,12 +135,11 @@ class AccountManager:
             except Exception as e:
                 logger.error(f"Error querying {subcmd}: {e}")
 
-        return f"kaggle_user_{uuid.uuid4().hex[:6]}"
+        return f"kaggle_{hashlib.sha256(key.encode('utf-8')).hexdigest()[:8]}"
 
     @classmethod
     def _cleanup_temp_dir(cls, temp_id: str):
         """Removes the temporary config directory used during username resolution."""
-        import shutil
         temp_dir = cls.get_account_config_dir(temp_id).parent
         if temp_dir.exists():
             try:
@@ -152,16 +153,17 @@ class AccountManager:
         from app.database import update_account_username
         if old_username == new_username:
             return
-        
+
         # Update config directory
         old_dir = cls.get_account_config_dir(old_username)
         new_dir = cls.get_account_config_dir(new_username)
-        if old_dir.exists() and not new_dir.exists():
+        if old_dir.exists():
             try:
-                import shutil
-                shutil.copytree(old_dir, new_dir)
+                # get_account_config_dir() pre-creates the destination, so we must merge into it
+                shutil.copytree(old_dir, new_dir, dirs_exist_ok=True)
+                shutil.rmtree(old_dir, ignore_errors=True)
             except Exception as e:
-                logger.error(f"Failed to copy config dir: {e}")
+                logger.error(f"Failed to move config dir {old_dir} -> {new_dir}: {e}")
 
         update_account_username(old_username, new_username)
 
@@ -241,28 +243,51 @@ class AccountManager:
 
     @classmethod
     async def add_account(cls, api_key_or_token: str, custom_username: Optional[str] = None) -> Dict[str, Any]:
-        """Registers a new Kaggle account, discovers its username, writes configs and saves to DB."""
-        temp_id = uuid.uuid4().hex[:8]
-        if custom_username:
-            username = custom_username.strip()
-        else:
-            username = await cls.fetch_username_for_key(temp_id, api_key_or_token)
-            cls._cleanup_temp_dir(temp_id)
-        
-        # Setup config directory
-        cls.setup_account_files(username, api_key_or_token)
-        
-        # Fetch quota
-        quota_data = await cls.fetch_quota(username)
-        
-        # Save in database
-        save_account(temp_id, username, api_key_or_token, quota_data)
-        
-        return {
-            "id": temp_id,
-            "username": username,
-            "quota": quota_data
-        }
+        """Registers a new Kaggle account, discovers its username, writes configs and saves to DB.
+
+        Idempotent: if the exact same key is already registered (and no custom username
+        is requested), the existing account is reused instead of creating a duplicate.
+        """
+        async with cls._lock:
+            stripped_key = api_key_or_token.strip()
+
+            # Reuse an existing registration for the same key unless renaming
+            if not custom_username:
+                existing = next(
+                    (a for a in get_all_accounts() if a.get("api_key", "").strip() == stripped_key),
+                    None
+                )
+                if existing:
+                    username = existing["username"]
+                    cls.setup_account_files(username, stripped_key)
+                    return {
+                        "id": existing["id"],
+                        "username": username,
+                        "quota": existing.get("last_quota"),
+                        "existing": True
+                    }
+
+            temp_id = uuid.uuid4().hex[:8]
+            if custom_username:
+                username = custom_username.strip()
+            else:
+                username = await cls.fetch_username_for_key(temp_id, api_key_or_token)
+                cls._cleanup_temp_dir(temp_id)
+
+            # Setup config directory
+            cls.setup_account_files(username, api_key_or_token)
+
+            # Fetch quota
+            quota_data = await cls.fetch_quota(username)
+
+            # Save in database
+            save_account(temp_id, username, api_key_or_token, quota_data)
+
+            return {
+                "id": temp_id,
+                "username": username,
+                "quota": quota_data
+            }
 
     @classmethod
     async def initialize_from_env(cls):

@@ -9,7 +9,10 @@ load_dotenv()
 
 # Base directories
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
+# DATA_DIR can be redirected via env (used by the test suite for isolation).
+# Empty or whitespace values are treated as unset (Path("") would silently become cwd).
+_data_dir_env = (os.getenv("AUTOMATION_DATA_DIR") or "").strip()
+DATA_DIR = Path(_data_dir_env).expanduser().resolve() if _data_dir_env else BASE_DIR / "data"
 ACCOUNTS_DIR = DATA_DIR / "accounts"
 NOTEBOOKS_DIR = DATA_DIR / "notebooks"
 LOGS_DIR = DATA_DIR / "logs"
@@ -48,6 +51,8 @@ def get_kaggle_cli_path() -> str:
 KAGGLE_APIKEYS_RAW = os.getenv("KAGGLE_APIKEYS", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# Dashboard login secret. Leave EMPTY to disable auth (local dev only).
+APP_AUTH_TOKEN = os.getenv("APP_AUTH_TOKEN", "")
 KAGGLE_CLI_PATH = get_kaggle_cli_path()
 
 # Session limits (in seconds)
