@@ -392,13 +392,21 @@
                   </select>
                 </div>
 
-                <div class="flex items-center space-x-6 pt-6">
+                <div class="flex items-center space-x-6 pt-6 flex-wrap gap-y-3">
                   <label class="flex items-center space-x-2.5 cursor-pointer">
                     <input type="checkbox" id="dist-internet" checked class="w-4 h-4 text-purple-500 rounded bg-slate-900 border-slate-700 focus:ring-0">
                     <span class="text-sm font-medium text-slate-300">Enable Internet Access</span>
                   </label>
+                  <label class="flex items-center space-x-2.5 cursor-pointer">
+                    <span class="text-sm font-medium text-slate-300">GPU Sessions / Account</span>
+                    <select id="dist-sessions-per-account" onchange="updateShardsPreview(); updateQuotaHint();" class="bg-[#0d121f] border border-[#222d4a] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500">
+                      <option value="1">1</option>
+                      <option value="2" selected>2</option>
+                    </select>
+                  </label>
                 </div>
               </div>
+              <p id="dist-quota-hint" class="hidden text-[11px] text-amber-300/80 mt-2">⚠ 2 sessions halve wall-clock time but burn each account's weekly GPU quota 2× faster — total items/week stays the same.</p>
 
               <!-- Shard Partition Preview Box -->
               <div class="p-4 rounded-xl bg-purple-950/30 border border-purple-800/50">
@@ -428,6 +436,34 @@
               </div>
             </form>
           </div>
+          <!-- Recent Workloads -->
+          <div class="space-y-4 pt-4">
+            <h3 class="text-base font-bold text-white flex items-center space-x-2">
+              <i data-lucide="archive" class="w-5 h-5 text-purple-400"></i>
+              <span>Recent Workloads</span>
+            </h3>
+            <div class="glass-panel rounded-2xl overflow-hidden">
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm text-slate-300 min-w-[720px]">
+                <thead class="bg-[#0e1424] text-xs uppercase font-semibold text-slate-400 border-b border-[#222d4a]">
+                  <tr>
+                    <th class="px-6 py-3.5">Workload</th>
+                    <th class="px-6 py-3.5">Status</th>
+                    <th class="px-6 py-3.5">Progress</th>
+                    <th class="px-6 py-3.5">Active</th>
+                    <th class="px-6 py-3.5 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody id="workloads-table-body" class="divide-y divide-[#1e293b]">
+                  <tr>
+                    <td colspan="5" class="px-6 py-8 text-center text-slate-500">No distributed workloads dispatched yet.</td>
+                  </tr>
+                </tbody>
+              </table>
+              </div>
+            </div>
+          </div>
+
         </section>
 
 

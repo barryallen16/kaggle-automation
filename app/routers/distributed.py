@@ -1,9 +1,11 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+import asyncio
 import json
 from app.services.workload_distributor import WorkloadDistributor
-from app.database import get_all_workloads, get_all_runs
+from app.services.kaggle_service import KaggleService
+from app.database import get_all_workloads, get_all_runs, get_active_runs, update_workload_status
 
 router = APIRouter(prefix="/api/distributed", tags=["Distributed Workload"])
 
@@ -18,6 +20,8 @@ class DistributedLaunchJSON(BaseModel):
     enable_internet: bool = True
     is_trial: bool = False
     timeout_seconds: Optional[int] = None
+    env_vars: Optional[Dict[str, str]] = None
+    sessions_per_account: int = 2  # up to 2 concurrent GPU sessions per account
 
 @router.get("")
 async def list_workloads():
@@ -47,13 +51,48 @@ async def launch_distributed_json(payload: DistributedLaunchJSON):
             accelerator=payload.accelerator,
             enable_internet=payload.enable_internet,
             is_trial=payload.is_trial,
-            timeout_seconds=payload.timeout_seconds
+            timeout_seconds=payload.timeout_seconds,
+            env_vars=payload.env_vars,
+            sessions_per_account=payload.sessions_per_account
         )
         return result
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/{workload_id}/stop")
+async def stop_workload(workload_id: str):
+    """Stops every active shard of a distributed workload in one call."""
+    targets = [r for r in get_active_runs() if r.get("workload_id") == workload_id]
+    if not targets:
+        raise HTTPException(status_code=404, detail=f"No active shards found for workload {workload_id}")
+
+    results = await asyncio.gather(
+        *[KaggleService.stop_kernel(r["id"]) for r in targets],
+        return_exceptions=True
+    )
+    stopped, failed = [], []
+    for r, res in zip(targets, results):
+        if isinstance(res, Exception):
+            failed.append({"run_id": r["id"], "error": str(res)})
+        elif isinstance(res, dict) and res.get("success"):
+            stopped.append(r["id"])
+        else:
+            failed.append({"run_id": r["id"], "error": (res or {}).get("error", "unknown")})
+
+    if stopped and not failed:
+        update_workload_status(workload_id, "stopped")
+    elif stopped:
+        update_workload_status(workload_id, "partial")
+
+    return {
+        "success": bool(stopped),
+        "workload_id": workload_id,
+        "stopped": stopped,
+        "failed": failed,
+        "message": f"Stopped {len(stopped)}/{len(targets)} shards."
+    }
 
 @router.post("/upload-and-launch")
 async def upload_and_launch_distributed(
@@ -65,7 +104,9 @@ async def upload_and_launch_distributed(
     accelerator: str = Form("none"),
     enable_internet: bool = Form(True),
     is_trial: bool = Form(False),
-    timeout_seconds: Optional[int] = Form(None)
+    timeout_seconds: Optional[int] = Form(None),
+    env_vars: Optional[str] = Form(None),
+    sessions_per_account: int = Form(2)
 ):
     try:
         # Parse accounts list
@@ -86,6 +127,17 @@ async def upload_and_launch_distributed(
         code_content = content_bytes.decode("utf-8", errors="ignore")
         filename = file.filename or "notebook.ipynb"
 
+        parsed_env_vars = None
+        if env_vars and env_vars.strip():
+            try:
+                obj = json.loads(env_vars)
+                if isinstance(obj, dict):
+                    parsed_env_vars = {str(k): str(v) for k, v in obj.items()}
+                else:
+                    raise HTTPException(status_code=400, detail="env_vars must be a JSON object")
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="env_vars must be valid JSON")
+
         result = await WorkloadDistributor.distribute_and_launch(
             base_title=base_title,
             code_content=code_content,
@@ -96,7 +148,9 @@ async def upload_and_launch_distributed(
             accelerator=accelerator,
             enable_internet=enable_internet,
             is_trial=is_trial,
-            timeout_seconds=timeout_seconds
+            timeout_seconds=timeout_seconds,
+            env_vars=parsed_env_vars,
+            sessions_per_account=sessions_per_account
         )
         return result
     except HTTPException:

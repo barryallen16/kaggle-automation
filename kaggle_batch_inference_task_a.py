@@ -140,6 +140,11 @@ CHECKPOINT_INTERVAL = 25  # Flush progress to disk every N items
 # The truncation guard below guarantees nothing cut mid-JSON enters the dataset.
 MAX_NEW_TOKENS = 384
 
+# Optional per-session item cap (env-injected by the dashboard). When set, the
+# script exits cleanly after N items - used for throughput timing tests and
+# controlled batches. Unset/0 = process the whole assigned shard.
+MAX_ITEMS_PER_RUN = int(os.environ.get("MAX_ITEMS_PER_RUN", "0") or 0)
+
 print(f"Input file path:  {INPUT_FILE}")
 print(f"Output file path: {OUTPUT_FILE}")
 print(f"Active GPU count: {torch.cuda.device_count()}")
@@ -310,6 +315,8 @@ start_time = time.time()
 
 try:
     total_on_shard = len(items_to_process)
+    if MAX_ITEMS_PER_RUN:
+        print(f"[LIMIT] This session will stop after {MAX_ITEMS_PER_RUN} items (timing/batch mode).", flush=True)
     for idx, item in enumerate(tqdm(items_to_process, desc=f"Shard {SHARD_ID} [{MODEL_ID}]"), start=1):
         # One newline-terminated line per item: this is what keeps Kaggle's log
         # viewer alive during slow (~90s) iterations - tqdm's \r-only updates
@@ -324,6 +331,9 @@ try:
             f"| {time.strftime('%H:%M:%S')}",
             flush=True
         )
+        if MAX_ITEMS_PER_RUN and idx > MAX_ITEMS_PER_RUN:
+            print(f"[LIMIT] Reached MAX_ITEMS_PER_RUN={MAX_ITEMS_PER_RUN} - stopping session cleanly.", flush=True)
+            break
         item_id = item["id"]
         img_urls = item.get("images", [])
         prompt_text = item.get("prompt", "")
