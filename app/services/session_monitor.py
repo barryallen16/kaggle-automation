@@ -1,12 +1,14 @@
 import asyncio
 import logging
+import time
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
 from app.config import MAX_KAGGLE_SESSION_SECONDS, WARNING_BEFORE_EXPIRY_SECONDS
 from app.database import (
     get_active_runs, update_run_status, update_run_telegram_flag, get_run_by_id
 )
 from app.services.kaggle_service import KaggleService
+from app.services.account_manager import AccountManager
 from app.services.telegram_service import TelegramService
 
 logger = logging.getLogger("session_monitor")
@@ -15,12 +17,52 @@ class SessionMonitor:
     _is_running: bool = False
     _monitor_task: asyncio.Task = None
 
+    # Live-quota lookups are expensive CLI calls - cache per account so a busy
+    # dashboard with many shards queries each account at most once per TTL.
+    QUOTA_CACHE_TTL_SECONDS = 300
+    _quota_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+
     @staticmethod
     def _parse_start(value: str) -> datetime:
         dt = datetime.fromisoformat(value)
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)  # legacy rows were stored as naive UTC
         return dt
+
+    @staticmethod
+    def _is_gpu_accelerator(accelerator: Any) -> bool:
+        acc = str(accelerator or "").lower()
+        return bool(acc) and acc not in ("none", "default", "cpu")
+
+    @classmethod
+    async def _gpu_quota_exhausted(cls, account_username: str) -> bool:
+        """True only when Kaggle reports the account's weekly GPU quota FULLY spent.
+
+        Unknown/unparsable quota data returns False - we never force-stop a run
+        based on missing information.
+        """
+        now = time.monotonic()
+        cached = cls._quota_cache.get(account_username)
+        if cached and (now - cached[0]) < cls.QUOTA_CACHE_TTL_SECONDS:
+            quota = cached[1]
+        else:
+            try:
+                quota = await AccountManager.refresh_account_quota(account_username)
+            except Exception as e:
+                logger.warning(f"Quota refresh failed for @{account_username}: {e}")
+                quota = {}
+            if not quota:
+                return False
+            cls._quota_cache[account_username] = (now, quota)
+
+        gpu = quota.get("gpu") or {}
+        used, limit = gpu.get("used"), gpu.get("limit")
+        try:
+            if used is None or not limit:
+                return False
+            return float(used) >= float(limit)
+        except (TypeError, ValueError):
+            return False
 
     @classmethod
     async def start(cls):
@@ -100,7 +142,31 @@ class SessionMonitor:
                 await TelegramService.notify_12h_limit_reached(run)
                 update_run_telegram_flag(run_id, "telegram_notified_12h", 1)
 
-        # 5. Handle completion, error, or stop
+        # 5. Quota-exhaustion guard: Kaggle keeps reporting the kernel as
+        #    "running" even after the account's weekly GPU quota is fully
+        #    spent (nothing progresses, no completion ever arrives). A run
+        #    must end on script completion, the 12h limit - or quota gone.
+        terminal = ("complete", "error", "stopped", "canceled")
+        if remote_status not in terminal and cls._is_gpu_accelerator(run.get("accelerator")):
+            if await cls._gpu_quota_exhausted(account_username):
+                logger.warning(
+                    f"GPU quota exhausted for @{account_username}; force-stopping run {run_id}"
+                )
+                stop_resp = await KaggleService.stop_kernel(run_id)
+                update_run_status(
+                    run_id=run_id,
+                    status="stopped",
+                    status_message="Stopped by monitor: weekly GPU quota fully exhausted",
+                    end_time=now.isoformat()
+                )
+                if run.get("telegram_notified_end") == 0:
+                    await TelegramService.notify_run_completed(run, "stopped (GPU quota exhausted)")
+                    update_run_telegram_flag(run_id, "telegram_notified_end", 1)
+                if not stop_resp.get("success"):
+                    logger.warning(f"Force-stop push failed for {run_id}: {stop_resp.get('error')}")
+                return
+
+        # 6. Handle completion, error, or stop
         if remote_status in ["complete", "error", "stopped", "canceled"]:
             update_run_status(
                 run_id=run_id,

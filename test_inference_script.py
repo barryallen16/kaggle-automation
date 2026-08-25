@@ -223,7 +223,12 @@ class TestScript(unittest.TestCase):
             self.assertIn("--no-deps accelerate bitsandbytes qwen-vl-utils", cmds)
             self.assertIn("--no-deps git+https://github.com/huggingface/transformers.git", cmds)
             self.assertIn("tokenizers>=0.23.1", cmds)
-            self.assertIn("wget -q -N https://huggingface.co/datasets/barryallen16/fitcheck-annotate-dataset/resolve/main/task_a_dataset.jsonl", cmds)
+            # Dataset downloads with explicit -O into scratch (never CWD/output)
+            self.assertIn("wget -q -O", cmds)
+            self.assertIn("https://huggingface.co/datasets/barryallen16/fitcheck-annotate-dataset/resolve/main/task_a_dataset.jsonl", cmds)
+            # Regression guard: dataset must NOT land in /kaggle/working output
+            self.assertNotIn("cd /kaggle/working", cmds)
+            self.assertIn("task_a_labeled_prior.jsonl", cmds)
         # uv path must carry --system (Kaggle has no active venv); pip path stays quiet
         self.assertIn("uv pip install --system", cmds)
         self.assertNotIn("pip install --system", cmds.replace("uv pip install --system", ""))

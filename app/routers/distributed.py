@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
 import asyncio
 import json
 from app.services.workload_distributor import WorkloadDistributor
@@ -21,7 +21,8 @@ class DistributedLaunchJSON(BaseModel):
     is_trial: bool = False
     timeout_seconds: Optional[int] = None
     env_vars: Optional[Dict[str, str]] = None
-    sessions_per_account: int = 2  # up to 2 concurrent GPU sessions per account
+    # Global session count (int) OR per-account overrides {username: 1|2}
+    sessions_per_account: Union[int, Dict[str, int]] = 2
 
 @router.get("")
 async def list_workloads():
@@ -106,7 +107,7 @@ async def upload_and_launch_distributed(
     is_trial: bool = Form(False),
     timeout_seconds: Optional[int] = Form(None),
     env_vars: Optional[str] = Form(None),
-    sessions_per_account: int = Form(2)
+    sessions_per_account: str = Form("2")  # "2" or JSON object {"user": 2}
 ):
     try:
         # Parse accounts list
@@ -138,6 +139,22 @@ async def upload_and_launch_distributed(
             except json.JSONDecodeError:
                 raise HTTPException(status_code=400, detail="env_vars must be valid JSON")
 
+        # Sessions: plain int or per-account JSON object
+        sessions_raw = (sessions_per_account or "2").strip()
+        if sessions_raw.startswith("{"):
+            try:
+                sessions_obj = json.loads(sessions_raw)
+                if not isinstance(sessions_obj, dict):
+                    raise HTTPException(status_code=400, detail="sessions_per_account JSON must be an object")
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="sessions_per_account must be an int or JSON object")
+            sessions_val: Union[int, Dict[str, int]] = sessions_obj
+        else:
+            try:
+                sessions_val = int(sessions_raw)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="sessions_per_account must be an int or JSON object")
+
         result = await WorkloadDistributor.distribute_and_launch(
             base_title=base_title,
             code_content=code_content,
@@ -150,7 +167,7 @@ async def upload_and_launch_distributed(
             is_trial=is_trial,
             timeout_seconds=timeout_seconds,
             env_vars=parsed_env_vars,
-            sessions_per_account=sessions_per_account
+            sessions_per_account=sessions_val
         )
         return result
     except HTTPException:

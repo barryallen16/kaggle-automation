@@ -5,7 +5,8 @@ const AppState = {
   activeRuns: [],
   allRuns: [],
   selectedTerminalRunId: null,
-  selectedFilesRunId: null
+  selectedFilesRunId: null,
+  cartFiles: [] // merge cart: [{run_id, filename, label}] across finished notebooks
 };
 
 // HTML escaping helper - ALWAYS use for user-controlled data inserted into innerHTML
@@ -109,7 +110,7 @@ function switchTab(tabId, push = true) {
   if (tabId === 'dashboard') loadDashboardData();
   if (tabId === 'history') loadHistoryData();
   if (tabId === 'terminal') updateTerminalRunDropdown();
-  if (tabId === 'files') updateFilesRunDropdown();
+  if (tabId === 'files') { updateFilesRunDropdown(); renderMergeCart(); }
   if (tabId === 'runner' || tabId === 'distributed') populateAccountSelects();
   if (tabId === 'settings') loadSettingsData();
 }
