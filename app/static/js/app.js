@@ -60,13 +60,28 @@ function showToast(message, type = 'info') {
   }, 4500);
 }
 
+// Mobile sidebar drawer: off-canvas below lg, static column from lg up.
+function toggleSidebar(force) {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebar-overlay');
+  if (!sidebar) return;
+  const shouldOpen = force !== undefined
+    ? force
+    : sidebar.classList.contains('-translate-x-full');
+  sidebar.classList.toggle('-translate-x-full', !shouldOpen);
+  if (overlay) overlay.classList.toggle('hidden', !shouldOpen);
+}
+
 // Tab navigation router.
 // Tabs are pushed onto browser history (/?tab=<id>) so Back/Forward move
 // between app views instead of exiting to the stale /login entry - the whole
 // app lives on a single page, and without this the back button left the site.
 function switchTab(tabId, push = true) {
   AppState.activeTab = tabId;
-  
+
+  // Phone UX: navigating always closes the slide-in menu
+  if (window.innerWidth < 1024) toggleSidebar(false);
+
   // Update nav buttons
   document.querySelectorAll('.nav-tab').forEach(btn => {
     btn.classList.remove('active');
