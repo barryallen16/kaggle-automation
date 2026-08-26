@@ -3,6 +3,12 @@
 let distUploadedFileContent = null;
 let distUploadedFileName = "notebook.ipynb";
 
+// Renders GPU hours without float noise (17.399999 -> "17.4", 30 -> "30")
+function fmtHours(value) {
+  const n = Math.max(0, Number(value) || 0);
+  return (Math.round(n * 10) / 10).toLocaleString('en-US', { maximumFractionDigits: 1 });
+}
+
 function renderDistributedAccountCheckboxes() {
   const container = document.getElementById('dist-accounts-checkboxes');
   if (!container) return;
@@ -14,12 +20,18 @@ function renderDistributedAccountCheckboxes() {
 
   const globalSessions = document.getElementById('dist-sessions-per-account')?.value || '2';
 
-  container.innerHTML = AppState.accounts.map((acc, idx) => `
+  container.innerHTML = AppState.accounts.map((acc, idx) => {
+    const gpuQ = acc.last_quota?.gpu;
+    const hasQuota = gpuQ && isFinite(gpuQ.limit) && Number(gpuQ.limit) > 0;
+    const quotaLabel = hasQuota
+      ? `${fmtHours(gpuQ.limit - gpuQ.used)}h GPU left`
+      : 'Active';
+    return `
     <label class="flex items-center space-x-2.5 p-2.5 rounded-lg bg-[#080b12] border border-[#1e293b] hover:border-purple-500/50 cursor-pointer transition">
       <input type="checkbox" name="dist-acc" value="${esc(acc.username)}" checked onchange="updateShardsPreview()" class="w-4 h-4 text-purple-500 rounded bg-slate-900 border-slate-700 focus:ring-0">
       <div class="truncate flex-1">
         <span class="text-xs font-bold text-white block truncate">@${esc(acc.username)}</span>
-        <span class="text-[10px] text-slate-400 font-mono">${acc.last_quota?.gpu?.limit ? acc.last_quota.gpu.limit - acc.last_quota.gpu.used + 'h GPU left' : 'Active'}</span>
+        <span class="text-[10px] text-slate-400 font-mono">${esc(quotaLabel)}</span>
       </div>
       <select onchange="event.stopPropagation(); updateShardsPreview();" onclick="event.stopPropagation()"
               class="dist-session-select bg-[#0d121f] border border-[#222d4a] rounded-md px-1.5 py-1 text-[10px] text-purple-300 focus:outline-none focus:border-purple-500"
@@ -29,7 +41,8 @@ function renderDistributedAccountCheckboxes() {
         <option value="2" ${globalSessions === '2' ? 'selected' : ''}>2x</option>
       </select>
     </label>
-  `).join('');
+  `;
+  }).join('');
 
   updateShardsPreview();
 }
