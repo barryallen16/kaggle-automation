@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, AsyncGenerator
 from app.config import NOTEBOOKS_DIR, LOGS_DIR, OUTPUTS_DIR, get_kaggle_cli_path, get_kernel_env_defaults
 from app.services.account_manager import AccountManager
-from app.database import create_run_record, update_run_status, get_run_by_id, get_active_runs, utcnow_iso
+from app.database import create_run_record, update_run_status, get_run_by_id, get_active_runs, set_run_output_version, utcnow_iso
 
 logger = logging.getLogger("kaggle_service")
 
@@ -743,18 +743,44 @@ class KaggleService:
         return target_dir
 
     @classmethod
-    async def download_latest_outputs(cls, account_username: str, kernel_ref: str, run_id: str) -> Optional[Path]:
-        """Best-effort output sync: exact current version first, plain pull fallback."""
-        version = await cls.get_kernel_current_version(account_username, kernel_ref)
-        if version:
-            got = await cls.download_outputs_of_version(account_username, kernel_ref, version, run_id)
+    async def download_latest_outputs(
+        cls,
+        account_username: str,
+        kernel_ref: str,
+        run_id: str,
+        prefer_version: Optional[int] = None,
+        probe_previous_for_stop: bool = False
+    ):
+        """Best-effort output sync. Returns (path_or_None, version_used_or_None).
+
+        Order of attempts:
+          1. prefer_version            - the pinned version holding real output
+          2. current version           - for normal runs latest == theirs
+             (+ previous version first when probe_previous_for_stop: legacy
+              stopped runs have no pin, and the cancelled run sits exactly one
+              behind the stop-stub that is now 'current')
+          3. plain latest pull         - final fallback
+        """
+        attempts: List[int] = []
+        if prefer_version:
+            attempts.append(int(prefer_version))
+        else:
+            current = await cls.get_kernel_current_version(account_username, kernel_ref)
+            if current:
+                if probe_previous_for_stop and current > 1:
+                    attempts.append(current - 1)
+                attempts.append(current)
+
+        for v in attempts:
+            got = await cls.download_outputs_of_version(account_username, kernel_ref, v, run_id)
             if got:
-                return got
+                return got, v
+
         try:
-            return await cls.download_outputs(account_username, kernel_ref, run_id)
+            return await cls.download_outputs(account_username, kernel_ref, run_id), None
         except Exception as e:
             logger.info(f"Output sync skipped for {run_id}: {e}")
-            return None
+            return None, None
 
     @classmethod
     async def download_outputs(cls, account_username: str, kernel_ref: str, run_id: str) -> Path:
@@ -906,9 +932,17 @@ class KaggleService:
                         utcnow_iso()
                     )
 
-            # Recover the CANCELLED version's partial output. Kaggle needs a
-            # few seconds to finalize it after the cancel; retry briefly.
+            # Pin the cancelled version as THE output holder for this run so
+            # every later manual pull skips the stub and fetches the real
+            # partial data - even if local files were deleted in between.
             if cancelled_version:
+                set_run_output_version(run_id, cancelled_version)
+                for r in get_active_runs():
+                    if r["kernel_ref"] == kernel_ref and r["id"] != run_id:
+                        set_run_output_version(r["id"], cancelled_version)
+
+                # Recover the CANCELLED version's partial output. Kaggle needs a
+                # few seconds to finalize it after the cancel; retry briefly.
                 got = None
                 for delay in cls.STOP_CAPTURE_RETRY_DELAYS:
                     await asyncio.sleep(delay)

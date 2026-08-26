@@ -48,7 +48,7 @@ def _fresh():
     import app.routers.files as _files
     files_router = importlib.reload(_files)
     db.init_db()
-    return cfg, db, files_router
+    return cfg, db, files_router, __import__("app.services.kaggle_service", fromlist=["x"]).KaggleService
 
 
 def _seed_run(db, run_id):
@@ -79,7 +79,7 @@ class TestCatMerge(unittest.TestCase):
         return _fresh()
 
     def test_1_jsonl_concat_in_cart_order(self):
-        cfg, db, fr = self._setup()
+        cfg, db, fr, ks = self._setup()
         _seed_run(db, "m1")
         _seed_run(db, "m2")
 
@@ -105,7 +105,7 @@ class TestCatMerge(unittest.TestCase):
         self.assertEqual(merged, a_bytes + b_bytes)
 
     def test_2_extension_follows_majority_and_binary_intact(self):
-        cfg, db, fr = self._setup()
+        cfg, db, fr, ks = self._setup()
         _seed_run(db, "m3")
         out = cfg.OUTPUTS_DIR / "m3"
         out.mkdir(parents=True, exist_ok=True)
@@ -127,9 +127,16 @@ class TestCatMerge(unittest.TestCase):
         self.assertTrue(merged.endswith(b'{"x":2}\n'))
 
     def test_3_missing_file_attempts_autopull_then_502(self):
-        cfg, db, fr = self._setup()
+        cfg, db, fr, ks = self._setup()
+        ks = __import__("app.services.kaggle_service", fromlist=["x"]).KaggleService
         _seed_run(db, "m4")
         (cfg.OUTPUTS_DIR / "m4").mkdir(parents=True, exist_ok=True)
+
+        # No version lookup possible in tests - helper would hit the network
+        async def no_version(account, ref):
+            return None
+
+        ks.get_kernel_current_version = staticmethod(no_version)
 
         req = fr.MergeRequest(items=[fr.MergeItem(run_id="m4", filename="nope.jsonl")])
         from fastapi import HTTPException
@@ -138,7 +145,7 @@ class TestCatMerge(unittest.TestCase):
         self.assertEqual(cm.exception.status_code, 502)
 
     def test_4_empty_cart_rejected(self):
-        cfg, db, fr = self._setup()
+        cfg, db, fr, ks = self._setup()
         from fastapi import HTTPException
         with self.assertRaises(HTTPException) as cm:
             asyncio_run(fr.merge_selected_files(fr.MergeRequest(items=[])))

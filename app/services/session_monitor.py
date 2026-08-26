@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from typing import Dict, Any, Tuple
 from app.config import MAX_KAGGLE_SESSION_SECONDS, WARNING_BEFORE_EXPIRY_SECONDS
 from app.database import (
-    get_active_runs, update_run_status, update_run_telegram_flag, get_run_by_id
+    get_active_runs, update_run_status, update_run_telegram_flag, get_run_by_id,
+    set_run_output_version
 )
 from app.services.kaggle_service import KaggleService
 from app.services.account_manager import AccountManager
@@ -177,10 +178,15 @@ class SessionMonitor:
             # Auto-sync output artifacts the moment a run ends, so the Files
             # tab shows the real files without a manual "Pull from Kaggle".
             # Version-aware: pulls THIS run's exact version snapshot (which is
-            # what Kaggle finalizes on completion/error/cancel) rather than
-            # whatever version happens to be latest later on.
+            # what Kaggle finalizes on completion/error/cancel) and pins it on
+            # the run row so later manual pulls keep working after deletions.
             try:
-                await KaggleService.download_latest_outputs(account_username, kernel_ref, run_id)
+                got_path, used_version = await KaggleService.download_latest_outputs(
+                    account_username, kernel_ref, run_id,
+                    prefer_version=run.get("output_version")
+                )
+                if used_version and not run.get("output_version"):
+                    set_run_output_version(run_id, used_version)
             except Exception as e:
                 logger.info(f"Auto-pull of outputs skipped for {run_id}: {e}")
             if run.get("telegram_notified_end") == 0:

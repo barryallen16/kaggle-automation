@@ -53,13 +53,24 @@ def init_db():
             shard_index INTEGER,
             total_shards INTEGER,
             log_file TEXT,
+            output_version INTEGER,
             telegram_notified_start INTEGER DEFAULT 0,
             telegram_notified_11h INTEGER DEFAULT 0,
             telegram_notified_12h INTEGER DEFAULT 0,
             telegram_notified_end INTEGER DEFAULT 0
         )
-    """)
-    
+        """)
+
+        # Lightweight migrations for pre-existing databases
+    def _ensure_column(table: str, column_def: str):
+        col_name = column_def.split()[0]
+        cursor.execute(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in cursor.fetchall()}
+        if col_name not in existing:
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
+
+    _ensure_column("runs", "output_version INTEGER")
+
     # Distributed workloads table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS distributed_workloads (
@@ -180,6 +191,18 @@ def update_run_telegram_flag(run_id: str, flag_name: str, value: int = 1):
     conn = get_db_connection()
     with conn:
         conn.execute(f"UPDATE runs SET {flag_name} = ? WHERE id = ?", (value, run_id))
+    conn.close()
+
+def set_run_output_version(run_id: str, version: int):
+    """Pins which Kaggle VERSION holds this run's real output.
+
+    After a stop, the latest kernel version is our exit-stub (log only);
+    the cancelled run version - with the partial /kaggle/working data -
+    sits one behind. Pinning lets every later pull skip the stub.
+    """
+    conn = get_db_connection()
+    with conn:
+        conn.execute("UPDATE runs SET output_version = ? WHERE id = ?", (int(version), run_id))
     conn.close()
 
 def get_all_runs(limit: int = 100) -> List[Dict[str, Any]]:
