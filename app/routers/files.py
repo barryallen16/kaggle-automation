@@ -209,19 +209,24 @@ async def download_all_zip(run_id: str):
             status_code=404, detail="No output files available to download"
         )
 
-    # Stream from a temp file instead of buffering the whole archive in RAM
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
-        tmp_name = tmp.name
-    try:
-        with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED) as zip_file:
-            for root, dirs, files in os.walk(target_dir):
-                for file in files:
-                    file_path = Path(root) / file
-                    archive_name = file_path.relative_to(target_dir)
-                    zip_file.write(file_path, archive_name)
-    except Exception:
-        os.unlink(tmp_name)
-        raise
+    # Stream from a temp file instead of buffering the whole archive in RAM.
+    # Built in a worker thread: zipping hundreds of MB must not stall the loop.
+    def _build_zip() -> str:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+            name = tmp.name
+        try:
+            with zipfile.ZipFile(name, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                for root, dirs, files in os.walk(target_dir):
+                    for file in files:
+                        file_path = Path(root) / file
+                        archive_name = file_path.relative_to(target_dir)
+                        zip_file.write(file_path, archive_name)
+        except Exception:
+            os.unlink(name)
+            raise
+        return name
+
+    tmp_name = await asyncio.to_thread(_build_zip)
 
     safe_slug = re.sub(r"[^A-Za-z0-9_\-]", "_", run["kernel_slug"])
     return FileResponse(

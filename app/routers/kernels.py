@@ -3,6 +3,9 @@ even if it was not launched from this dashboard, and lets the user pull
 outputs/logs for it. Uses the same throttled versioned helper as dashboard
 runs so 16 accounts don't OOM the server."""
 
+import asyncio
+import json
+import os
 import re
 import tempfile
 import zipfile
@@ -14,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from services.kaggle_service import KaggleService
+from starlette.background import BackgroundTask
 
 router = APIRouter(prefix="/api/kernels", tags=["External Kernels"])
 
@@ -60,67 +64,32 @@ async def list_kernels(
             from services.account_manager import AccountManager
 
             acc = get_account_by_username(account)
-            if acc and acc.get("api_key"):
-                # Try JWT decode quick
-                import base64
-                import json as _json
+            key = acc.get("api_key", "") if acc else ""
+            real = AccountManager.extract_username_from_token(key) if key else None
+            if (not real or real.startswith("kaggle_")) and key:
+                import uuid
 
-                key = acc["api_key"]
-                real = None
+                temp_id = f"debug_{uuid.uuid4().hex[:4]}"
                 try:
-                    parts = key.strip().split(".")
-                    if len(parts) == 3:
-                        payload = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
-                        claims = _json.loads(base64.urlsafe_b64decode(payload))
-                        for f in ["username", "user_name", "sub", "preferred_username"]:
-                            if (
-                                f in claims
-                                and isinstance(claims[f], str)
-                                and not claims[f].isdigit()
-                            ):
-                                real = claims[f]
-                                break
-                except Exception:
-                    pass
-                if not real:
+                    real = await AccountManager.fetch_username_for_key(temp_id, key)
+                finally:
+                    AccountManager._cleanup_temp_dir(temp_id)
+                if not real or real.startswith("kaggle_"):
+                    real = None
+            if real and real != account:
+                # Retry under the real username with the stored account's credentials.
+                out = await KaggleService._run_versioned_helper(
+                    account,
+                    ["list", real, search or "", str(page), str(pageSize)],
+                    timeout=120,
+                )
+                if out:
                     try:
-                        import uuid
-
-                        temp_id = f"debug_{uuid.uuid4().hex[:4]}"
-                        real = await AccountManager.fetch_username_for_key(temp_id, key)
-                        AccountManager._cleanup_temp_dir(temp_id)
-                        if real and real.startswith("kaggle_"):
-                            real = None
+                        d2 = json.loads(out)
+                        if d2.get("kernels"):
+                            data = d2
                     except Exception:
                         pass
-                if real and real != account:
-                    # Retry list with real username but same credentials (credentials are per stored account id, not username)
-                    # We need to call helper with real as user param but credentials still from stored account
-                    # Use helper directly with real user but same account's env (via _run_versioned_helper with stored account)
-                    # For now, try listing with real username via same account's token
-                    await KaggleService.list_account_kernels(
-                        account, search, page, pageSize
-                    )
-                    # Actually retry with real as user param by calling helper with real user but same account credentials
-                    # To do that, we need to call helper with real user param but same account's env - our list_account_kernels uses account as both user and credentials
-                    # So we call helper directly with real user
-                    import json as _j
-
-                    from services.kaggle_service import KaggleService as KS
-
-                    # Direct helper call with real user but credentials of stored account
-                    out = await KS._run_versioned_helper(
-                        account,
-                        ["list", real, search or "", str(page), str(pageSize)],
-                        timeout=120,
-                    )
-                    if out:
-                        try:
-                            d2 = _j.loads(out)
-                            if d2.get("kernels"):
-                                data = d2
-                        except Exception:
-                            pass
         except Exception:
             pass
     # Normalize for frontend: ensure every kernel has ref, title, lastRunTime, currentVersionNumber
@@ -384,14 +353,25 @@ async def download_zip(account: str = Query(...), kernel_ref: str = Query(...)):
         raise HTTPException(
             status_code=404, detail="No local files to zip - pull first"
         )
-    with (
-        tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp,
-        zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf,
-    ):
-        for p in target_dir.rglob("*"):
-            if p.is_file():
-                zf.write(p, arcname=str(p.relative_to(target_dir)))
+
+    def _build_zip() -> str:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+            name = tmp.name
+        try:
+            with zipfile.ZipFile(name, "w", zipfile.ZIP_DEFLATED) as zf:
+                for p in target_dir.rglob("*"):
+                    if p.is_file():
+                        zf.write(p, arcname=str(p.relative_to(target_dir)))
+        except Exception:
+            os.unlink(name)
+            raise
+        return name
+
+    tmp_name = await asyncio.to_thread(_build_zip)
     safe_slug = KaggleService.sanitize_slug(ref.split("/", 1)[1])
     return FileResponse(
-        path=tmp.name, filename=f"{safe_slug}_outputs.zip", media_type="application/zip"
+        path=tmp_name,
+        filename=f"{safe_slug}_outputs.zip",
+        media_type="application/zip",
+        background=BackgroundTask(os.unlink, tmp_name),
     )

@@ -5,7 +5,11 @@ import time
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
-from config import MAX_KAGGLE_SESSION_SECONDS, WARNING_BEFORE_EXPIRY_SECONDS
+from config import (
+    MAX_KAGGLE_SESSION_SECONDS,
+    WARNING_BEFORE_EXPIRY_SECONDS,
+    is_gpu_accelerator,
+)
 
 # Throttle parallel status checks - 32 runs checking status at once is the same
 # OOM spike as pushes (each `kaggle kernels status` is a CLI process).
@@ -39,11 +43,6 @@ class SessionMonitor:
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=UTC)  # legacy rows were stored as naive UTC
         return dt
-
-    @staticmethod
-    def _is_gpu_accelerator(accelerator: Any) -> bool:
-        acc = str(accelerator or "").lower()
-        return bool(acc) and acc not in ("none", "default", "cpu")
 
     @classmethod
     async def _gpu_quota_exhausted(cls, account_username: str) -> bool:
@@ -174,7 +173,7 @@ class SessionMonitor:
         terminal = ("complete", "error", "stopped", "canceled")
         if (
             remote_status not in terminal
-            and cls._is_gpu_accelerator(run.get("accelerator"))
+            and is_gpu_accelerator(run.get("accelerator"))
             and await cls._gpu_quota_exhausted(account_username)
         ):
             logger.warning(
