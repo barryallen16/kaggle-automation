@@ -21,6 +21,38 @@ logger = logging.getLogger("account_manager")
 class AccountManager:
     _lock = asyncio.Lock()
 
+    # Quota lookups each spawn a full kaggle CLI process (~50-150MB). Firing
+    # one per account SIMULTANEOUSLY (15+ accounts) spikes RAM until the OS
+    # OOM-killer takes down the whole server, and trips Kaggle rate limits.
+    # All quota subprocesses therefore funnel through this global cap.
+    QUOTA_CONCURRENCY_LIMIT = max(1, int(os.getenv("QUOTA_REFRESH_CONCURRENCY", "3")))
+    QUOTA_CALL_TIMEOUT_SECONDS = int(os.getenv("QUOTA_CALL_TIMEOUT_SECONDS", "90"))
+    _quota_semaphore: Optional[asyncio.Semaphore] = None
+
+    # Single-flight guard: overlapping refresh-all triggers (double-clicks,
+    # monitor quota probes, dashboard polling) share ONE run instead of
+    # stacking another N subprocess batches on top of the first.
+    _refresh_all_lock: Optional[asyncio.Lock] = None
+    _sync_primitive_loop_id: Optional[int] = None
+
+    @classmethod
+    def _get_quota_semaphore(cls) -> asyncio.Semaphore:
+        # Rebuilt if the running event loop changed (tests / embedded runners);
+        # asyncio primitives bind to whichever loop first awaits them.
+        loop_id = id(asyncio.get_running_loop())
+        if cls._quota_semaphore is None or cls._sync_primitive_loop_id != loop_id:
+            cls._quota_semaphore = asyncio.Semaphore(cls.QUOTA_CONCURRENCY_LIMIT)
+            cls._sync_primitive_loop_id = loop_id
+        return cls._quota_semaphore
+
+    @classmethod
+    def _get_refresh_all_lock(cls) -> asyncio.Lock:
+        loop_id = id(asyncio.get_running_loop())
+        if cls._refresh_all_lock is None or cls._sync_primitive_loop_id != loop_id:
+            cls._refresh_all_lock = asyncio.Lock()
+            cls._sync_primitive_loop_id = loop_id
+        return cls._refresh_all_lock
+
     @staticmethod
     def get_account_config_dir(username_or_id: str) -> Path:
         """Returns the isolated config directory for a specific Kaggle account."""
@@ -188,6 +220,31 @@ class AccountManager:
 
     @classmethod
     async def fetch_quota(cls, username: str) -> Dict[str, Any]:
+        """Runs `kaggle quota -v`, throttled globally and bounded by a timeout.
+
+        The semaphore caps how many kaggle CLI processes can exist at once
+        across the whole app; wait_for kills hung CLI calls so a stuck
+        Kaggle API response can never leak a slot forever.
+        """
+        try:
+            async with cls._get_quota_semaphore():
+                return await asyncio.wait_for(
+                    cls._fetch_quota_unthrottled(username),
+                    timeout=cls.QUOTA_CALL_TIMEOUT_SECONDS
+                )
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"kaggle quota timed out after {cls.QUOTA_CALL_TIMEOUT_SECONDS}s for {username}"
+            )
+            return {
+                "raw": [],
+                "gpu": {"name": "GPU (T4 x 2)", "used": 0, "limit": 30, "unit": "hours", "percent": 0},
+                "tpu": {"name": "TPU VM v3-8", "used": 0, "limit": 20, "unit": "hours", "percent": 0},
+                "error": f"quota lookup timed out after {cls.QUOTA_CALL_TIMEOUT_SECONDS}s"
+            }
+
+    @classmethod
+    async def _fetch_quota_unthrottled(cls, username: str) -> Dict[str, Any]:
         """Runs `kaggle quota -v` and parses the output into structured quota info."""
         cli = get_kaggle_cli_path()
         cmd = [cli, "quota", "-v"]
@@ -328,14 +385,24 @@ class AccountManager:
 
     @classmethod
     async def refresh_all_quotas(cls) -> List[Dict[str, Any]]:
-        """Refreshes quota data for all saved accounts."""
-        accounts = get_all_accounts()
-        tasks = []
-        for acc in accounts:
-            tasks.append(cls.refresh_account_quota(acc["username"]))
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-        return get_all_accounts()
+        """Refreshes quota data for all saved accounts (throttled, single-flight).
+
+        Concurrent callers join the in-flight run rather than stacking a second
+        batch of N kaggle CLI subprocesses on top of the first - that stacking
+        is what used to OOM-kill the server with many accounts.
+        """
+        if cls._get_refresh_all_lock().locked():
+            logger.info("Quota refresh already in progress - waiting for it instead of starting another.")
+        async with cls._get_refresh_all_lock():
+            accounts = get_all_accounts()
+            results = await asyncio.gather(
+                *(cls.refresh_account_quota(acc["username"]) for acc in accounts),
+                return_exceptions=True
+            )
+            for acc, res in zip(accounts, results):
+                if isinstance(res, Exception):
+                    logger.warning(f"Quota refresh failed for @{acc['username']}: {res}")
+            return get_all_accounts()
 
     @classmethod
     async def refresh_account_quota(cls, username: str) -> Dict[str, Any]:
