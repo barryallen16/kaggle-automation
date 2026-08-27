@@ -75,7 +75,7 @@ async def pull_files_from_kaggle(run_id: str):
         raise HTTPException(status_code=404, detail="Run not found")
 
     try:
-        target_dir, used_version = await KaggleService.download_latest_outputs(
+        target_dir, used_version, diagnostics = await KaggleService.download_latest_outputs(
             run["account_username"], run["kernel_ref"], run_id,
             prefer_version=run.get("output_version"),
             probe_previous_for_stop=_stopped_probe_flag(run)
@@ -88,7 +88,10 @@ async def pull_files_from_kaggle(run_id: str):
         raise HTTPException(status_code=502, detail=f"Kaggle output download failed: {e}")
 
     if target_dir is None:
-        raise HTTPException(status_code=502, detail="Kaggle output download failed")
+        # Surface the actual reason in the response body so the UI can show
+        # the operator why the versioned pull found nothing.
+        hint = (" | ".join(diagnostics)) if diagnostics else "no diagnostics captured"
+        raise HTTPException(status_code=502, detail=f"Kaggle output download failed: {hint}")
 
     downloaded = []
     for f in target_dir.rglob("*"):
@@ -115,7 +118,7 @@ async def download_single_file(run_id: str, filename: str):
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
         try:
-            target_dir, _ver = await KaggleService.download_latest_outputs(
+            target_dir, _ver, _diag = await KaggleService.download_latest_outputs(
                 run["account_username"], run["kernel_ref"], run_id,
                 prefer_version=run.get("output_version"),
                 probe_previous_for_stop=_stopped_probe_flag(run)
@@ -138,7 +141,7 @@ async def download_all_zip(run_id: str):
     target_dir = OUTPUTS_DIR / run_id
     if not target_dir.exists() or not any(target_dir.iterdir()):
         try:
-            pulled, _ver = await KaggleService.download_latest_outputs(
+            pulled, _ver, _diag = await KaggleService.download_latest_outputs(
                 run["account_username"], run["kernel_ref"], run_id,
                 prefer_version=run.get("output_version"),
                 probe_previous_for_stop=_stopped_probe_flag(run)
@@ -237,7 +240,7 @@ async def merge_selected_files(request: MergeRequest):
             if not run:
                 raise HTTPException(status_code=404, detail=f"Run {item.run_id} not found")
             try:
-                pulled, _ver = await KaggleService.download_latest_outputs(
+                pulled, _ver, _diag = await KaggleService.download_latest_outputs(
                     run["account_username"], run["kernel_ref"], item.run_id,
                     prefer_version=run.get("output_version"),
                     probe_previous_for_stop=_stopped_probe_flag(run)

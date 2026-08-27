@@ -181,7 +181,7 @@ class SessionMonitor:
             # what Kaggle finalizes on completion/error/cancel) and pins it on
             # the run row so later manual pulls keep working after deletions.
             try:
-                got_path, used_version = await KaggleService.download_latest_outputs(
+                got_path, used_version, _diag = await KaggleService.download_latest_outputs(
                     account_username, kernel_ref, run_id,
                     prefer_version=run.get("output_version")
                 )
