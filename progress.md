@@ -183,3 +183,140 @@ avg 89 / max 102.
   logs are harmless noise.
 - 2x Kaggle tokens, APP_AUTH_TOKEN, Telegram bot token, HF token: rotate when
   convenient — none are committed to git.
+
+---
+
+## 9. Output-Recovery Arc (2026-08-23 → ongoing)
+
+### What we are trying to solve
+
+When a notebook is **stopped** (or fails), the user's real partial
+artifacts (e.g. `task_a_labeled_shard_*.jsonl` with thousands of
+labelled rows) must survive the stop and must still be retrievable
+later — even after the user has deleted local copies. Today the
+dashboard's "Pull Output Files from Kaggle" button on a stopped
+notebook returns only the log file, which makes the user (rightly)
+furious.
+
+### What we learned by reading the installed kaggle 2.2.4 / kagglesdk
+
+1. **Kaggle finalizes every version** — complete, error, **and
+   cancelled** — with its own output snapshot. The user's
+   intuition ("I can see the partial outputs on the website") is
+   correct.
+2. `kaggle kernels output` downloads **only the latest version**.
+3. Our `stop_kernel` pushes an exit-stub that **becomes** the
+   latest version, so latest-only pulls return the stub's log
+   while the real partial data sits one version back.
+4. The CLI parses `<owner>/<slug>/<version>` for the kernel arg
+   but **silently drops the version** on output download. The
+   underlying SDK request
+   `ApiListKernelSessionOutputRequest.version_label` **is** honored
+   by the backend (per its serializer metadata).
+
+### What we shipped, in order
+
+- **`app/services/kaggle_versioned_output.py`** (v1, then v2): a
+  helper invoked as a subprocess under the account's env that
+  downloads **a specific kernel version's** output. v1 imported
+  `kaggle.api.kaggle_api_extended` and crashed at import time on
+  the server (the `kaggle` Python package wasn't installed even
+  though the CLI was). v2 is **pure httpx** — replicates the
+  kagglesdk wire format exactly (`POST /api/v1/kernels/{list,output}`,
+  camelCase JSON, `Authorization: Bearer <access_token>` from
+  `KAGGLE_API_TOKEN` or `<KAGGLE_CONFIG_DIR>/access_token` or
+  `~/.kaggle/access_token`). Tries every plausible `versionLabel`
+  spelling (`"7"`, `"version-7"`, `"version7"`), paginates with
+  `nextPageToken`, and **rejects log-only results** (the stop-stub
+  signature) — only saves real artifacts. Private-kernel lookup
+  fallback: if `kernels/list` `search=<slug>` misses, page the
+  user's full kernel list and match by `ref`/`slug`.
+- **`runs.output_version INTEGER`** column with a lightweight
+  `_ensure_column` ALTER migration in `init_db` so existing
+  databases gain the column on next startup without losing data.
+  `set_run_output_version(run_id, version)` setter.
+- **`KaggleService.download_latest_outputs(account, ref, run_id,
+  prefer_version=None, probe_previous_for_stop=False)`** — every
+  pull path (manual Pull, single-file auto-pull, ZIP download,
+  merge-cart auto-pull) routes through this. Returns `(path,
+  version_used)`. `prefer_version` short-circuits the lookup;
+  `probe_previous_for_stop` triggers a `current-1` rescue for
+  legacy unpinned stopped runs.
+- **`stop_kernel` pins `output_version`** for the run and for any
+  siblings sharing the kernel_ref, **before** pushing the exit
+  stub, so every later pull can skip the stub.
+- **Monitor auto-sync** uses the same version-aware path and
+  persists `used_version` on first discovery.
+- **Status normalization** (`_normalize_kernel_status`) folds
+  enum-style CLI output (`kernelworkerstatus.cancel_acknowledged`)
+  into our five statuses. One-time DB repair:
+  `UPDATE runs SET status='stopped' WHERE lower(status) LIKE '%cancel%'`.
+- **Helper diagnostics**: when nothing is recovered, the helper
+  exits 3 and `download_outputs_of_version` logs the per-label
+  `notes` (which label spellings were tried, which gave log-only
+  pages, which failed with HTTP errors) into the service log.
+  Before this, failures were invisible to the user.
+
+### Current failure (still open)
+
+Live debugging against `https://kabila-aws.isroot.in`:
+
+- `POST /api/runs/run_20260826_025953_5ecbf3/files/pull` →
+  `{"success":true,"message":"Downloaded 1 file(s) from Kaggle.","files":[{"name":"…shard-1.log","size":913,…}]}`. Still log-only.
+- 7 sibling shards (shard-1..8) on `@ganeshmohana`,
+  `@nagavignesh1729`, `@rubeshmanogar`, `@vsamarnath` are all
+  `stopped` with `output_version=None`.
+- The pull message format ("Downloaded N file(s) from Kaggle.")
+  confirms the new router code is live on the server. Whether
+  the server is running the *latest* helper (`45ca563` family) is
+  not yet independently verified — it requires the user to
+  restart uvicorn.
+
+The open question that determines whether the fix can succeed
+without a Kaggle-side workaround: **does the Kaggle backend
+actually honor `versionLabel`?** The SDK serializer says it
+does. If the backend silently ignores it, our helper will see
+the latest version (the stub) regardless of the label, reject it
+as log-only, fall back to `current_version - 1` for the legacy
+rescue, and that label also goes to the same latest-stub
+backend. Worst case: we get log-only as before, but we never
+falsely claim success.
+
+### Test suite (39 tests, all green)
+
+- `test_distributor.py` — multi-session sharding, silent
+  reduction, conflict rejection, stop-workload endpoint.
+- `test_automation.py` — DB and run CRUD.
+- `test_inference_script.py` — inference script harness: install
+  flags, model class, single-shard end-to-end, resume skips
+  processed, multi-shard partition, env-var int coercion, JSON
+  extract cases, no-GPU exit, truncated-generation skip.
+- `test_merge_cat.py` — `merge_selected_files` raw `cat`
+  semantics: exact bytes + order, duplicate ids preserved, binary
+  integrity, auto-pull on missing → 502, empty cart → 400.
+- `test_quota_refresh.py` — semaphore cap, single-flight join,
+  per-call timeout.
+- `test_stop_capture.py` — `stop_kernel` recovers cancelled
+  version + pins `output_version`; no-version path still stops
+  cleanly.
+- `test_stopped_pulls.py` — pinned wins over latest, legacy
+  unpinned stop rescued via `-1` probe, completed run uses
+  current version.
+
+### Next concrete move (for the operator)
+
+```bash
+# on kabila-aws host, inside this repo
+git pull        # or however the repo is synced
+# restart the tmux uvicorn pane
+# then re-run the same pull:
+#   POST /api/runs/run_20260826_025953_5ecbf3/files/pull
+```
+
+If the response is still one log file, the new server log will
+show the helper's per-label `notes` (which label spellings gave
+log-only pages vs HTTP errors vs successful file downloads) —
+that single piece of information is enough to know whether
+Kaggle's backend is honoring `versionLabel` or ignoring it,
+and therefore whether the next move is server-side or
+Kaggle-side.
