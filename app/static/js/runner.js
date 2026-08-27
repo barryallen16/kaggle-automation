@@ -18,12 +18,14 @@ function updateRunnerAccountQuotaCard() {
       </div>
     `;
     refreshIcons();
+    updateRunnerQuotaWarning();
     return;
   }
 
   const acc = AppState.accounts.find(a => a.username === selectedUsername);
   if (!acc) {
     container.innerHTML = '';
+    updateRunnerQuotaWarning();
     return;
   }
 
@@ -34,8 +36,10 @@ function updateRunnerAccountQuotaCard() {
 
   const gpuPercent = Math.min(100, Math.max(0, gpu.percent || 0));
   const tpuPercent = Math.min(100, Math.max(0, tpu.percent || 0));
-  const gpuRemaining = Math.max(0, (gpu.limit - gpu.used)).toFixed(1);
-  const tpuRemaining = Math.max(0, (tpu.limit - tpu.used)).toFixed(1);
+  const gpuRemainingNum = Math.max(0, (gpu.limit - gpu.used));
+  const tpuRemainingNum = Math.max(0, (tpu.limit - tpu.used));
+  const gpuRemaining = gpuRemainingNum.toFixed(1);
+  const tpuRemaining = tpuRemainingNum.toFixed(1);
 
   const activeStatus = activeRuns.length > 0
     ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-800/60">
@@ -55,7 +59,7 @@ function updateRunnerAccountQuotaCard() {
 
       <div class="grid grid-cols-2 gap-2.5 pt-0.5">
         <!-- GPU Quota Balance -->
-        <div class="bg-[#0e1424] p-2 rounded-lg border border-[#1e293b]">
+        <div class="bg-[#0e1424] p-2 rounded-lg border ${gpuRemainingNum <= 0 ? 'border-amber-800/70' : 'border-[#1e293b]'}">
           <div class="flex justify-between text-[11px] mb-1">
             <span class="text-slate-400 flex items-center space-x-1">
               <i data-lucide="zap" class="w-3 h-3 text-cyan-400"></i>
@@ -64,12 +68,13 @@ function updateRunnerAccountQuotaCard() {
             <span class="text-white font-mono font-bold">${gpuRemaining}h / ${gpu.limit}h</span>
           </div>
           <div class="w-full bg-[#060911] rounded-full h-1.5 overflow-hidden border border-slate-800">
-            <div class="bg-cyan-400 h-1.5 rounded-full transition-all duration-300" style="width: ${gpuPercent}%"></div>
+            <div class="${gpuRemainingNum <= 0 ? 'bg-amber-500' : 'bg-cyan-400'} h-1.5 rounded-full transition-all duration-300" style="width: ${gpuRemainingNum <= 0 ? 100 : gpuPercent}%"></div>
           </div>
+          ${gpuRemainingNum <= 0 ? '<div class="text-[10px] text-amber-400/90 font-semibold mt-1">Empty — CPU runs only</div>' : ''}
         </div>
 
         <!-- TPU Quota Balance -->
-        <div class="bg-[#0e1424] p-2 rounded-lg border border-[#1e293b]">
+        <div class="bg-[#0e1424] p-2 rounded-lg border ${tpuRemainingNum <= 0 ? 'border-amber-800/70' : 'border-[#1e293b]'}">
           <div class="flex justify-between text-[11px] mb-1">
             <span class="text-slate-400 flex items-center space-x-1">
               <i data-lucide="cpu" class="w-3 h-3 text-purple-400"></i>
@@ -78,13 +83,43 @@ function updateRunnerAccountQuotaCard() {
             <span class="text-white font-mono font-bold">${tpuRemaining}h / ${tpu.limit}h</span>
           </div>
           <div class="w-full bg-[#060911] rounded-full h-1.5 overflow-hidden border border-slate-800">
-            <div class="bg-purple-400 h-1.5 rounded-full transition-all duration-300" style="width: ${tpuPercent}%"></div>
+            <div class="${tpuRemainingNum <= 0 ? 'bg-amber-500' : 'bg-purple-400'} h-1.5 rounded-full transition-all duration-300" style="width: ${tpuRemainingNum <= 0 ? 100 : tpuPercent}%"></div>
           </div>
+          ${tpuRemainingNum <= 0 ? '<div class="text-[10px] text-amber-400/90 font-semibold mt-1">Empty — CPU runs only</div>' : ''}
         </div>
       </div>
     </div>
   `;
   refreshIcons();
+  updateRunnerQuotaWarning();
+}
+
+// Warns when the selected accelerator burns a quota pool the chosen account
+// has none of (a GPU run on an empty account stalls until force-stopped and
+// loses its output). Advisory only - the launch stays available, since CPU
+// runs need no quota and the operator may know something the dashboard doesn't.
+function updateRunnerQuotaWarning() {
+  const hint = document.getElementById('runner-quota-warn');
+  if (!hint) return;
+  const accName = document.getElementById('runner-account-select')?.value;
+  const accelerator = document.getElementById('runner-accelerator-select')?.value;
+  const kind = typeof quotaKindForAccelerator === 'function' ? quotaKindForAccelerator(accelerator) : 'gpu';
+  const acc = (AppState.accounts || []).find(a => a.username === accName);
+  if (!acc || !kind) {
+    hint.classList.add('hidden');
+    hint.textContent = '';
+    return;
+  }
+  const q = typeof getAccountRemainingQuota === 'function' ? getAccountRemainingQuota(acc) : { gpuLeft: 1, tpuLeft: 1 };
+  const left = kind === 'tpu' ? q.tpuLeft : q.gpuLeft;
+  if (left > 0) {
+    hint.classList.add('hidden');
+    hint.textContent = '';
+    return;
+  }
+  const pool = kind === 'tpu' ? 'TPU' : 'GPU';
+  hint.textContent = `⚠ @${acc.username} has 0h ${pool} quota left — a ${pool} run will stall and may be force-stopped with its output lost. Switch to CPU or pick another account.`;
+  hint.classList.remove('hidden');
 }
 
 function populateAccountSelects() {
@@ -94,14 +129,19 @@ function populateAccountSelects() {
   // Preserve previously chosen account or recall saved preference
   const prevValue = runnerSelect.value || AppState.selectedRunnerAccount || localStorage.getItem('kaggle_last_runner_account');
 
-  // Build options with username and quota left
+  // Build options with username and quota left; flag quota-empty accounts so
+  // they read as CPU-only options instead of looking broken.
   const optionsHtml = '<option value="">-- Select Target Account --</option>' +
     AppState.accounts.map(a => {
       const q = typeof getAccountRemainingQuota === 'function' ? getAccountRemainingQuota(a) : {
         gpuLeft: Math.max(0, (a.last_quota?.gpu?.limit || 30) - (a.last_quota?.gpu?.used || 0)),
         tpuLeft: Math.max(0, (a.last_quota?.tpu?.limit || 20) - (a.last_quota?.tpu?.used || 0))
       };
-      return `<option value="${esc(a.username)}">@${esc(a.username)} — ${q.gpuLeft.toFixed(1)}h GPU / ${q.tpuLeft.toFixed(1)}h TPU left</option>`;
+      const flags = [
+        q.gpuLeft <= 0 ? 'GPU empty' : '',
+        q.tpuLeft <= 0 ? 'TPU empty' : ''
+      ].filter(Boolean).join(' · ');
+      return `<option value="${esc(a.username)}">@${esc(a.username)} — ${q.gpuLeft.toFixed(1)}h GPU / ${q.tpuLeft.toFixed(1)}h TPU left${flags ? ` (${flags})` : ''}</option>`;
     }).join('');
 
   runnerSelect.innerHTML = optionsHtml;

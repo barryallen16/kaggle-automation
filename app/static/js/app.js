@@ -130,6 +130,16 @@ function getAccountRemainingQuota(acc) {
   };
 }
 
+// Which quota pool an accelerator burns: 'gpu', 'tpu', or null (CPU/default
+// needs no quota). Mirrors the server-side rule (anything that isn't
+// none/default/cpu burns GPU unless it resolves to a TPU machine shape).
+function quotaKindForAccelerator(accelerator) {
+  const a = String(accelerator || '').toLowerCase();
+  if (!a || a === 'none' || a === 'default' || a === 'cpu') return null;
+  if (a.includes('tpu') || a.includes('v3-8') || a.includes('v5e') || a.includes('v6e')) return 'tpu';
+  return 'gpu';
+}
+
 // Sort accounts descending: highest GPU quota left first, then TPU quota left, then username
 function sortAccountsDescending(accounts) {
   return [...accounts].sort((a, b) => {

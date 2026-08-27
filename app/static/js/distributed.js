@@ -30,24 +30,32 @@ function renderDistributedAccountCheckboxes() {
     prevSessions[sel.dataset.acc] = sel.value;
   });
   const globalSessions = document.getElementById('dist-sessions-per-account')?.value || '2';
+  // Quota pool the selected accelerator burns (null = CPU, no quota needed).
+  // Zero-quota accounts stay selectable (CPU runs need no quota) but start
+  // unchecked so auto-partition never silently feeds them GPU shards that
+  // would stall until force-stopped.
+  const quotaKind = typeof quotaKindForAccelerator === 'function'
+    ? quotaKindForAccelerator(document.getElementById('dist-accelerator')?.value)
+    : 'gpu';
 
   container.innerHTML = AppState.accounts.map((acc) => {
-    const gpuQ = acc.last_quota?.gpu;
-    const hasQuota = gpuQ && isFinite(gpuQ.limit) && Number(gpuQ.limit) > 0;
-    const quotaLabel = hasQuota
-      ? `${fmtHours(gpuQ.limit - gpuQ.used)}h GPU left`
-      : 'Active';
+    const q = typeof getAccountRemainingQuota === 'function' ? getAccountRemainingQuota(acc) : { gpuLeft: 30, tpuLeft: 20 };
+    const left = quotaKind === 'tpu' ? q.tpuLeft : q.gpuLeft;
+    const hasQuota = !quotaKind || left > 0;
+    const quotaLabel = !quotaKind
+      ? 'CPU — no quota needed'
+      : (quotaKind === 'tpu' ? `${fmtHours(q.tpuLeft)}h TPU left` : `${fmtHours(q.gpuLeft)}h GPU left`) + (hasQuota ? '' : ' — CPU only');
     const wasChecked = prevChecked.has(acc.username);
-    const shouldChecked = isFirstRender ? true : wasChecked;
+    const shouldChecked = isFirstRender ? hasQuota : wasChecked;
     const prevSess = prevSessions[acc.username];
     const sessVal = prevSess ? prevSess : globalSessions;
     return `
-    <div class="flex items-center space-x-2.5 p-2.5 rounded-lg bg-[#080b12] border border-[#1e293b] hover:border-purple-500/50 transition">
-      <label class="flex items-center space-x-2.5 flex-1 min-w-0 cursor-pointer">
+    <div class="flex items-center space-x-2.5 p-2.5 rounded-lg bg-[#080b12] border ${hasQuota ? 'border-[#1e293b] hover:border-purple-500/50' : 'border-amber-800/50 opacity-75'} transition">
+      <label class="flex items-center space-x-2.5 flex-1 min-w-0 cursor-pointer" title="${hasQuota ? '' : 'No ' + (quotaKind === 'tpu' ? 'TPU' : 'GPU') + ' quota left — fine for CPU runs'}">
         <input type="checkbox" name="dist-acc" value="${esc(acc.username)}" ${shouldChecked ? 'checked' : ''} onchange="updateShardsPreview()" class="w-4 h-4 text-purple-500 rounded bg-slate-900 border-slate-700 focus:ring-0 flex-shrink-0">
         <div class="truncate flex-1">
           <span class="text-xs font-bold text-white block truncate">@${esc(acc.username)}</span>
-          <span class="text-[10px] text-slate-400 font-mono">${esc(quotaLabel)}</span>
+          <span class="text-[10px] ${hasQuota ? 'text-slate-400' : 'text-amber-400/90'} font-mono">${esc(quotaLabel)}</span>
         </div>
       </label>
       <select onchange="updateShardsPreview();" 
@@ -113,11 +121,21 @@ function updateShardsPreview() {
 
   const runnerList = [];
   const perAccount = [];
+  const previewKind = typeof quotaKindForAccelerator === 'function'
+    ? quotaKindForAccelerator(document.getElementById('dist-accelerator')?.value)
+    : 'gpu';
+  const previewQuotaLeft = (acc) => {
+    if (!previewKind) return Infinity;
+    const info = (AppState.accounts || []).find(a => a.username === acc);
+    if (!info || typeof getAccountRemainingQuota !== 'function') return Infinity;
+    const q = getAccountRemainingQuota(info);
+    return previewKind === 'tpu' ? q.tpuLeft : q.gpuLeft;
+  };
   selectedAccounts.forEach(acc => {
     const { busy } = isGpuAcc(acc);
     const chosen = sessionsMap[acc] || 1;
     let slots = Math.max(0, chosen - busy);
-    perAccount.push({ acc, chosen, busy, slots });
+    perAccount.push({ acc, chosen, busy, slots, noQuota: previewQuotaLeft(acc) <= 0 });
     for (let i = 0; i < slots; i++) runnerList.push(acc);
   });
 
@@ -135,9 +153,10 @@ function updateShardsPreview() {
 
   perAccount.forEach(p => {
     const reduced = p.slots < p.chosen;
+    const quotaTag = p.noQuota ? ` <span class="text-amber-400 font-bold">· ⚠ 0 ${(previewKind === 'tpu' ? 'TPU' : 'GPU')} left</span>` : '';
     html += `
       <div class="flex items-center justify-between text-[11px] px-1">
-        <span>@${esc(p.acc)}: ${p.slots} runner${p.slots !== 1 ? 's' : ''} (${p.chosen}x requested)</span>
+        <span>@${esc(p.acc)}: ${p.slots} runner${p.slots !== 1 ? 's' : ''} (${p.chosen}x requested)${quotaTag}</span>
         <span class="${reduced ? 'text-amber-400' : 'text-purple-400/70'}">${reduced ? `capped - ${p.busy} GPU session(s) already active` : `${p.busy} active`}</span>
       </div>`;
   });
@@ -317,6 +336,10 @@ function renderManualShards() {
     return;
   }
 
+  const manualKind = typeof quotaKindForAccelerator === 'function'
+    ? quotaKindForAccelerator(document.getElementById('dist-accelerator')?.value)
+    : 'gpu';
+
   container.innerHTML = manualShardsList.map((row, idx) => {
     const itemCount = Math.max(0, row.endIndex - row.startIndex);
     const isInvalid = row.startIndex >= row.endIndex;
@@ -326,7 +349,11 @@ function renderManualShards() {
         gpuLeft: Math.max(0, (a.last_quota?.gpu?.limit || 30) - (a.last_quota?.gpu?.used || 0)),
         tpuLeft: Math.max(0, (a.last_quota?.tpu?.limit || 20) - (a.last_quota?.tpu?.used || 0))
       };
-      return `<option value="${esc(a.username)}" ${a.username === row.account ? 'selected' : ''}>@${esc(a.username)} (${q.gpuLeft.toFixed(1)}h GPU left)</option>`;
+      const left = manualKind === 'tpu' ? q.tpuLeft : (manualKind === 'gpu' ? q.gpuLeft : Infinity);
+      const label = !manualKind
+        ? `@${esc(a.username)} (CPU — no quota needed)`
+        : `@${esc(a.username)} (${(manualKind === 'tpu' ? q.tpuLeft : q.gpuLeft).toFixed(1)}h ${manualKind === 'tpu' ? 'TPU' : 'GPU'} left${left <= 0 ? ' — empty' : ''})`;
+      return `<option value="${esc(a.username)}" ${a.username === row.account ? 'selected' : ''}>${label}</option>`;
     }).join('');
 
     return `
@@ -422,11 +449,24 @@ function updateManualShardsSummary() {
 
   const hasInvalidRange = manualShardsList.some(r => r.startIndex >= r.endIndex);
   const hasMissingAccount = manualShardsList.some(r => !r.account);
+  // Advisory: shards aimed at quota-empty accounts stall until force-stopped.
+  const quotaKind = typeof quotaKindForAccelerator === 'function'
+    ? quotaKindForAccelerator(document.getElementById('dist-accelerator')?.value)
+    : null;
+  const emptyQuotaShard = quotaKind ? manualShardsList.findIndex((r) => {
+    const info = (AppState.accounts || []).find(a => a.username === r.account);
+    if (!info || typeof getAccountRemainingQuota !== 'function') return false;
+    const q = getAccountRemainingQuota(info);
+    return (quotaKind === 'tpu' ? q.tpuLeft : q.gpuLeft) <= 0;
+  }) : -1;
 
   if (hasInvalidRange) {
     statusEl.innerHTML = `<span class="inline-flex items-center text-amber-400 font-semibold"><i data-lucide="alert-triangle" class="w-3.5 h-3.5 mr-1"></i>Start index must be less than end index</span>`;
   } else if (hasMissingAccount) {
     statusEl.innerHTML = `<span class="inline-flex items-center text-rose-400 font-semibold"><i data-lucide="alert-circle" class="w-3.5 h-3.5 mr-1"></i>Every shard must have an assigned account</span>`;
+  } else if (emptyQuotaShard !== -1) {
+    const r = manualShardsList[emptyQuotaShard];
+    statusEl.innerHTML = `<span class="inline-flex items-center text-amber-400 font-semibold"><i data-lucide="alert-triangle" class="w-3.5 h-3.5 mr-1"></i>Shard #${emptyQuotaShard + 1} targets @${esc(r.account)} (0h ${quotaKind === 'tpu' ? 'TPU' : 'GPU'} left) — switch it to CPU or another account</span>`;
   } else {
     statusEl.innerHTML = `<span class="inline-flex items-center text-emerald-400 font-semibold"><i data-lucide="check-circle-2" class="w-3.5 h-3.5 mr-1"></i>All ${manualShardsList.length} manual shards valid</span>`;
   }
