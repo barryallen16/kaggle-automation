@@ -6,7 +6,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from config import LOGS_DIR, OUTPUTS_DIR
+from config import LOGS_DIR, NOTEBOOKS_DIR, OUTPUTS_DIR
 from database import get_run_by_id
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
@@ -274,14 +274,14 @@ async def delete_all_output_files(run_id: str):
 
 
 # ------------------------------------------------------------------
-# Global clear: wipe all local outputs and/or logs (server storage only)
+# Global clear: wipe local outputs, logs, and pushed-notebook payloads
+# (server storage only)
 # ------------------------------------------------------------------
-@router.delete("/files/clear-all-outputs")
-async def clear_all_outputs():
-    """Deletes all locally stored output files for every run (Kaggle remote untouched)."""
+def _clear_dir_contents(target: Path) -> int:
+    """Deletes every entry inside a data dir (best-effort); returns entries removed."""
     count = 0
-    if OUTPUTS_DIR.exists():
-        for p in OUTPUTS_DIR.iterdir():
+    if target.exists():
+        for p in target.iterdir():
             try:
                 if p.is_dir():
                     shutil.rmtree(p, ignore_errors=True)
@@ -291,6 +291,13 @@ async def clear_all_outputs():
                     count += 1
             except OSError:
                 continue
+    return count
+
+
+@router.delete("/files/clear-all-outputs")
+async def clear_all_outputs():
+    """Deletes all locally stored output files for every run (Kaggle remote untouched)."""
+    count = _clear_dir_contents(OUTPUTS_DIR)
     return {
         "success": True,
         "message": f"Cleared {count} output folder(s)/file(s) from server.",
@@ -300,18 +307,7 @@ async def clear_all_outputs():
 @router.delete("/files/clear-all-logs")
 async def clear_all_logs():
     """Deletes all local log files (Kaggle remote logs untouched)."""
-    count = 0
-    if LOGS_DIR.exists():
-        for p in LOGS_DIR.iterdir():
-            try:
-                if p.is_file():
-                    p.unlink()
-                    count += 1
-                elif p.is_dir():
-                    shutil.rmtree(p, ignore_errors=True)
-                    count += 1
-            except OSError:
-                continue
+    count = _clear_dir_contents(LOGS_DIR)
     return {"success": True, "message": f"Cleared {count} log file(s) from server."}
 
 
@@ -321,6 +317,22 @@ async def clear_all_outputs_and_logs():
     out = await clear_all_outputs()
     log = await clear_all_logs()
     return {"success": True, "message": f"{out['message']} {log['message']}"}
+
+
+@router.delete("/files/clear-all-notebooks")
+async def clear_all_notebooks():
+    """Deletes all local push payloads (run dirs + stop stubs).
+
+    Every push writes its code + kernel-metadata.json here and never reads it
+    back (the DB keeps only the path, to tell notebooks from scripts), so
+    this grows without bound on a busy server. Pushed kernels on Kaggle are
+    untouched - only the local copies go.
+    """
+    count = _clear_dir_contents(NOTEBOOKS_DIR)
+    return {
+        "success": True,
+        "message": f"Cleared {count} notebook folder(s)/file(s) from server.",
+    }
 
 
 # ------------------------------------------------------------------
