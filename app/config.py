@@ -70,8 +70,8 @@ def get_kernel_env_defaults() -> dict:
     """Secrets to inject into every pushed kernel's environment.
 
     Read lazily (re-reading .env) so adding/updating keys takes effect on the
-    NEXT launch without a server restart. Only HF_TOKEN today - extend here.
-    A READ-scoped token suffices: kernels only download public artifacts.
+    NEXT launch without a server restart. HF_TOKEN + WANDB_* today - extend here.
+    A READ-scoped HF token suffices: kernels only download public artifacts.
     """
     try:
         load_dotenv()  # picks up newly added keys; never overrides existing env
@@ -81,4 +81,10 @@ def get_kernel_env_defaults() -> dict:
     hf_token = (os.getenv("HF_TOKEN") or "").strip()
     if hf_token:
         out["HF_TOKEN"] = hf_token
+    wandb_key = (os.getenv("WANDB_API_KEY") or "").strip()
+    if wandb_key:
+        out["WANDB_API_KEY"] = wandb_key
+    wandb_project = (os.getenv("WANDB_PROJECT") or "").strip()
+    if wandb_project:
+        out["WANDB_PROJECT"] = wandb_project
     return out
