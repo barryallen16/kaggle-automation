@@ -150,6 +150,33 @@ async function loadKernelsForAccount() {
   }
 }
 
+function isTerminalStatus(st) {
+  st = (st || '').toLowerCase();
+  return st === 'complete' || st === 'error' || st === 'stopped' || st === 'failed' || st === 'cancelled' || st === 'cancelacknowledged' || st === 'cancel_acknowledged';
+}
+function updateStopButtonState(account, ref, status) {
+  const terminal = isTerminalStatus(status);
+  // Per-row stop buttons (filter by data-ref to avoid CSS.escape issues with slash)
+  document.querySelectorAll('button[data-ref]').forEach(btn => {
+    if (btn.dataset.ref === ref && btn.getAttribute('onclick') && btn.getAttribute('onclick').includes('kernelsStopRow')) {
+      btn.disabled = terminal;
+      btn.classList.toggle('opacity-40', terminal);
+      btn.classList.toggle('cursor-not-allowed', terminal);
+      btn.title = terminal ? `Already ${status} — stop not needed` : 'Stop this kernel if running';
+      if (terminal) btn.classList.add('opacity-60'); else btn.classList.remove('opacity-60');
+    }
+  });
+  // Detail panel stop button if selected matches
+  if (kernelsState.selected && kernelsState.selected.ref === ref) {
+    const detailBtn = document.getElementById('btn-kernels-stop');
+    if (detailBtn) {
+      detailBtn.disabled = terminal;
+      detailBtn.classList.toggle('opacity-40', terminal);
+      detailBtn.classList.toggle('cursor-not-allowed', terminal);
+      detailBtn.title = terminal ? `Already ${status}` : 'Stop this kernel';
+    }
+  }
+}
 function renderKernelsTable() {
   const tbody = document.getElementById('kernels-table-body');
   if (!tbody) return;
@@ -178,7 +205,7 @@ function renderKernelsTable() {
         <td class="px-4 py-3 text-right">
           <div class="flex items-center justify-end gap-2 flex-wrap">
             <button data-account="${esc(kernelsState.account)}" data-ref="${esc(ref)}" data-title="${esc(title)}" onclick="openKernelsDetail(this.dataset.account, this.dataset.ref, this.dataset.title)" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 border border-indigo-500/30 transition">Open</button>
-            <button data-account="${esc(kernelsState.account)}" data-ref="${esc(ref)}" data-title="${esc(title)}" onclick="kernelsStopRow(this.dataset.account, this.dataset.ref, this.dataset.title, this)" title="Stop this kernel if running" class="px-2 py-1 rounded text-xs bg-rose-600/20 text-rose-300 hover:bg-rose-600/30 border border-rose-500/30">Stop</button>
+            <button id="kstop-${idx}" data-account="${esc(kernelsState.account)}" data-ref="${esc(ref)}" data-title="${esc(title)}" onclick="kernelsStopRow(this.dataset.account, this.dataset.ref, this.dataset.title, this)" title="Stop this kernel if running" class="px-2 py-1 rounded text-xs bg-rose-600/20 text-rose-300 hover:bg-rose-600/30 border border-rose-500/30 disabled:opacity-40 disabled:cursor-not-allowed opacity-60" disabled>Stop</button>
             <a href="https://www.kaggle.com/code/${encodeURIComponent(ref)}" target="_blank" class="px-2 py-1 rounded text-xs bg-slate-800 text-slate-400 hover:text-white border border-slate-700"><i data-lucide="external-link" class="w-3 h-3 inline"></i></a>
           </div>
         </td>
@@ -248,6 +275,8 @@ async function fetchKernelStatus(account, kernelRef, cellId) {
     else if (st === 'error') cls = 'bg-rose-950 text-rose-300 border-rose-800';
     else if (st === 'stopped') cls = 'bg-slate-800 text-slate-400 border-slate-700';
     el.innerHTML = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${cls}">${esc(st.toUpperCase())}</span>`;
+    // Grey out stop if already terminal
+    updateStopButtonState(account, kernelRef, st);
   } catch (err) {
     el.innerHTML = `<span class="text-[10px] text-rose-400">err</span>`;
   }
@@ -261,10 +290,22 @@ function openKernelsDetail(account, ref, title) {
   if (titleEl) titleEl.textContent = title || ref;
   if (refEl) refEl.textContent = ref;
   if (panel) panel.classList.remove('hidden');
+  // Stop button initially disabled until we know status is running
+  const stopBtn = document.getElementById('btn-kernels-stop');
+  if (stopBtn) {
+    stopBtn.disabled = true;
+    stopBtn.classList.add('opacity-40', 'cursor-not-allowed');
+    stopBtn.title = 'Checking status...';
+  }
   // Auto-refresh files and logs preview
   kernelsListFiles();
   document.getElementById('kernels-logs-pre').textContent = 'Fetching logs...';
   kernelsFetchLogs();
+  // Also fetch status for this kernel to correctly enable/disable stop
+  fetch(`/api/kernels/status?account=${encodeURIComponent(account)}&kernel_ref=${encodeURIComponent(ref)}`)
+    .then(r => r.json()).then(d => {
+      if (d.success) updateStopButtonState(account, ref, d.status);
+    }).catch(()=>{});
   refreshIcons();
   // Scroll to detail
   if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
