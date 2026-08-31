@@ -140,31 +140,21 @@ class SessionMonitor:
 
         is_trial = bool(run.get("is_trial"))
 
-        # 2. Check if run started and notify Telegram
+        # 2. Start ping (sent only in full mode; filtered inside notify)
         if (remote_status == "running" or elapsed_seconds > 60) and run.get(
             "telegram_notified_start"
         ) == 0:
-            await TelegramService.notify_run_started(run)
+            await TelegramService.notify("started", run)
             update_run_telegram_flag(run_id, "telegram_notified_start", 1)
 
-        # 3/4. Long-session alerts only apply to full 12h runs (never to short trials)
-        if not is_trial:
-            # 11-Hour Warning (1 hour before 12-hour limit)
-            if (
-                elapsed_seconds
-                >= (MAX_KAGGLE_SESSION_SECONDS - WARNING_BEFORE_EXPIRY_SECONDS)
-                and run.get("telegram_notified_11h") == 0
-            ):
-                await TelegramService.notify_11h_warning(run)
-                update_run_telegram_flag(run_id, "telegram_notified_11h", 1)
-
-            # 12-Hour Expiry Alert
-            if (
-                elapsed_seconds >= MAX_KAGGLE_SESSION_SECONDS
-                and run.get("telegram_notified_12h") == 0
-            ):
-                await TelegramService.notify_12h_limit_reached(run)
-                update_run_telegram_flag(run_id, "telegram_notified_12h", 1)
+        # 3. 11h warning only (12h cutoff deleted as redundant; full runs only, never trials)
+        if (
+            not is_trial
+            and elapsed_seconds >= (MAX_KAGGLE_SESSION_SECONDS - WARNING_BEFORE_EXPIRY_SECONDS)
+            and run.get("telegram_notified_11h") == 0
+        ):
+            await TelegramService.notify("11h", run)
+            update_run_telegram_flag(run_id, "telegram_notified_11h", 1)
 
         # 5. Quota-exhaustion guard: Kaggle keeps reporting the kernel as
         #    "running" even after the account's weekly GPU quota is fully
@@ -187,8 +177,8 @@ class SessionMonitor:
                 end_time=now.isoformat(),
             )
             if run.get("telegram_notified_end") == 0:
-                await TelegramService.notify_run_completed(
-                    run, "stopped (GPU quota exhausted)"
+                await TelegramService.notify(
+                    "failed", run, "Stopped: weekly GPU quota exhausted"
                 )
                 update_run_telegram_flag(run_id, "telegram_notified_end", 1)
             if not stop_resp.get("success"):
@@ -228,7 +218,8 @@ class SessionMonitor:
             except Exception as e:
                 logger.info(f"Auto-pull of outputs skipped for {run_id}: {e}")
             if run.get("telegram_notified_end") == 0:
-                await TelegramService.notify_run_completed(run, remote_status)
+                event = "failed" if remote_status in ("error", "stopped", "canceled") else "complete"
+                await TelegramService.notify(event, run, str(status_resp.get("raw", "")))
                 update_run_telegram_flag(run_id, "telegram_notified_end", 1)
         elif remote_status != "unknown" and remote_status != run["status"]:
             update_run_status(run_id=run_id, status=remote_status)
