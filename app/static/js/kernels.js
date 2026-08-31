@@ -10,35 +10,55 @@ let kernelsState = {
 };
 
 function populateKernelsAccountSelect() {
-  const sel = document.getElementById('kernels-account-select');
-  if (!sel) return;
-  const prev = sel.value;
-  const accounts = AppState.accounts || [];
-  let html = '<option value="">-- Select Account --</option>';
-  if (!accounts.length) {
-    html += '<option value="" disabled>Loading accounts...</option>';
-  } else {
-    html += accounts.map(acc => {
-      const selAttr = acc.username === prev ? 'selected' : '';
-      return `<option value="${esc(acc.username)}" ${selAttr}>@${esc(acc.username)}</option>`;
-    }).join('');
+  try {
+    const sel = document.getElementById('kernels-account-select');
+    if (!sel) return;
+    const prev = sel.value;
+    const accounts = (typeof AppState !== 'undefined' && AppState.accounts) ? AppState.accounts : [];
+    let html = '<option value="">-- Select Account --</option>';
+    if (!accounts.length) {
+      html += '<option value="" disabled>Loading accounts... (if stuck, click ↻)</option>';
+    } else {
+      html += accounts.map(acc => {
+        const selAttr = acc.username === prev ? 'selected' : '';
+        return `<option value="${esc(acc.username)}" ${selAttr}>@${esc(acc.username)}</option>`;
+      }).join('');
+    }
+    sel.innerHTML = html;
+  } catch (e) {
+    console.error('populateKernelsAccountSelect failed', e);
   }
-  sel.innerHTML = html;
+}
+
+async function fetchAndPopulateKernelsAccounts() {
+  try {
+    const res = await fetch('/api/accounts', { credentials: 'same-origin' });
+    if (res.status === 401) return false;
+    const data = await res.json();
+    if (data.success && Array.isArray(data.accounts) && data.accounts.length) {
+      if (typeof AppState !== 'undefined') AppState.accounts = data.accounts;
+      populateKernelsAccountSelect();
+      return true;
+    }
+  } catch (e) {
+    console.error('fetchAndPopulateKernelsAccounts failed', e);
+  }
+  return false;
 }
 
 function initKernelsTab() {
   populateKernelsAccountSelect();
-  // if accounts not yet loaded, fetch them immediately so dropdown doesn't stay empty
-  if (!(AppState.accounts || []).length) {
-    fetch('/api/accounts').then(r => r.json()).then(data => {
-      if (data.success && data.accounts) {
-        AppState.accounts = data.accounts;
-        populateKernelsAccountSelect();
-      }
-    }).catch(() => {});
-  }
+  // Always ensure accounts are loaded - direct fetch is more reliable than relying on AppState timing
+  fetchAndPopulateKernelsAccounts();
+  // Retry once after 1.5s in case first fetch raced with AppState refresh
+  setTimeout(() => {
+    const sel = document.getElementById('kernels-account-select');
+    if (sel && sel.options.length <= 2) {
+      fetchAndPopulateKernelsAccounts();
+    }
+  }, 1500);
   updateKernelsPaginationUI();
-  refreshIcons();
+  try { refreshIcons(); } catch (_) {}
 }
 
 function updateKernelsPaginationUI() {

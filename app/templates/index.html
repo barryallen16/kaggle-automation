@@ -666,6 +666,9 @@
                 <select id="kernels-account-select" class="bg-[#0d121f] border border-[#222d4a] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 min-w-[180px]">
                   <option value="">-- Select Account --</option>
                 </select>
+                <button onclick="fetchAndPopulateKernelsAccounts().then(()=>showToast('Accounts refreshed','info'))" title="Refresh account list" class="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700 transition">
+                  <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                </button>
                 <button onclick="loadKernelsForAccount()" id="btn-load-kernels" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-500 text-white transition disabled:opacity-50">
                   <i data-lucide="search" class="w-4 h-4"></i>
                   <span>Load</span>
@@ -834,15 +837,15 @@
     </div>
   </div>
 
-  <!-- Scripts -->
-  <script src="/static/js/app.js"></script>
-  <script src="/static/js/dashboard.js"></script>
-  <script src="/static/js/runner.js"></script>
-  <script src="/static/js/distributed.js"></script>
-  <script src="/static/js/terminal.js"></script>
-  <script src="/static/js/files.js"></script>
-  <script src="/static/js/kernels.js"></script>
-  <script src="/static/js/settings.js"></script>
+  <!-- Scripts (v=3 cache-bust for kernels fix) -->
+  <script src="/static/js/app.js?v=3"></script>
+  <script src="/static/js/dashboard.js?v=3"></script>
+  <script src="/static/js/runner.js?v=3"></script>
+  <script src="/static/js/distributed.js?v=3"></script>
+  <script src="/static/js/terminal.js?v=3"></script>
+  <script src="/static/js/files.js?v=3"></script>
+  <script src="/static/js/kernels.js?v=3"></script>
+  <script src="/static/js/settings.js?v=3"></script>
   <script>
     // Initialize Lucide icons on page load
     document.addEventListener('DOMContentLoaded', () => {
