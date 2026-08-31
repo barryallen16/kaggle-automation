@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 from app.services.kaggle_service import KaggleService
 from app.database import get_run_by_id
-from app.config import OUTPUTS_DIR
+from app.config import OUTPUTS_DIR, LOGS_DIR
 
 router = APIRouter(prefix="/api/runs", tags=["Output Files"])
 
@@ -205,6 +205,53 @@ async def delete_all_output_files(run_id: str):
         raise HTTPException(status_code=404, detail="No local output files stored for this run")
     shutil.rmtree(target_dir, ignore_errors=True)
     return {"success": True, "message": f"Deleted all local output files for run {run_id}."}
+
+# ------------------------------------------------------------------
+# Global clear: wipe all local outputs and/or logs (server storage only)
+# ------------------------------------------------------------------
+@router.delete("/files/clear-all-outputs")
+async def clear_all_outputs():
+    """Deletes all locally stored output files for every run (Kaggle remote untouched)."""
+    count = 0
+    if OUTPUTS_DIR.exists():
+        for p in OUTPUTS_DIR.iterdir():
+            try:
+                if p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+                    count += 1
+                elif p.is_file():
+                    p.unlink()
+                    count += 1
+            except OSError:
+                continue
+    return {"success": True, "message": f"Cleared {count} output folder(s)/file(s) from server."}
+
+
+@router.delete("/files/clear-all-logs")
+async def clear_all_logs():
+    """Deletes all local log files (Kaggle remote logs untouched)."""
+    count = 0
+    if LOGS_DIR.exists():
+        for p in LOGS_DIR.iterdir():
+            try:
+                if p.is_file():
+                    p.unlink()
+                    count += 1
+                elif p.is_dir():
+                    shutil.rmtree(p, ignore_errors=True)
+                    count += 1
+            except OSError:
+                continue
+    return {"success": True, "message": f"Cleared {count} log file(s) from server."}
+
+
+@router.delete("/files/clear-all")
+async def clear_all_outputs_and_logs():
+    """Deletes all local outputs and logs in one call."""
+    out = await clear_all_outputs()
+    log = await clear_all_logs()
+    return {"success": True, "message": f"{out['message']} {log['message']}"}
+
 
 # ------------------------------------------------------------------
 # Cross-run merge: pick individual files from many finished notebooks

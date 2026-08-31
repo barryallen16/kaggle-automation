@@ -104,8 +104,9 @@
         </button>
 
         <button onclick="switchTab('kernels')" id="nav-kernels" class="nav-tab w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all border border-transparent">
-          <i data-lucide="layers" class="w-4 h-4 text-indigo-400"></i>
+          <i data-lucide="database" class="w-4 h-4 text-indigo-400"></i>
           <span>Account Kernels</span>
+          <i data-lucide="hard-drive" class="w-3.5 h-3.5 text-slate-500 ml-auto"></i>
         </button>
 
         <div class="pt-4 pb-2">
@@ -559,10 +560,16 @@
                 <i data-lucide="archive" class="w-4 h-4"></i>
                 <span>Download All as ZIP</span>
               </button>
-              <button onclick="deleteAllLocalFiles()" id="btn-delete-all-files" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 border border-rose-500/40 transition ml-auto">
+              <button onclick="deleteAllLocalFiles()" id="btn-delete-all-files" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 border border-rose-500/40 transition">
                 <i data-lucide="trash-2" class="w-4 h-4"></i>
-                <span>Delete All Local Files</span>
+                <span>Delete Run Files</span>
               </button>
+              <div class="ml-auto flex items-center gap-2 border-l border-slate-700 pl-3">
+                <button onclick="clearAllServerFiles()" id="btn-clear-all-server" title="Free disk space: deletes ALL local outputs + logs for every run (remote Kaggle files untouched)" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 text-amber-300 hover:bg-amber-900/30 hover:text-amber-200 border border-amber-700/50 transition">
+                  <i data-lucide="hard-drive" class="w-4 h-4"></i>
+                  <span>Clear All Server Files</span>
+                </button>
+              </div>
             </div>
 
             <!-- Output Files Table -->

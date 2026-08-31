@@ -231,6 +231,32 @@ async function deleteAllLocalFiles() {
     showToast('Error deleting output files: ' + err.message, 'error');
   }
 }
+async function clearAllServerFiles() {
+  if (!confirm('Free disk space: delete ALL local outputs and logs for EVERY run on this server?\n\nRemote files on Kaggle are NOT touched — you can re-pull any run later.\n\nContinue?')) return;
+  const btn = document.getElementById('btn-clear-all-server');
+  const orig = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Clearing...</span>`; try{refreshIcons()}catch(_){} }
+  try {
+    const res = await fetch(`/api/runs/files/clear-all`, { method: 'DELETE' });
+    const data = await res.json();
+    if (data.success) {
+      AppState.cartFiles = [];
+      try { renderMergeCart(); } catch(_){}
+      showToast(data.message || 'Cleared all server files', 'success');
+      if (currentFilesRunId) inspectFilesForRun(currentFilesRunId);
+      else {
+        const tb = document.getElementById('files-table-body');
+        if (tb) tb.innerHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-slate-500">All server files cleared — select a run to pull again.</td></tr>`;
+      }
+    } else {
+      showToast(data.detail || 'Failed to clear server files', 'error');
+    }
+  } catch (err) {
+    showToast('Error clearing server files: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = orig; try{refreshIcons()}catch(_){} }
+  }
+}
 
 // ------------------------------------------------------------------
 // Merge Cart - collect individual output files across finished runs
