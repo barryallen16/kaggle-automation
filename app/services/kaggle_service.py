@@ -764,6 +764,30 @@ class KaggleService:
         return stdout.decode("utf-8", errors="ignore").strip()
 
     @classmethod
+    async def list_account_kernels(cls, account_username: str, search: str = "", page: int = 1, page_size: int = 20) -> Dict[str, Any]:
+        """Lists kernels visible to account_username via ListKernels API.
+
+        Returns {kernels: [...], nextPageToken: str}. Each kernel has
+        ref, title, slug, author, lastRunTime, currentVersionNumber etc.
+        Throttled via kernel-status semaphore (same CLI weight class).
+        """
+        # Clamp to Kaggle sane limits
+        page = max(1, int(page or 1))
+        page_size = max(1, min(100, int(page_size or 20)))
+        out = await cls._run_versioned_helper(
+            account_username,
+            ["list", account_username, search or "", str(page), str(page_size)],
+            timeout=120
+        )
+        if not out:
+            return {"kernels": [], "nextPageToken": ""}
+        try:
+            data = json.loads(out)
+            return {"kernels": data.get("kernels") or [], "nextPageToken": data.get("nextPageToken") or ""}
+        except Exception:
+            return {"kernels": [], "nextPageToken": ""}
+
+    @classmethod
     async def get_kernel_current_version(cls, account_username: str, kernel_ref: str) -> Optional[int]:
         """Latest pushed version number of the kernel, or None if unknown."""
         owner, _, slug = kernel_ref.partition("/")
@@ -870,6 +894,24 @@ class KaggleService:
         except Exception as e:
             diagnostics.append(f"plain pull failed: {e}")
             return None, None, diagnostics
+
+    @classmethod
+    async def download_external_outputs(cls, account_username: str, kernel_ref: str):
+        """Downloads output for any kernel_ref (not just dashboard runs).
+
+        Uses a synthetic run_id `ext_<account>_<slug>` so files land in
+        data/outputs/ext_<account>_<slug>/ and don't pollute the runs table.
+        Returns (path, version_used, diagnostics) like download_latest_outputs.
+        """
+        owner, _, slug = kernel_ref.partition("/")
+        if not owner or not slug:
+            return None, None, ["invalid kernel_ref"]
+        safe_slug = cls.sanitize_slug(slug)
+        safe_owner = "".join(c for c in owner if c.isalnum() or c in ("-", "_")).lower() or "unknown"
+        run_id = f"ext_{safe_owner}_{safe_slug}"
+        # For external kernels we don't have a pinned output_version, so let
+        # download_latest_outputs probe current version then plain pull.
+        return await cls.download_latest_outputs(account_username, kernel_ref, run_id)
 
     @classmethod
     async def download_outputs(cls, account_username: str, kernel_ref: str, run_id: str) -> Path:

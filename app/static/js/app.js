@@ -90,7 +90,7 @@ function switchTab(tabId, push = true) {
   if (activeBtn) activeBtn.classList.add('active');
 
   // Hide all sections
-  const tabs = ['dashboard', 'runner', 'distributed', 'terminal', 'files', 'history', 'settings'];
+  const tabs = ['dashboard', 'runner', 'distributed', 'terminal', 'files', 'history', 'kernels', 'settings'];
   tabs.forEach(t => {
     const sec = document.getElementById(`tab-${t}`);
     if (sec) sec.classList.add('hidden');
@@ -108,6 +108,7 @@ function switchTab(tabId, push = true) {
     terminal: 'Live Output & Log Console',
     files: 'Output Artifacts & File Downloader',
     history: 'Run Execution Catalog',
+    kernels: 'Account Kernels Explorer',
     settings: 'Telegram Bot & System Settings'
   };
   const titleEl = document.getElementById('page-title');
@@ -127,10 +128,11 @@ function switchTab(tabId, push = true) {
   if (tabId === 'terminal') updateTerminalRunDropdown();
   if (tabId === 'files') { updateFilesRunDropdown(); renderMergeCart(); }
   if (tabId === 'runner' || tabId === 'distributed') populateAccountSelects();
+  if (tabId === 'kernels') initKernelsTab();
   if (tabId === 'settings') loadSettingsData();
 }
 
-const KNOWN_TABS = ['dashboard', 'runner', 'distributed', 'terminal', 'files', 'history', 'settings'];
+const KNOWN_TABS = ['dashboard', 'runner', 'distributed', 'terminal', 'files', 'history', 'kernels', 'settings'];
 
 function tabFromLocation() {
   const fromQuery = new URLSearchParams(window.location.search).get('tab');

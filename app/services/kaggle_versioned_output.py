@@ -28,6 +28,8 @@ Usage (account credentials come from the environment):
       -> {"current_version_number": N}
   python kaggle_versioned_output.py fetch OWNER SLUG VERSION OUT_DIR
       -> {"saved": [names], "tried": [labels], "notes": [...]}
+  python kaggle_versioned_output.py list OWNER [SEARCH] [PAGE] [PAGESIZE]
+      -> {"kernels": [{ref, title, slug, author, lastRunTime, currentVersionNumber, ...}]}
 
 Exit codes: 0 ok (meta may report null), 3 nothing-recovered (fetch),
 1 hard error, 2 usage.
@@ -119,6 +121,17 @@ def _list_output_page(client: httpx.Client, owner: str, slug: str,
     if page_token:
         payload["pageToken"] = page_token
     return _post(client, "ListKernelSessionOutput", payload)
+
+
+def list_kernels(owner: str, search: str = "", page: int = 1, page_size: int = 20):
+    """Lists kernels owned/visible to owner via ListKernels API."""
+    payload: dict = {"user": owner, "page": page, "pageSize": page_size}
+    if search:
+        payload["search"] = search
+    with httpx.Client(timeout=TIMEOUT,
+                      headers={"Authorization": f"Bearer {_token()}"}) as client:
+        data = _post(client, "ListKernels", payload)
+        return data.get("kernels") or [], data.get("nextPageToken") or ""
 
 
 def current_version(owner: str, slug: str):
@@ -220,6 +233,24 @@ def main(argv):
         if saved:
             return 0
         return 3  # nothing recoverable - caller decides fallback
+
+    if len(argv) >= 1 and argv[0] == "list":
+        if len(argv) < 2:
+            sys.stderr.write("list requires OWNER\n")
+            return 2
+        owner = argv[1]
+        search = argv[2] if len(argv) > 2 else ""
+        try:
+            page = int(argv[3]) if len(argv) > 3 else 1
+        except ValueError:
+            page = 1
+        try:
+            page_size = int(argv[4]) if len(argv) > 4 else 20
+        except ValueError:
+            page_size = 20
+        kernels, next_token = list_kernels(owner, search, page, page_size)
+        print(json.dumps({"kernels": kernels, "nextPageToken": next_token}))
+        return 0
 
     sys.stderr.write(__doc__ or "")
     return 2
