@@ -123,6 +123,23 @@ def _list_output_page(client: httpx.Client, owner: str, slug: str,
     return _post(client, "ListKernelSessionOutput", payload)
 
 
+def _list_files_page(client: httpx.Client, owner: str, slug: str,
+                     label: str = "", page_token: str = "", page_size: int = 100):
+    payload = {"userName": owner, "kernelSlug": slug, "pageSize": page_size}
+    if label:
+        payload["versionLabel"] = label
+    if page_token:
+        payload["pageToken"] = page_token
+    return _post(client, "ListKernelFiles", payload)
+
+
+def _get_status(client: httpx.Client, owner: str, slug: str, label: str = ""):
+    payload = {"userName": owner, "kernelSlug": slug}
+    if label:
+        payload["versionLabel"] = label
+    return _post(client, "GetKernelSessionStatus", payload)
+
+
 def list_kernels(owner: str, search: str = "", page: int = 1, page_size: int = 20):
     """Lists kernels owned/visible to owner via ListKernels API."""
     payload: dict = {"user": owner, "page": page, "pageSize": page_size}
@@ -132,6 +149,103 @@ def list_kernels(owner: str, search: str = "", page: int = 1, page_size: int = 2
                       headers={"Authorization": f"Bearer {_token()}"}) as client:
         data = _post(client, "ListKernels", payload)
         return data.get("kernels") or [], data.get("nextPageToken") or ""
+
+
+def list_versions(owner: str, slug: str, max_versions: int = 20):
+    """Lists per-version snapshots for a kernel, newest first.
+
+    For each version `N` (current down to 1), probes:
+      - ListKernelFiles with versionLabel (creationDate of first file -> version time)
+      - GetKernelSessionStatus with versionLabel (running/complete/error/stopped)
+      - ListKernelSessionOutput file count (how many output files that version published)
+    Returns list of {version, label, creationTime, fileCount, status, hasOutput}.
+    Times are ISO strings from the API when available, else "".
+    """
+    cur = current_version(owner, slug)
+    if not cur:
+        return []
+    # Clamp to sane range
+    try:
+        max_versions = max(1, min(50, int(max_versions or 20)))
+    except Exception:
+        max_versions = 20
+    start = cur
+    end = max(1, cur - max_versions + 1)
+    versions = []
+    candidates_fmt = lambda v: [str(v), f"version-{v}", f"version{v}"]
+    with httpx.Client(timeout=TIMEOUT,
+                      headers={"Authorization": f"Bearer {_token()}"}) as client:
+        for v in range(start, end - 1, -1):
+            entry = {"version": v, "label": str(v), "creationTime": "", "fileCount": 0, "status": "unknown", "hasOutput": False}
+            # Try each label spelling for files
+            for label in candidates_fmt(v):
+                try:
+                    fdata = _list_files_page(client, owner, slug, label=label, page_size=100)
+                    files = fdata.get("files") or []
+                    if files:
+                        entry["fileCount"] = len(files)
+                        # Use earliest file's creationDate as version time if available
+                        # API returns creationDate string per file
+                        times = [f.get("creationDate") or f.get("creation_date") or "" for f in files]
+                        times = [t for t in times if t]
+                        if times:
+                            # Pick most recent file time
+                            times_sorted = sorted(times)
+                            entry["creationTime"] = times_sorted[-1]
+                        entry["label"] = label
+                        entry["hasOutput"] = True
+                        break
+                    # No files but call succeeded -> version exists but published nothing (log-only)
+                    entry["label"] = label
+                    entry["hasOutput"] = False
+                    break
+                except KaggleError:
+                    continue
+            # Status for this version
+            for label in candidates_fmt(v):
+                try:
+                    sdata = _get_status(client, owner, slug, label=label)
+                    st = sdata.get("status") or sdata.get("Status") or "unknown"
+                    # Normalize enum names like "KernelWorkerStatus.COMPLETE" -> "complete"
+                    st = str(st).split(".")[-1].lower()
+                    if st:
+                        entry["status"] = st
+                    break
+                except KaggleError:
+                    continue
+            # If still no time, try output log's file time via ListKernelSessionOutput
+            if not entry["creationTime"]:
+                for label in candidates_fmt(v):
+                    try:
+                        odata = _list_output_page(client, owner, slug, label=label, page_size=1)
+                        # ListKernelSessionOutput doesn't have creation time, but we can use file-less hint
+                        # If we get here without error, version exists
+                        if odata.get("files") or odata.get("log"):
+                            entry["label"] = label
+                            break
+                    except KaggleError:
+                        continue
+            versions.append(entry)
+    return versions
+
+
+def fetch_version_log(owner: str, slug: str, version: int) -> str:
+    """Fetches log for a specific version snapshot."""
+    candidates = [str(version), f"version-{version}", f"version{version}"]
+    with httpx.Client(timeout=TIMEOUT,
+                      headers={"Authorization": f"Bearer {_token()}"},
+                      follow_redirects=True) as client:
+        for label in candidates:
+            try:
+                data = _list_output_page(client, owner, slug, label=label, page_size=200)
+                log = data.get("log") or ""
+                if log:
+                    return log
+                # Even if log empty but call succeeded, version exists - return empty
+                return ""
+            except KaggleError:
+                continue
+    return ""
 
 
 def current_version(owner: str, slug: str):
@@ -250,6 +364,25 @@ def main(argv):
             page_size = 20
         kernels, next_token = list_kernels(owner, search, page, page_size)
         print(json.dumps({"kernels": kernels, "nextPageToken": next_token}))
+        return 0
+
+    if len(argv) >= 1 and argv[0] == "versions":
+        if len(argv) < 3:
+            sys.stderr.write("versions requires OWNER SLUG\n")
+            return 2
+        owner, slug = argv[1], argv[2]
+        try:
+            max_v = int(argv[3]) if len(argv) > 3 else 20
+        except ValueError:
+            max_v = 20
+        vers = list_versions(owner, slug, max_v)
+        print(json.dumps({"versions": vers, "current_version": vers[0]["version"] if vers else None}))
+        return 0
+
+    if len(argv) >= 4 and argv[0] == "log":
+        owner, slug, version = argv[1], argv[2], int(argv[3])
+        log = fetch_version_log(owner, slug, version)
+        print(json.dumps({"log": log}))
         return 0
 
     sys.stderr.write(__doc__ or "")

@@ -720,16 +720,19 @@
 
             <div class="flex flex-wrap gap-2">
               <button onclick="kernelsPullOutput()" id="btn-kernels-pull" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 border border-indigo-500/40 transition">
-                <i data-lucide="cloud-download" class="w-4 h-4"></i><span>Pull Output Files</span>
+                <i data-lucide="cloud-download" class="w-4 h-4"></i><span>Pull Latest Output</span>
               </button>
-              <button onclick="kernelsListFiles()" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition">
+              <button onclick="kernelsListFiles()" id="btn-kernels-files" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition">
                 <i data-lucide="folder-open" class="w-4 h-4"></i><span>Refresh Files</span>
               </button>
-              <button onclick="kernelsFetchLogs()" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition">
+              <button onclick="kernelsFetchLogs()" id="btn-kernels-logs" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition">
                 <i data-lucide="scroll-text" class="w-4 h-4"></i><span>Fetch Logs</span>
               </button>
               <button onclick="kernelsDownloadZip()" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-blue-600/20 text-blue-300 hover:bg-blue-600/30 border border-blue-500/40 transition">
                 <i data-lucide="archive" class="w-4 h-4"></i><span>Download ZIP</span>
+              </button>
+              <button onclick="kernelsStop()" id="btn-kernels-stop" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-rose-600/20 text-rose-300 hover:bg-rose-600/30 border border-rose-500/40 transition">
+                <i data-lucide="octagon" class="w-4 h-4"></i><span>Stop Kernel</span>
               </button>
             </div>
 
@@ -750,6 +753,29 @@
               <div>
                 <h5 class="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">Logs</h5>
                 <pre id="kernels-logs-pre" class="w-full h-[320px] overflow-auto bg-[#060911] border border-[#222d4a] rounded-xl p-3 text-[11px] font-mono text-slate-300 whitespace-pre-wrap">Logs will appear here after Fetch.</pre>
+              </div>
+            </div>
+
+            <!-- Version History -->
+            <div class="border-t border-[#1e293b] pt-4 space-y-3">
+              <div class="flex items-center justify-between">
+                <h5 class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                  <i data-lucide="history" class="w-4 h-4 text-amber-400"></i> Version History
+                  <span class="text-[10px] font-normal text-slate-500 normal-case">oldest → newest, pull any version</span>
+                </h5>
+                <button onclick="loadKernelVersions()" id="btn-load-versions" class="inline-flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 border border-amber-500/40 transition">
+                  <i data-lucide="layers" class="w-3.5 h-3.5"></i><span>Load Versions</span>
+                </button>
+              </div>
+              <div class="glass-panel rounded-xl overflow-hidden max-h-[360px] overflow-y-auto">
+                <table class="w-full text-left text-xs text-slate-300">
+                  <thead class="bg-[#0e1424] text-[10px] uppercase font-semibold text-slate-400 sticky top-0">
+                    <tr><th class="px-3 py-2">Ver</th><th class="px-3 py-2">Time</th><th class="px-3 py-2">Status</th><th class="px-3 py-2">Files</th><th class="px-3 py-2 text-right">Actions</th></tr>
+                  </thead>
+                  <tbody id="kernels-versions-body" class="divide-y divide-[#1e293b]">
+                    <tr><td colspan="5" class="px-3 py-6 text-center text-slate-500">Click Load Versions to see per-version snapshots.</td></tr>
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
