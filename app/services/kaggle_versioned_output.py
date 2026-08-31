@@ -165,12 +165,14 @@ def list_versions(owner: str, slug: str, max_versions: int = 20):
     # Fallback: if current_version couldn't be determined (private kernel, search miss, etc.),
     # probe descending from 20 to find the highest version that actually exists.
     # Try both status and files existence - some versions are log-only and status may still succeed.
+    # Use all plausible label formats.
+    probe_labels = lambda v: [str(v), f"{v}.0", f"v{v}", f"version-{v}", f"version{v}", f"Version{v}"]
     if not cur:
         try:
             with httpx.Client(timeout=TIMEOUT, headers={"Authorization": f"Bearer {_token()}"}) as client:
                 for probe in range(20, 0, -1):
                     found = False
-                    for label in (str(probe), f"version-{probe}", f"version{probe}"):
+                    for label in probe_labels(probe):
                         try:
                             _get_status(client, owner, slug, label=label)
                             found = True
@@ -179,7 +181,6 @@ def list_versions(owner: str, slug: str, max_versions: int = 20):
                             pass
                         try:
                             fdata = _list_files_page(client, owner, slug, label=label, page_size=1)
-                            # If call succeeds, version exists (even if no files)
                             found = True
                             break
                         except KaggleError:
@@ -196,11 +197,8 @@ def list_versions(owner: str, slug: str, max_versions: int = 20):
         except Exception:
             pass
         if not cur:
-            # Last resort: assume at least 1 version exists if kernel exists at all
-            # (ListKernels showed it). Return single entry probe for v1.
             try:
                 with httpx.Client(timeout=TIMEOUT, headers={"Authorization": f"Bearer {_token()}"}) as client:
-                    # Quick check if kernel exists at all via GetKernel
                     _get_kernel_metadata(client, owner, slug)
                     cur = 1
             except Exception:
@@ -213,7 +211,7 @@ def list_versions(owner: str, slug: str, max_versions: int = 20):
     start = cur
     end = max(1, cur - max_versions + 1)
     versions = []
-    candidates_fmt = lambda v: [str(v), f"version-{v}", f"version{v}"]
+    candidates_fmt = lambda v: [str(v), f"{v}.0", f"v{v}", f"version-{v}", f"version{v}", f"Version{v}"]
     with httpx.Client(timeout=TIMEOUT,
                       headers={"Authorization": f"Bearer {_token()}"}) as client:
         for v in range(start, end - 1, -1):
@@ -360,7 +358,7 @@ def fetch_version_output(owner: str, slug: str, version: int, out_dir: str):
     """
     os.makedirs(out_dir, exist_ok=True)
     candidates = []
-    for cand in (str(version), f"version-{version}", f"version{version}"):
+    for cand in (str(version), f"{version}.0", f"v{version}", f"version-{version}", f"version{version}", f"Version{version}"):
         if cand not in candidates:
             candidates.append(cand)
 
