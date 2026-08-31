@@ -53,6 +53,61 @@ async def list_kernels(
     """Lists kernels visible to account (paginated). Shows title, lastRunTime etc."""
     _require_account(account)
     data = await KaggleService.list_account_kernels(account, search, page, pageSize)
+    # Fallback for accounts with wrong stored username (e.g. kaggle_0694f485 hash)
+    # If list is empty and username looks like fallback, try discovering real username via CLI/JWT and retry
+    if not (data.get("kernels") or []) and account.startswith("kaggle_"):
+        try:
+            from app.database import get_account_by_username
+            from app.services.account_manager import AccountManager
+            acc = get_account_by_username(account)
+            if acc and acc.get("api_key"):
+                # Try JWT decode quick
+                import base64, json as _json
+                key = acc["api_key"]
+                real = None
+                try:
+                    parts = key.strip().split(".")
+                    if len(parts) == 3:
+                        payload = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
+                        claims = _json.loads(base64.urlsafe_b64decode(payload))
+                        for f in ["username", "user_name", "sub", "preferred_username"]:
+                            if f in claims and isinstance(claims[f], str) and not claims[f].isdigit():
+                                real = claims[f]
+                                break
+                except Exception:
+                    pass
+                if not real:
+                    try:
+                        import uuid
+                        temp_id = f"debug_{uuid.uuid4().hex[:4]}"
+                        real = await AccountManager.fetch_username_for_key(temp_id, key)
+                        AccountManager._cleanup_temp_dir(temp_id)
+                        if real and real.startswith("kaggle_"):
+                            real = None
+                    except Exception:
+                        pass
+                if real and real != account:
+                    # Retry list with real username but same credentials (credentials are per stored account id, not username)
+                    # We need to call helper with real as user param but credentials still from stored account
+                    # Use helper directly with real user but same account's env (via _run_versioned_helper with stored account)
+                    # For now, try listing with real username via same account's token
+                    retry = await KaggleService.list_account_kernels(account, search, page, pageSize)
+                    # Actually retry with real as user param by calling helper with real user but same account credentials
+                    # To do that, we need to call helper with real user param but same account's env - our list_account_kernels uses account as both user and credentials
+                    # So we call helper directly with real user
+                    from app.services.kaggle_service import KaggleService as KS
+                    import json as _j
+                    # Direct helper call with real user but credentials of stored account
+                    out = await KS._run_versioned_helper(account, ["list", real, search or "", str(page), str(pageSize)], timeout=120)
+                    if out:
+                        try:
+                            d2 = _j.loads(out)
+                            if d2.get("kernels"):
+                                data = d2
+                        except Exception:
+                            pass
+        except Exception:
+            pass
     # Normalize for frontend: ensure every kernel has ref, title, lastRunTime, currentVersionNumber
     kernels = []
     for k in data.get("kernels") or []:
@@ -70,7 +125,11 @@ async def list_kernels(
             "kernelType": k.get("kernelType") or "",
             "_raw": k,
         })
-    return {"success": True, "kernels": kernels, "nextPageToken": data.get("nextPageToken") or "", "page": page, "pageSize": pageSize}
+    # If still empty and is fallback, include hint for frontend
+    hint = None
+    if not kernels and account.startswith("kaggle_"):
+        hint = f"No notebooks found for @{account} — this looks like a fallback username (real Kaggle username couldn't be resolved when the account was added). The quota shows {account} has GPU usage, so its real username is different. Try re-adding the account with its correct Kaggle username, or check /api/accounts/{account}/debug to see JWT vs CLI discovered username."
+    return {"success": True, "kernels": kernels, "nextPageToken": data.get("nextPageToken") or "", "page": page, "pageSize": pageSize, "hint": hint}
 
 
 @router.get("/status")

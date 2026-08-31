@@ -75,3 +75,48 @@ async def refresh_single(username: str):
         return {"success": True, "quota": quota}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{username}/debug")
+async def debug_account(username: str):
+    """Debug fallback usernames like kaggle_0694f485 - shows real Kaggle username via JWT and via CLI."""
+    from app.database import get_account_by_username
+    from app.services.account_manager import AccountManager
+    import base64, json as _json
+    acc = get_account_by_username(username)
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    key = acc.get("api_key", "")
+    # Try JWT decode
+    jwt_username = None
+    try:
+        parts = key.strip().split(".")
+        if len(parts) == 3:
+            payload = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
+            decoded = base64.urlsafe_b64decode(payload)
+            claims = _json.loads(decoded)
+            for field in ["username", "user_name", "sub", "preferred_username"]:
+                if field in claims and isinstance(claims[field], str) and not claims[field].isdigit():
+                    jwt_username = claims[field]
+                    break
+    except Exception:
+        pass
+    # Try CLI discovery (may be slow)
+    cli_username = None
+    cli_error = None
+    try:
+        # Use a temp id to avoid colliding with real account
+        import uuid
+        temp_id = f"debug_{uuid.uuid4().hex[:4]}"
+        cli_username = await AccountManager.fetch_username_for_key(temp_id, key)
+        AccountManager._cleanup_temp_dir(temp_id)
+    except Exception as e:
+        cli_error = str(e)
+    return {
+        "success": True,
+        "stored_username": username,
+        "is_fallback": username.startswith("kaggle_"),
+        "jwt_username": jwt_username,
+        "cli_discovered_username": cli_username,
+        "cli_error": cli_error,
+        "api_key_prefix": key[:15] + "..." if len(key) > 15 else "***",
+    }
