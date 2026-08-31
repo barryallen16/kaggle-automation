@@ -4,11 +4,18 @@ import uuid
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional, Union
+from typing import List, Dict, Any, Optional, Union, Set
 from app.services.kaggle_service import KaggleService
 from app.database import create_distributed_workload, update_workload_status, utcnow_iso
+from app.config import LOGS_DIR
 
 logger = logging.getLogger("workload_distributor")
+
+# Global throttle for distributed pushes: without this, 16 accounts *2 sessions
+# = 32 shards launch 16 pushes in parallel at t=0 -> ~2GB RAM spike -> OOM killer
+# does `killed uvicorn`. Limit mirrors KaggleService.PUSH_CONCURRENCY.
+DISTRIBUTED_PUSH_CONCURRENCY = max(1, int(os.getenv("DISTRIBUTED_PUSH_CONCURRENCY", "3")))
+STATUS_CHECK_CONCURRENCY = max(1, int(os.getenv("DISTRIBUTED_STATUS_CONCURRENCY", "3")))
 
 class WorkloadDistributor:
     @staticmethod
@@ -73,6 +80,10 @@ class WorkloadDistributor:
         If a kernel is complete, error, or stopped, its DB record is reaped
         and its slot freed immediately. Genuinely active (running/queued)
         kernels consume 1 slot per distinct kernel_ref.
+
+        Throttled to STATUS_CHECK_CONCURRENCY parallel `kaggle kernels status`
+        calls so 16 accounts with 30+ active runs don't spawn 30 CLI processes
+        at once (the same OOM that kills pushes).
         """
         from datetime import datetime, timezone
         from app.database import get_active_runs, update_run_status, utcnow_iso
@@ -83,20 +94,33 @@ class WorkloadDistributor:
 
         account_set = set(accounts)
 
-        # Active rows: verify against live status so genuinely-finished kernels
-        # (complete/error/stopped confirmed by CLI) release their slot immediately.
+        # Collect candidates first (sync DB scan)
+        candidates = []
         for r in get_active_runs():
             acc = r.get("account_username")
             if acc not in account_set:
                 continue
             if not cls._is_gpu(r.get("accelerator")):
                 continue
-            resp = await KaggleService.get_kernel_status(acc, r["kernel_ref"])
-            st = resp.get("status", "unknown")
+            candidates.append(r)
+
+        if not candidates:
+            return {a: 0 for a in accounts}
+
+        sem = asyncio.Semaphore(STATUS_CHECK_CONCURRENCY)
+
+        async def check_one(row):
+            async with sem:
+                resp = await KaggleService.get_kernel_status(row["account_username"], row["kernel_ref"])
+            return row, resp.get("status", "unknown")
+
+        results = await asyncio.gather(*[check_one(r) for r in candidates])
+
+        for row, st in results:
             if st in ("complete", "error", "stopped", "cancelacknowledged"):
-                update_run_status(r["id"], "stopped" if "cancel" in st else st, "auto-reaped by availability check", utcnow_iso())
+                update_run_status(row["id"], "stopped" if "cancel" in st else st, "auto-reaped by availability check", utcnow_iso())
                 continue
-            busy[acc].add(r["kernel_ref"])
+            busy[row["account_username"]].add(row["kernel_ref"])
 
         return {a: len(busy[a]) for a in accounts}
 
@@ -206,21 +230,42 @@ class WorkloadDistributor:
             candidates[acc].append(r)
 
         cancelled, already_gone, warnings = [], [], []
+
+        # Check statuses with limited concurrency (reclaim can touch 200 rows)
+        sem = asyncio.Semaphore(STATUS_CHECK_CONCURRENCY)
+        stop_sem = asyncio.Semaphore(DISTRIBUTED_PUSH_CONCURRENCY)
+
+        async def check_and_maybe_stop(acc: str, row: Dict[str, Any]):
+            async with sem:
+                resp = await KaggleService.get_kernel_status(acc, row["kernel_ref"])
+            st = resp.get("status", "unknown")
+            if st in ("complete", "error", "stopped", "cancelacknowledged"):
+                return ("gone", {"ref": row["kernel_ref"], "status": st})
+            run_row = get_run_by_id(row["id"])
+            if not run_row:
+                return ("warn", {"ref": row["kernel_ref"], "status": st, "error": "run not found"})
+            # stop_kernel itself pushes a stub (heavy) - throttle too
+            async with stop_sem:
+                stop = await KaggleService.stop_kernel(row["id"])
+            if stop.get("success"):
+                return ("cancelled", {"ref": row["kernel_ref"], "was": st})
+            return ("warn", {"ref": row["kernel_ref"], "status": st, "error": stop.get("error", "stop failed")})
+
+        # Flatten candidates into tasks
+        tasks = []
         for acc in accounts:
             for row in candidates[acc]:
-                ref = row["kernel_ref"]
-                resp = await KaggleService.get_kernel_status(acc, ref)
-                st = resp.get("status", "unknown")
-                if st in ("complete", "error", "stopped", "cancelacknowledged"):
-                    already_gone.append({"ref": ref, "status": st})
-                    continue
-                # RUNNING / QUEUED / unknown -> actively cancel via stop stub
-                run_row = get_run_by_id(row["id"])
-                stop = await KaggleService.stop_kernel(row["id"]) if run_row else {"success": False}
-                if stop.get("success"):
-                    cancelled.append({"ref": ref, "was": st})
+                tasks.append(check_and_maybe_stop(acc, row))
+
+        if tasks:
+            results = await asyncio.gather(*tasks)
+            for kind, payload in results:
+                if kind == "cancelled":
+                    cancelled.append(payload)
+                elif kind == "gone":
+                    already_gone.append(payload)
                 else:
-                    warnings.append({"ref": ref, "status": st, "error": stop.get("error", "stop failed")})
+                    warnings.append(payload)
 
         return {"cancelled": cancelled, "already_free": already_gone, "warnings": warnings}
 
@@ -344,7 +389,23 @@ class WorkloadDistributor:
             "status": "running"
         })
 
-        # 5. Launch: parallel across accounts, staggered within an account
+        # 4b. One-time log purge for this batch BEFORE any shard writes.
+        # Per-shard purge raced when 16-32 shards launched in parallel (each
+        # shard deleted logs just created by its peers). Do it once here.
+        try:
+            LOGS_DIR.mkdir(parents=True, exist_ok=True)
+            os.environ["_WORKLOAD_PURGE_DONE"] = "1"
+            KaggleService._purge_previous_logs()
+            logger.info(f"Workload {workload_id}: purged logs once for {R} shards")
+        except Exception as e:
+            logger.warning(f"Workload {workload_id}: log purge skipped: {e}")
+
+        # 5. Launch: throttled across accounts, staggered within an account
+        # Without throttle, 16 accounts *2 sessions = 16 concurrent
+        # `kaggle kernels push` at t=0 -> 2GB spike -> `killed uvicorn`.
+        # push_sem caps global concurrent pushes to DISTRIBUTED_PUSH_CONCURRENCY.
+        push_sem = asyncio.Semaphore(DISTRIBUTED_PUSH_CONCURRENCY)
+
         async def launch_shard(shard: Dict[str, Any]):
             idx = shard["shard_index"]
             account = shard["account_username"]
@@ -360,20 +421,21 @@ class WorkloadDistributor:
                 total_items=total_units
             )
 
-            result = await KaggleService.push_kernel(
-                account_username=account,
-                title=shard_title,
-                code_content=injected_code,
-                filename=filename,
-                accelerator=accelerator,
-                enable_internet=enable_internet,
-                is_trial=is_trial,
-                timeout_seconds=timeout_seconds,
-                env_vars=env_vars,
-                workload_id=workload_id,
-                shard_index=idx,
-                total_shards=R
-            )
+            async with push_sem:
+                result = await KaggleService.push_kernel(
+                    account_username=account,
+                    title=shard_title,
+                    code_content=injected_code,
+                    filename=filename,
+                    accelerator=accelerator,
+                    enable_internet=enable_internet,
+                    is_trial=is_trial,
+                    timeout_seconds=timeout_seconds,
+                    env_vars=env_vars,
+                    workload_id=workload_id,
+                    shard_index=idx,
+                    total_shards=R
+                )
             return {
                 "shard_index": idx,
                 "account": account,
@@ -396,10 +458,13 @@ class WorkloadDistributor:
                 out.append(await launch_shard(s))
             return out
 
-        grouped = await asyncio.gather(
-            *[launch_account_group(acc, group) for acc, group in by_account.items()],
-            return_exceptions=True
-        )
+        try:
+            grouped = await asyncio.gather(
+                *[launch_account_group(acc, group) for acc, group in by_account.items()],
+                return_exceptions=True
+            )
+        finally:
+            os.environ.pop("_WORKLOAD_PURGE_DONE", None)
 
         processed_results = []
         for group_result in grouped:

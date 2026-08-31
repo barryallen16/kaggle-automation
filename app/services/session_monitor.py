@@ -1,9 +1,14 @@
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from typing import Dict, Any, Tuple
 from app.config import MAX_KAGGLE_SESSION_SECONDS, WARNING_BEFORE_EXPIRY_SECONDS
+
+# Throttle parallel status checks - 32 runs checking status at once is the same
+# OOM spike as pushes (each `kaggle kernels status` is a CLI process).
+MONITOR_CONCURRENCY = max(1, int(os.getenv("MONITOR_CONCURRENCY", "3")))
 from app.database import (
     get_active_runs, update_run_status, update_run_telegram_flag, get_run_by_id,
     set_run_output_version
@@ -100,13 +105,16 @@ class SessionMonitor:
             return
 
         now = datetime.now(timezone.utc)
+        sem = asyncio.Semaphore(MONITOR_CONCURRENCY)
 
-        for run in active_runs:
-            # Isolate failures: one bad run must never stall the others in this cycle
-            try:
-                await cls._check_single_run(run, now)
-            except Exception as e:
-                logger.error(f"Error checking run {run.get('id')}: {e}")
+        async def guarded(run):
+            async with sem:
+                try:
+                    await cls._check_single_run(run, now)
+                except Exception as e:
+                    logger.error(f"Error checking run {run.get('id')}: {e}")
+
+        await asyncio.gather(*[guarded(r) for r in active_runs])
 
     @classmethod
     async def _check_single_run(cls, run: Dict[str, Any], now: datetime):
