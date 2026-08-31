@@ -179,16 +179,42 @@ async function refreshGlobalData() {
 
     if (accRes.success) {
       AppState.accounts = accRes.accounts || [];
-      document.getElementById('sidebar-accounts-count').innerText = AppState.accounts.length;
-      document.getElementById('kpi-accounts-total').innerText = AppState.accounts.length;
+      const sa = document.getElementById('sidebar-accounts-count');
+      if (sa) sa.innerText = AppState.accounts.length;
+      const kpi = document.getElementById('kpi-accounts-total');
+      if (kpi) kpi.innerText = AppState.accounts.length;
+      // Keep all account selectors in sync (runner, distributed, kernels)
+      if (typeof populateAccountSelects === 'function') {
+        try { populateAccountSelects(); } catch (_) {}
+      }
+      if (typeof populateKernelsAccountSelect === 'function') {
+        try { populateKernelsAccountSelect(); } catch (_) {}
+      }
+      if (typeof renderDistributedAccountCheckboxes === 'function') {
+        // Only re-render distributed checkboxes if user is on that tab or has not yet loaded them
+        const distContainer = document.getElementById('dist-accounts-checkboxes');
+        if (distContainer && (AppState.activeTab === 'distributed' || !distContainer.innerHTML.trim())) {
+          try { renderDistributedAccountCheckboxes(); } catch (_) {}
+        }
+      }
     }
 
     if (runsRes.success) {
       AppState.allRuns = runsRes.runs || [];
       AppState.activeRuns = AppState.allRuns.filter(r => r.status === 'queued' || r.status === 'running');
-      document.getElementById('sidebar-active-count').innerText = AppState.activeRuns.length;
-      document.getElementById('kpi-active-runs').innerText = AppState.activeRuns.length;
-      document.getElementById('kpi-total-runs').innerText = AppState.allRuns.length;
+      const sac = document.getElementById('sidebar-active-count');
+      if (sac) sac.innerText = AppState.activeRuns.length;
+      const kar = document.getElementById('kpi-active-runs');
+      if (kar) kar.innerText = AppState.activeRuns.length;
+      const ktr = document.getElementById('kpi-total-runs');
+      if (ktr) ktr.innerText = AppState.allRuns.length;
+      // Keep dropdowns that depend on runs in sync
+      if (typeof updateTerminalRunDropdown === 'function' && AppState.activeTab === 'terminal') {
+        try { updateTerminalRunDropdown(); } catch (_) {}
+      }
+      if (typeof updateFilesRunDropdown === 'function' && AppState.activeTab === 'files') {
+        try { updateFilesRunDropdown(); } catch (_) {}
+      }
     }
 
     if (AppState.activeTab === 'dashboard') renderDashboard();

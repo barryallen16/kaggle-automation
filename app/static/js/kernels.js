@@ -9,18 +9,34 @@ let kernelsState = {
   selected: null, // {account, ref, title}
 };
 
-function initKernelsTab() {
-  // Populate account dropdown from global state
+function populateKernelsAccountSelect() {
   const sel = document.getElementById('kernels-account-select');
   if (!sel) return;
   const prev = sel.value;
+  const accounts = AppState.accounts || [];
   let html = '<option value="">-- Select Account --</option>';
-  (AppState.accounts || []).forEach(acc => {
-    const selAttr = acc.username === prev ? 'selected' : '';
-    html += `<option value="${esc(acc.username)}" ${selAttr}>@${esc(acc.username)}</option>`;
-  });
+  if (!accounts.length) {
+    html += '<option value="" disabled>Loading accounts...</option>';
+  } else {
+    html += accounts.map(acc => {
+      const selAttr = acc.username === prev ? 'selected' : '';
+      return `<option value="${esc(acc.username)}" ${selAttr}>@${esc(acc.username)}</option>`;
+    }).join('');
+  }
   sel.innerHTML = html;
-  // keep pagination info updated
+}
+
+function initKernelsTab() {
+  populateKernelsAccountSelect();
+  // if accounts not yet loaded, fetch them immediately so dropdown doesn't stay empty
+  if (!(AppState.accounts || []).length) {
+    fetch('/api/accounts').then(r => r.json()).then(data => {
+      if (data.success && data.accounts) {
+        AppState.accounts = data.accounts;
+        populateKernelsAccountSelect();
+      }
+    }).catch(() => {});
+  }
   updateKernelsPaginationUI();
   refreshIcons();
 }
@@ -52,10 +68,14 @@ async function loadKernelsForAccount() {
     showToast('Select an account first', 'warning');
     return;
   }
+  const newSearch = (searchEl ? searchEl.value.trim() : "");
+  const accountChanged = kernelsState.account !== account;
+  const searchChanged = kernelsState.search !== newSearch;
+  if (accountChanged || searchChanged) {
+    kernelsState.page = 1;
+  }
   kernelsState.account = account;
-  kernelsState.search = (searchEl ? searchEl.value.trim() : "");
-  // if account changed, reset page
-  // keep current page for pagination
+  kernelsState.search = newSearch;
 
   tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-slate-400"><i data-lucide="loader-2" class="w-5 h-5 animate-spin mx-auto mb-2 text-indigo-400"></i> Listing notebooks for @${esc(account)}...</td></tr>`;
   refreshIcons();
@@ -112,7 +132,7 @@ function renderKernelsTable() {
         <td class="px-4 py-3 text-xs font-mono text-slate-400">${esc(version)}</td>
         <td class="px-4 py-3 text-right">
           <div class="flex items-center justify-end gap-2 flex-wrap">
-            <button onclick="openKernelsDetail('${esc(kernelsState.account)}','${esc(ref)}','${esc(title.replace(/'/g, "\\'"))}')" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 border border-indigo-500/30 transition">Open</button>
+            <button data-account="${esc(kernelsState.account)}" data-ref="${esc(ref)}" data-title="${esc(title)}" onclick="openKernelsDetail(this.dataset.account, this.dataset.ref, this.dataset.title)" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600/20 text-indigo-300 hover:bg-indigo-600/30 border border-indigo-500/30 transition">Open</button>
             <a href="https://www.kaggle.com/code/${encodeURIComponent(ref)}" target="_blank" class="px-2 py-1 rounded text-xs bg-slate-800 text-slate-400 hover:text-white border border-slate-700"><i data-lucide="external-link" class="w-3 h-3 inline"></i></a>
           </div>
         </td>
@@ -214,9 +234,10 @@ function renderKernelsFiles(data) {
     tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-slate-500">No output files yet. If it just finished, click Pull.</td></tr>`;
     return;
   }
+  const fmt = (typeof formatBytes === 'function') ? formatBytes : (b => String(b));
   tbody.innerHTML = rows.map(f => {
     const name = f.name || f.fileName || f.rel_path;
-    const size = f.size != null ? (typeof f.size === 'number' ? formatBytes(f.size) : esc(String(f.size))) : '—';
+    const size = f.size != null ? (typeof f.size === 'number' ? fmt(f.size) : esc(String(f.size))) : '—';
     const isRemote = !!f.isRemote;
     const dlUrl = `/api/kernels/files/download/${encodeURIComponent(name)}?account=${encodeURIComponent(kernelsState.selected.account)}&kernel_ref=${encodeURIComponent(kernelsState.selected.ref)}`;
     return `
