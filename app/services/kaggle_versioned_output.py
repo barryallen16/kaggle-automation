@@ -164,25 +164,47 @@ def list_versions(owner: str, slug: str, max_versions: int = 20):
     cur = current_version(owner, slug)
     # Fallback: if current_version couldn't be determined (private kernel, search miss, etc.),
     # probe descending from 20 to find the highest version that actually exists.
+    # Try both status and files existence - some versions are log-only and status may still succeed.
     if not cur:
-        # Try to discover current by probing existence via GetKernelSessionStatus
-        # Use a temporary client for discovery (reuses same token)
         try:
             with httpx.Client(timeout=TIMEOUT, headers={"Authorization": f"Bearer {_token()}"}) as client:
                 for probe in range(20, 0, -1):
+                    found = False
                     for label in (str(probe), f"version-{probe}", f"version{probe}"):
                         try:
                             _get_status(client, owner, slug, label=label)
-                            cur = probe
+                            found = True
                             break
                         except KaggleError:
-                            continue
-                    if cur:
+                            pass
+                        try:
+                            fdata = _list_files_page(client, owner, slug, label=label, page_size=1)
+                            # If call succeeds, version exists (even if no files)
+                            found = True
+                            break
+                        except KaggleError:
+                            pass
+                        try:
+                            odata = _list_output_page(client, owner, slug, label=label, page_size=1)
+                            found = True
+                            break
+                        except KaggleError:
+                            pass
+                    if found:
+                        cur = probe
                         break
         except Exception:
             pass
         if not cur:
-            return []
+            # Last resort: assume at least 1 version exists if kernel exists at all
+            # (ListKernels showed it). Return single entry probe for v1.
+            try:
+                with httpx.Client(timeout=TIMEOUT, headers={"Authorization": f"Bearer {_token()}"}) as client:
+                    # Quick check if kernel exists at all via GetKernel
+                    _get_kernel_metadata(client, owner, slug)
+                    cur = 1
+            except Exception:
+                return []
     # Clamp to sane range
     try:
         max_versions = max(1, min(50, int(max_versions or 20)))
