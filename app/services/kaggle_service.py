@@ -971,21 +971,18 @@ class KaggleService:
             got = await cls.download_outputs_of_version(account_username, kernel_ref, int(version), run_id)
             if got:
                 return got, int(version), []
-            # Fallback: if version-specific failed (common for v1 where label '1' 404s but plain works),
-            # try plain latest pull - for single-version kernels this is the same output.
-            # Check if version is current or latest by probing current_version; if unknown, still try plain.
+            # Fallback: if version-specific failed (e.g. single-version kernels),
+            # try plain latest pull ONLY when version is the current/latest version (never for older versions)
             try:
                 cur = await cls.get_kernel_current_version(account_username, kernel_ref)
                 if cur is None or int(version) == cur:
                     plain, _, diag = await cls.download_latest_outputs(account_username, kernel_ref, run_id)
                     if plain:
-                        # Return plain but note it was fallback
-                        return plain, int(version), [f"version {version}: versioned probe failed, fell back to latest pull"] + diag
+                        return plain, int(version), [f"version {version}: versioned probe fell back to latest pull"] + diag
             except Exception:
                 pass
-            return None, None, [f"version {version}: no files published (tried labels '1','version-1','version1' - all 404/403)"]
-        # For external kernels we don't have a pinned output_version, so let
-        # download_latest_outputs probe current version then plain pull.
+            return None, None, [f"version {version}: no files published or recoverable for this specific version snapshot"]
+        # For external kernels without a specific version, download latest
         return await cls.download_latest_outputs(account_username, kernel_ref, run_id)
 
     @classmethod

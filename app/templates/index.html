@@ -765,14 +765,23 @@
 
             <!-- Version History -->
             <div class="border-t border-[#1e293b] pt-4 space-y-3">
-              <div class="flex items-center justify-between">
-                <h5 class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-                  <i data-lucide="history" class="w-4 h-4 text-amber-400"></i> Version History
-                  <span class="text-[10px] font-normal text-slate-500 normal-case">oldest → newest, pull any version</span>
-                </h5>
-                <button onclick="loadKernelVersions()" id="btn-load-versions" class="inline-flex items-center space-x-2 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 border border-amber-500/40 transition">
-                  <i data-lucide="layers" class="w-3.5 h-3.5"></i><span>Load Versions</span>
-                </button>
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h5 class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
+                    <i data-lucide="history" class="w-4 h-4 text-amber-400"></i>
+                    <span>Version History</span>
+                    <span id="kernels-versions-count-badge" class="hidden px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-400 border border-amber-700/50"></span>
+                  </h5>
+                  <p class="text-[10px] font-normal text-slate-500 mt-0.5">Newest → oldest snapshot, pull files or logs for any version</p>
+                </div>
+                <div class="flex items-center gap-2">
+                  <button onclick="loadKernelVersions(20)" id="btn-load-versions" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 border border-amber-500/40 transition">
+                    <i data-lucide="layers" class="w-3.5 h-3.5"></i><span>Load Versions</span>
+                  </button>
+                  <button onclick="loadKernelVersions(50)" id="btn-load-all-versions" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-amber-400 hover:bg-slate-700 border border-slate-700 transition" title="Load up to 50 versions for kernels with extensive history">
+                    <i data-lucide="list-filter" class="w-3.5 h-3.5"></i><span>Show All (50)</span>
+                  </button>
+                </div>
               </div>
               <div class="glass-panel rounded-xl overflow-hidden max-h-[360px] overflow-y-auto">
                 <table class="w-full text-left text-xs text-slate-300">
@@ -870,15 +879,15 @@
     </div>
   </div>
 
-  <!-- Scripts (v=3 cache-bust for kernels fix) -->
-  <script src="/static/js/app.js?v=3"></script>
-  <script src="/static/js/dashboard.js?v=3"></script>
-  <script src="/static/js/runner.js?v=3"></script>
+  <!-- Scripts (v=4 cache-bust for kernels versioning) -->
+  <script src="/static/js/app.js?v=4"></script>
+  <script src="/static/js/dashboard.js?v=4"></script>
+  <script src="/static/js/runner.js?v=4"></script>
   <script src="/static/js/distributed.js?v=4"></script>
-  <script src="/static/js/terminal.js?v=3"></script>
-  <script src="/static/js/files.js?v=3"></script>
-  <script src="/static/js/kernels.js?v=3"></script>
-  <script src="/static/js/settings.js?v=3"></script>
+  <script src="/static/js/terminal.js?v=4"></script>
+  <script src="/static/js/files.js?v=4"></script>
+  <script src="/static/js/kernels.js?v=4"></script>
+  <script src="/static/js/settings.js?v=4"></script>
   <script>
     // Initialize Lucide icons on page load
     document.addEventListener('DOMContentLoaded', () => {
