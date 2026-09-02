@@ -10,6 +10,7 @@ async function loadSettingsData() {
         document.getElementById('settings-bot-token').placeholder = `Configured: ${s.telegram_bot_token_masked}`;
       }
       document.getElementById('settings-chat-id').value = s.telegram_chat_id || '';
+      document.getElementById('settings-mode').value = s.telegram_mode || 'errors-only';
     }
   } catch (err) {
     console.error('Error loading settings:', err);
@@ -22,7 +23,8 @@ async function handleSaveTelegramSettings(e) {
   const chatId = document.getElementById('settings-chat-id').value;
 
   const payload = {
-    telegram_chat_id: chatId
+    telegram_chat_id: chatId,
+    telegram_mode: document.getElementById('settings-mode').value
   };
   if (token.trim()) {
     payload.telegram_bot_token = token.trim();

@@ -52,6 +52,8 @@ def get_kaggle_cli_path() -> str:
 KAGGLE_APIKEYS_RAW = os.getenv("KAGGLE_APIKEYS", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+# off = silent, errors-only = failures + 11h warning (default), full = everything.
+TELEGRAM_MODE = os.getenv("TELEGRAM_MODE", "errors-only")
 # Dashboard login secret. Leave EMPTY to disable auth (local dev only).
 APP_AUTH_TOKEN = os.getenv("APP_AUTH_TOKEN", "")
 KAGGLE_CLI_PATH = get_kaggle_cli_path()
