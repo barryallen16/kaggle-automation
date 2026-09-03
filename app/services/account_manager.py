@@ -9,6 +9,7 @@ import asyncio
 import shutil
 import logging
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
 from app.config import ACCOUNTS_DIR, KAGGLE_APIKEYS_RAW, get_kaggle_cli_path
 from app.database import (
@@ -17,6 +18,48 @@ from app.database import (
 )
 
 logger = logging.getLogger("account_manager")
+
+# ---------------------------------------------------------------------------
+# Quota-aware runtime caps (self-finishing kernels)
+# ---------------------------------------------------------------------------
+# When an account's remaining weekly GPU quota cannot cover what a session can
+# consume, the dashboard injects MAX_RUNTIME_MINUTES into the pushed kernel so
+# the batch script stops itself cleanly BEFORE the quota runs out. Kaggle does
+# not kill a session whose quota is spent - it hangs it "running" with no
+# progress, which is exactly the case session_monitor force-stops with a stub
+# (and stub cancels lose the version's output snapshot). A self-finishing
+# kernel finalizes as "complete" instead and publishes its partial
+# /kaggle/working normally.
+#
+# Mental model (all in MINUTES): a kernel can consume up to its full session
+# before Kaggle's 12h hard cap force-stops it (that auto-stop DOES publish
+# output). The script self-finishes at 11h measured from its inference loop,
+# i.e. up to ~12h of session time once install+model load are counted. So the
+# quota is the binding constraint whenever the account's remaining quota
+# divided across concurrent burners is UNDER 12h - cap exactly then, and only
+# then. If remaining per session is >= 12h the session cap ends the run first
+# and the quota can never bind.
+# Set AUTO_QUOTA_RUNTIME_CAP=0 to disable injection entirely.
+QUOTA_CAP_ENABLED = os.getenv("AUTO_QUOTA_RUNTIME_CAP", "1") == "1"
+# Kaggle's hard per-session cap (force-stop at 12h, output still publishes).
+SESSION_CAP_MINUTES = 12 * 60
+# Session start -> inference loop: queue + installs + model download/load.
+# Measured ~11 min on the fitcheck runs (relabel log +633s, task_b log +686s)
+# with queue time on top - and the batch scripts themselves reserve 60 min of
+# the 12h session for it, so the cap uses the same 60-min allowance to stay
+# consistent with how the scripts' 11h self-finish default is anchored.
+PRE_LOOP_ALLOWANCE_MINUTES = 60
+# One final item's latency + quota-accounting staleness (DB quota ~5 min old).
+FINISH_SLOP_MINUTES = 10
+# Below this a session can't do meaningful work after the ~11 min load.
+QUOTA_CAP_MIN_INJECT_MINUTES = 10
+# Max age (minutes) of the STORED last_quota before it is refreshed live at
+# launch. The cap is only as good as the "remaining" number it is computed
+# from: a stale row (dashboard restarted, no monitor running between waves)
+# is exactly how a capped script can still outrun the quota that actually
+# applies. While runs are active the monitor refreshes every ~5 min, so rows
+# stay fresh and normal launches never pay for a CLI call.
+QUOTA_CAP_MAX_QUOTA_AGE_MINUTES = 15
 
 class AccountManager:
     _lock = asyncio.Lock()
@@ -413,6 +456,103 @@ class AccountManager:
         quota = await cls.fetch_quota(username)
         save_account(acc["id"], username, acc["api_key"], quota)
         return quota
+
+    @staticmethod
+    def compute_gpu_runtime_budget_minutes(
+        used_hours,
+        limit_hours,
+        concurrent_sessions: int
+    ) -> Optional[int]:
+        """Minutes a NEW GPU session may run before the account's remaining
+        weekly GPU quota would kill it - or None when the quota is not the
+        binding constraint (or cannot be trusted). Pure math, unit-testable.
+
+        runway = remaining_quota / concurrent_sessions is how long the new
+        kernel lasts before the quota is spent (every active GPU session burns
+        quota while they overlap). Quota only binds when runway is UNDER
+        Kaggle's 12h session cap - above that the session cap ends the run
+        first (auto-stop publishes output), so no cap is returned.
+
+        When it binds, budget = runway - (60 min pre-loop allowance + 10 min
+        slop). The 60 min allowance matches what the batch scripts reserve for
+        queue + installs + model load between session start and their
+        inference loop (their 11h self-finish deadline is loop-anchored, while
+        quota death is session-anchored), so the kernel's final flush/upload
+        still lands BEFORE quota death even with a slow cold start. Because
+        runway < 720 min here, budget < 650 min - always under the scripts'
+        11h ceiling, never lengthening their default.
+
+        Returns None (no cap) when:
+        - remaining quota is already spent or unparsable,
+        - runway >= 12h (the session cap, not the quota, ends the run),
+        - budget < QUOTA_CAP_MIN_INJECT_MINUTES (a session this short can't
+          beat model load; the monitor's bounded-loss stub path still applies).
+        Never caps on a guess - unknown quota means leave the kernel alone.
+        """
+        try:
+            used = float(used_hours)
+            limit = float(limit_hours)
+        except (TypeError, ValueError):
+            return None
+        if used < 0 or limit <= 0:
+            return None
+        remaining_h = limit - used
+        if remaining_h <= 0:
+            return None  # already spent - monitor's stub path handles it
+        burners = max(1, int(concurrent_sessions or 1))
+        runway_min = remaining_h * 60.0 / burners
+        if runway_min >= SESSION_CAP_MINUTES:
+            return None  # 12h session cap ends the run first - quota never binds
+        budget_min = runway_min - PRE_LOOP_ALLOWANCE_MINUTES - FINISH_SLOP_MINUTES
+        if budget_min < QUOTA_CAP_MIN_INJECT_MINUTES:
+            return None  # too small to be useful after model load
+        return int(budget_min)
+
+    @classmethod
+    async def gpu_runtime_budget_minutes(
+        cls, username: str, concurrent_sessions: int
+    ) -> Optional[int]:
+        """Quota-aware MAX_RUNTIME_MINUTES for a NEW GPU kernel on `username`.
+
+        Reads the account's stored last_quota, refreshing it LIVE first when the
+        row is stale (no / old `last_checked`): the cap is only as good as the
+        "remaining" number it is computed from, and a stale figure is how a
+        capped kernel can still outrun the quota that actually applies. The
+        refresh goes through the global quota semaphore (throttled), and a
+        failed refresh falls back to the stored value rather than aborting the
+        launch. Fresh rows (monitor keeps them ~5 min old during runs) never
+        pay for a CLI call.
+        """
+        if not QUOTA_CAP_ENABLED:
+            return None
+        acc = get_account_by_username(username)
+        if not acc:
+            return None
+        quota = acc.get("last_quota") or {}
+        try:
+            checked = acc.get("last_checked")
+            if checked:
+                dt = datetime.fromisoformat(str(checked))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                age_min = (datetime.now(timezone.utc) - dt).total_seconds() / 60.0
+            else:
+                age_min = None  # legacy row, no timestamp -> treat as stale
+            if age_min is None or age_min > QUOTA_CAP_MAX_QUOTA_AGE_MINUTES:
+                refreshed = await cls.refresh_account_quota(username)
+                if refreshed:
+                    quota = refreshed
+        except Exception as e:
+            logger.warning(
+                f"Live quota refresh failed for @{username} at launch - "
+                f"using stored quota: {e}"
+            )
+        gpu = quota.get("gpu") or {}
+        if gpu.get("error") or quota.get("error"):
+            return None  # last lookup failed/timed out - do not trust it
+        return cls.compute_gpu_runtime_budget_minutes(
+            gpu.get("used"), gpu.get("limit"), concurrent_sessions
+        )
 
     @classmethod
     def remove_account(cls, username: str):

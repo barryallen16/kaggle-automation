@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Union, Set
 from app.services.kaggle_service import KaggleService
+from app.services.account_manager import AccountManager
 from app.database import create_distributed_workload, update_workload_status, utcnow_iso
 from app.config import LOGS_DIR
 
@@ -412,6 +413,41 @@ class WorkloadDistributor:
                 })
                 current_start = current_end
 
+        # 2b. Quota-aware runtime caps: per account, work out how long the NEW
+        #    kernels can run before the remaining weekly GPU quota is spent and
+        #    inject that as MAX_RUNTIME_MINUTES (see
+        #    AccountManager.gpu_runtime_budget_minutes). The batch scripts then
+        #    self-finish cleanly instead of hanging on a dead quota and needing
+        #    a stop-stub (which loses the version's output snapshot). Only when
+        #    the quota is the binding constraint; user-pinned env vars win.
+        runtime_budgets: Dict[str, Optional[int]] = {}
+        if cls._is_gpu(accelerator):
+            new_sessions: Dict[str, int] = {}
+            for s in shards_info:
+                acc = s["account_username"]
+                new_sessions[acc] = new_sessions.get(acc, 0) + 1
+
+            async def _budget_for(acc: str):
+                concurrent = busy.get(acc, 0) + new_sessions.get(acc, 0)
+                return acc, concurrent, await AccountManager.gpu_runtime_budget_minutes(acc, concurrent)
+
+            results = await asyncio.gather(
+                *(_budget_for(a) for a in accounts), return_exceptions=True
+            )
+            for res in results:
+                if isinstance(res, Exception):  # defensive - the helper swallows its own
+                    logger.warning(f"Quota budget lookup failed: {res}")
+                    continue
+                acc, concurrent, budget = res
+                runtime_budgets[acc] = budget
+                if budget:
+                    logger.info(
+                        f"Quota-aware runtime cap for @{acc}: MAX_RUNTIME_MINUTES="
+                        f"{budget} ({concurrent} concurrent GPU session(s))"
+                    )
+        for p in plan:
+            p["runtime_budget_minutes"] = runtime_budgets.get(p["account"])
+
         # 3. Atomic pre-flight: every planned kernel_ref must be free BEFORE
         #    the workload row exists (zero side effects on rejection).
         from app.database import get_active_runs as db_active_runs
@@ -480,6 +516,13 @@ class WorkloadDistributor:
                 custom_params=shard.get("custom_params")
             )
 
+            # Per-shard env: fold in this account's quota-aware runtime cap
+            # unless the caller pinned MAX_RUNTIME_MINUTES explicitly.
+            budget = runtime_budgets.get(account)
+            shard_env = dict(env_vars or {})
+            if budget and "MAX_RUNTIME_MINUTES" not in shard_env:
+                shard_env["MAX_RUNTIME_MINUTES"] = str(budget)
+
             async with push_sem:
                 result = await KaggleService.push_kernel(
                     account_username=account,
@@ -490,7 +533,7 @@ class WorkloadDistributor:
                     enable_internet=enable_internet,
                     is_trial=is_trial,
                     timeout_seconds=timeout_seconds,
-                    env_vars=env_vars,
+                    env_vars=shard_env or None,
                     workload_id=workload_id,
                     shard_index=idx,
                     total_shards=R
@@ -500,6 +543,7 @@ class WorkloadDistributor:
                 "account": account,
                 "range": [shard["start_index"], shard["end_index"]],
                 "count": shard["count"],
+                "runtime_budget_minutes": budget,
                 "push_result": result
             }
 
