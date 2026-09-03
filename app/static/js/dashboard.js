@@ -24,7 +24,8 @@ function renderDashboard() {
     return;
   }
 
-  grid.innerHTML = AppState.accounts.map(acc => {
+  const sortedAccounts = typeof sortAccountsDescending === 'function' ? sortAccountsDescending(AppState.accounts) : AppState.accounts;
+  grid.innerHTML = sortedAccounts.map(acc => {
     const quota = acc.last_quota || {};
     const gpu = quota.gpu || { used: 0, limit: 30, percent: 0, unit: 'hours' };
     const tpu = quota.tpu || { used: 0, limit: 20, percent: 0, unit: 'hours' };

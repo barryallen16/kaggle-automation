@@ -19,6 +19,26 @@ def _sanitize_account(acc: Dict[str, Any]) -> Dict[str, Any]:
     acc_copy.pop("api_key", None)
     return acc_copy
 
+def _account_quota_left(acc: Dict[str, Any]) -> tuple:
+    last_q = acc.get("last_quota") or {}
+    if not isinstance(last_q, dict):
+        return (0.0, 0.0)
+    gpu = last_q.get("gpu") or {}
+    tpu = last_q.get("tpu") or {}
+    try:
+        gpu_limit = float(gpu.get("limit") if gpu.get("limit") is not None else 30.0)
+        gpu_used = float(gpu.get("used") if gpu.get("used") is not None else 0.0)
+        gpu_left = max(0.0, gpu_limit - gpu_used)
+    except (ValueError, TypeError):
+        gpu_left = 0.0
+    try:
+        tpu_limit = float(tpu.get("limit") if tpu.get("limit") is not None else 20.0)
+        tpu_used = float(tpu.get("used") if tpu.get("used") is not None else 0.0)
+        tpu_left = max(0.0, tpu_limit - tpu_used)
+    except (ValueError, TypeError):
+        tpu_left = 0.0
+    return (gpu_left, tpu_left)
+
 @router.get("")
 async def list_accounts():
     accounts = get_all_accounts()
@@ -38,6 +58,12 @@ async def list_accounts():
         acc_copy = _sanitize_account(acc)
         acc_copy["active_runs"] = active_by_user.get(user, [])
         results.append(acc_copy)
+
+    # Sort descending by quota left: GPU hours first, then TPU hours, then username
+    results.sort(
+        key=lambda a: (_account_quota_left(a)[0], _account_quota_left(a)[1], a.get("username", "")),
+        reverse=True
+    )
 
     return {"success": True, "accounts": results}
 
