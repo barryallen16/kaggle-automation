@@ -622,6 +622,7 @@ class KaggleService:
         env = AccountManager.get_account_env(account_username)
 
         try:
+            proc = None
             async with cls._get_kernel_status_semaphore():
                 proc = await asyncio.wait_for(
                     asyncio.create_subprocess_exec(
@@ -644,6 +645,15 @@ class KaggleService:
 
             return {"success": True, "raw": out_str, "status": status}
         except TimeoutError:
+            if proc is not None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except Exception:
+                    pass
             logger.warning(
                 f"get_kernel_status timed out for {kernel_ref} (@{account_username})"
             )
