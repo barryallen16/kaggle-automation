@@ -1,6 +1,6 @@
 import unittest
 
-from app.services.ops_tracker import tracker, run_stop_key, workload_stop_key
+from services.ops_tracker import tracker, run_stop_key, workload_stop_key
 
 
 class OpsTrackerTestCase(unittest.TestCase):

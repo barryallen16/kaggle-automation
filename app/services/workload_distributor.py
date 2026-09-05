@@ -5,18 +5,21 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional, Union, Set
-from app.services.kaggle_service import KaggleService
-from app.services.account_manager import AccountManager
-from app.database import create_distributed_workload, update_workload_status, utcnow_iso
-from app.config import LOGS_DIR
+from services.kaggle_service import KaggleService
+from services.account_manager import AccountManager
+from database import create_distributed_workload, update_workload_status, utcnow_iso
+from config import LOGS_DIR
 
 logger = logging.getLogger("workload_distributor")
 
 # Global throttle for distributed pushes: without this, 16 accounts *2 sessions
 # = 32 shards launch 16 pushes in parallel at t=0 -> ~2GB RAM spike -> OOM killer
 # does `killed uvicorn`. Limit mirrors KaggleService.PUSH_CONCURRENCY.
-DISTRIBUTED_PUSH_CONCURRENCY = max(1, int(os.getenv("DISTRIBUTED_PUSH_CONCURRENCY", "3")))
+DISTRIBUTED_PUSH_CONCURRENCY = max(
+    1, int(os.getenv("DISTRIBUTED_PUSH_CONCURRENCY", "3"))
+)
 STATUS_CHECK_CONCURRENCY = max(1, int(os.getenv("DISTRIBUTED_STATUS_CONCURRENCY", "3")))
+
 
 class WorkloadDistributor:
     @staticmethod
@@ -28,7 +31,7 @@ class WorkloadDistributor:
         start_index: int,
         end_index: int,
         total_items: int,
-        custom_params: Optional[Dict[str, Any]] = None
+        custom_params: Optional[Dict[str, Any]] = None,
     ) -> str:
         """Injects shard parameters at the top of the .ipynb or .py code."""
         custom_json = json.dumps(custom_params or {})
@@ -55,13 +58,15 @@ class WorkloadDistributor:
                     "execution_count": None,
                     "metadata": {"tags": ["kaggle-automation-shard-config"]},
                     "outputs": [],
-                    "source": [line + "\n" for line in header_code.splitlines()]
+                    "source": [line + "\n" for line in header_code.splitlines()],
                 }
                 # Prepend to cells
                 nb_dict["cells"] = [shard_cell] + nb_dict.get("cells", [])
                 return json.dumps(nb_dict, indent=2)
             except Exception as e:
-                logger.error(f"Failed to parse notebook JSON, prepending header directly: {e}")
+                logger.error(
+                    f"Failed to parse notebook JSON, prepending header directly: {e}"
+                )
                 return header_code + "\n" + code_content
         else:
             return header_code + "\n" + code_content
@@ -71,10 +76,16 @@ class WorkloadDistributor:
     # ------------------------------------------------------------------
     @staticmethod
     def _is_gpu(accelerator: Optional[str]) -> bool:
-        return bool(accelerator) and str(accelerator).lower() not in ("none", "default", "cpu")
+        return bool(accelerator) and str(accelerator).lower() not in (
+            "none",
+            "default",
+            "cpu",
+        )
 
     @classmethod
-    async def _busy_gpu_sessions(cls, accounts: List[str], launch_is_gpu: bool) -> Dict[str, int]:
+    async def _busy_gpu_sessions(
+        cls, accounts: List[str], launch_is_gpu: bool
+    ) -> Dict[str, int]:
         """Counts busy GPU session slots per account.
 
         Queries live Kaggle status for active (queued/running) GPU runs in the DB.
@@ -87,7 +98,7 @@ class WorkloadDistributor:
         at once (the same OOM that kills pushes).
         """
         from datetime import datetime, timezone
-        from app.database import get_active_runs, update_run_status, utcnow_iso
+        from database import get_active_runs, update_run_status, utcnow_iso
 
         busy: Dict[str, Set[str]] = {a: set() for a in accounts}
         if not launch_is_gpu:
@@ -112,14 +123,21 @@ class WorkloadDistributor:
 
         async def check_one(row):
             async with sem:
-                resp = await KaggleService.get_kernel_status(row["account_username"], row["kernel_ref"])
+                resp = await KaggleService.get_kernel_status(
+                    row["account_username"], row["kernel_ref"]
+                )
             return row, resp.get("status", "unknown")
 
         results = await asyncio.gather(*[check_one(r) for r in candidates])
 
         for row, st in results:
             if st in ("complete", "error", "stopped", "cancelacknowledged"):
-                update_run_status(row["id"], "stopped" if "cancel" in st else st, "auto-reaped by availability check", utcnow_iso())
+                update_run_status(
+                    row["id"],
+                    "stopped" if "cancel" in st else st,
+                    "auto-reaped by availability check",
+                    utcnow_iso(),
+                )
                 continue
             busy[row["account_username"]].add(row["kernel_ref"])
 
@@ -129,9 +147,7 @@ class WorkloadDistributor:
 
     @classmethod
     def _normalize_sessions_map(
-        cls,
-        sessions_per_account: Union[int, Dict[str, int], None],
-        accounts: List[str]
+        cls, sessions_per_account: Union[int, Dict[str, int], None], accounts: List[str]
     ) -> Dict[str, int]:
         """Accepts a global count OR per-account overrides {username: 1|2}.
 
@@ -144,7 +160,9 @@ class WorkloadDistributor:
             for acc, val in sessions_per_account.items():
                 if acc in out:
                     try:
-                        out[acc] = max(1, min(cls.MAX_GPU_SESSIONS_PER_ACCOUNT, int(val)))
+                        out[acc] = max(
+                            1, min(cls.MAX_GPU_SESSIONS_PER_ACCOUNT, int(val))
+                        )
                     except (TypeError, ValueError):
                         continue
             return out
@@ -161,7 +179,7 @@ class WorkloadDistributor:
         accounts: List[str],
         sessions_map: Dict[str, int],
         accelerator: str,
-        busy: Dict[str, int]
+        busy: Dict[str, int],
     ) -> List[Dict[str, Any]]:
         """Expands accounts into runners based on free slots (silent reduction).
 
@@ -180,12 +198,9 @@ class WorkloadDistributor:
                 effective = min(chosen, free)
             else:
                 effective = chosen
-            plan.append({
-                "account": a,
-                "requested": chosen,
-                "busy": b,
-                "slots": effective
-            })
+            plan.append(
+                {"account": a, "requested": chosen, "busy": b, "slots": effective}
+            )
         return plan
 
     RECLAIM_WINDOW_MINUTES = 30  # how far back we look for slot-holding kernels
@@ -203,10 +218,12 @@ class WorkloadDistributor:
         kernels are reported as warnings, never auto-cancelled.
         """
         from datetime import datetime, timedelta
-        from app.database import get_all_runs, get_run_by_id
-        from app.services.kaggle_service import KaggleService
+        from database import get_all_runs, get_run_by_id
+        from services.kaggle_service import KaggleService
 
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=cls.RECLAIM_WINDOW_MINUTES)
+        cutoff = datetime.now(timezone.utc) - timedelta(
+            minutes=cls.RECLAIM_WINDOW_MINUTES
+        )
         candidates: Dict[str, List[Dict[str, Any]]] = {a: [] for a in accounts}
         seen_refs = set()
 
@@ -244,13 +261,23 @@ class WorkloadDistributor:
                 return ("gone", {"ref": row["kernel_ref"], "status": st})
             run_row = get_run_by_id(row["id"])
             if not run_row:
-                return ("warn", {"ref": row["kernel_ref"], "status": st, "error": "run not found"})
+                return (
+                    "warn",
+                    {"ref": row["kernel_ref"], "status": st, "error": "run not found"},
+                )
             # stop_kernel itself pushes a stub (heavy) - throttle too
             async with stop_sem:
                 stop = await KaggleService.stop_kernel(row["id"])
             if stop.get("success"):
                 return ("cancelled", {"ref": row["kernel_ref"], "was": st})
-            return ("warn", {"ref": row["kernel_ref"], "status": st, "error": stop.get("error", "stop failed")})
+            return (
+                "warn",
+                {
+                    "ref": row["kernel_ref"],
+                    "status": st,
+                    "error": stop.get("error", "stop failed"),
+                },
+            )
 
         # Flatten candidates into tasks
         tasks = []
@@ -268,7 +295,11 @@ class WorkloadDistributor:
                 else:
                     warnings.append(payload)
 
-        return {"cancelled": cancelled, "already_free": already_gone, "warnings": warnings}
+        return {
+            "cancelled": cancelled,
+            "already_free": already_gone,
+            "warnings": warnings,
+        }
 
     @classmethod
     async def distribute_and_launch(
@@ -285,7 +316,7 @@ class WorkloadDistributor:
         timeout_seconds: Optional[int] = None,
         env_vars: Optional[Dict[str, Any]] = None,
         sessions_per_account: Union[int, Dict[str, int]] = 2,
-        manual_shards: Optional[List[Dict[str, Any]]] = None
+        manual_shards: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Partitions the workload across expanded per-account GPU runners.
 
@@ -299,16 +330,25 @@ class WorkloadDistributor:
         accounts = [a for a in accounts if a]
         if manual_shards:
             if len(manual_shards) == 0:
-                return {"success": False, "error": "At least one manual shard must be specified."}
+                return {
+                    "success": False,
+                    "error": "At least one manual shard must be specified.",
+                }
             for i, ms in enumerate(manual_shards):
                 acc = ms.get("account")
                 if not acc:
-                    return {"success": False, "error": f"Manual shard #{i + 1} is missing a target Kaggle account."}
+                    return {
+                        "success": False,
+                        "error": f"Manual shard #{i + 1} is missing a target Kaggle account.",
+                    }
                 if acc not in accounts:
                     accounts.append(acc)
 
         if not accounts:
-            return {"success": False, "error": "No Kaggle accounts selected for distribution."}
+            return {
+                "success": False,
+                "error": "No Kaggle accounts selected for distribution.",
+            }
         sessions_map = cls._normalize_sessions_map(sessions_per_account, accounts)
 
         # 0. Actively reclaim GPU slots: find lingering dashboard-managed
@@ -334,44 +374,69 @@ class WorkloadDistributor:
         if manual_shards:
             # Validate manual shards
             if len(manual_shards) == 0:
-                return {"success": False, "error": "At least one manual shard must be specified."}
+                return {
+                    "success": False,
+                    "error": "At least one manual shard must be specified.",
+                }
 
             shards_info = []
             for i, ms in enumerate(manual_shards):
                 acc = ms.get("account")
                 if not acc:
-                    return {"success": False, "error": f"Manual shard #{i + 1} is missing a target Kaggle account."}
+                    return {
+                        "success": False,
+                        "error": f"Manual shard #{i + 1} is missing a target Kaggle account.",
+                    }
                 try:
                     s_idx = int(ms.get("start_index", 0))
                     e_idx = int(ms.get("end_index", 0))
                 except (ValueError, TypeError):
-                    return {"success": False, "error": f"Manual shard #{i + 1} has invalid start/end indices."}
+                    return {
+                        "success": False,
+                        "error": f"Manual shard #{i + 1} has invalid start/end indices.",
+                    }
                 if s_idx > e_idx:
-                    return {"success": False, "error": f"Manual shard #{i + 1} has start index ({s_idx}) greater than end index ({e_idx})."}
-                shards_info.append({
-                    "shard_index": i,
-                    "account_username": acc,
-                    "start_index": s_idx,
-                    "end_index": e_idx,
-                    "count": max(0, e_idx - s_idx),
-                    "custom_params": ms.get("custom_params")
-                })
+                    return {
+                        "success": False,
+                        "error": f"Manual shard #{i + 1} has start index ({s_idx}) greater than end index ({e_idx}).",
+                    }
+                shards_info.append(
+                    {
+                        "shard_index": i,
+                        "account_username": acc,
+                        "start_index": s_idx,
+                        "end_index": e_idx,
+                        "count": max(0, e_idx - s_idx),
+                        "custom_params": ms.get("custom_params"),
+                    }
+                )
 
             # Check per-account GPU slot capacity in manual mode
             if cls._is_gpu(accelerator):
                 for acc in set(s["account_username"] for s in shards_info):
-                    assigned = sum(1 for s in shards_info if s["account_username"] == acc)
+                    assigned = sum(
+                        1 for s in shards_info if s["account_username"] == acc
+                    )
                     active_sess = busy.get(acc, 0)
                     if assigned + active_sess > 2:
                         return {
                             "success": False,
-                            "error": f"Account @{acc} has {active_sess} active GPU session(s) and cannot run {assigned} manual shards (Kaggle cap is 2 concurrent GPU sessions)."
+                            "error": f"Account @{acc} has {active_sess} active GPU session(s) and cannot run {assigned} manual shards (Kaggle cap is 2 concurrent GPU sessions).",
                         }
 
             R = len(shards_info)
             total_units = sum(s["count"] for s in shards_info)
             workload_type = "manual_range"
-            plan = [{"account": acc, "slots": sum(1 for s in shards_info if s["account_username"] == acc), "busy": busy.get(acc, 0)} for acc in accounts]
+            plan = [
+                {
+                    "account": acc,
+                    "slots": sum(
+                        1 for s in shards_info if s["account_username"] == acc
+                    ),
+                    "busy": busy.get(acc, 0),
+                }
+                for acc in accounts
+            ]
 
         else:
             # Automatic uniform partition
@@ -387,11 +452,14 @@ class WorkloadDistributor:
                 return {
                     "success": False,
                     "error": f"No free GPU session slots. Active sessions - {detail}. "
-                             "Stop existing runs or wait for them to finish."
+                    "Stop existing runs or wait for them to finish.",
                 }
 
             if total_items < R:
-                return {"success": False, "error": f"Cannot split {total_items} items across {R} runners (fewer items than shards)."}
+                return {
+                    "success": False,
+                    "error": f"Cannot split {total_items} items across {R} runners (fewer items than shards).",
+                }
 
             workload_type = "range"
             total_units = total_items
@@ -404,13 +472,15 @@ class WorkloadDistributor:
                 extra = 1 if i < remainder else 0
                 current_chunk = chunk_size + extra
                 current_end = current_start + current_chunk
-                shards_info.append({
-                    "shard_index": i,
-                    "account_username": runner["account"],
-                    "start_index": current_start,
-                    "end_index": current_end,
-                    "count": current_chunk
-                })
+                shards_info.append(
+                    {
+                        "shard_index": i,
+                        "account_username": runner["account"],
+                        "start_index": current_start,
+                        "end_index": current_end,
+                        "count": current_chunk,
+                    }
+                )
                 current_start = current_end
 
         # 2b. Quota-aware runtime caps: per account, work out how long the NEW
@@ -429,13 +499,19 @@ class WorkloadDistributor:
 
             async def _budget_for(acc: str):
                 concurrent = busy.get(acc, 0) + new_sessions.get(acc, 0)
-                return acc, concurrent, await AccountManager.gpu_runtime_budget_minutes(acc, concurrent)
+                return (
+                    acc,
+                    concurrent,
+                    await AccountManager.gpu_runtime_budget_minutes(acc, concurrent),
+                )
 
             results = await asyncio.gather(
                 *(_budget_for(a) for a in accounts), return_exceptions=True
             )
             for res in results:
-                if isinstance(res, Exception):  # defensive - the helper swallows its own
+                if isinstance(
+                    res, Exception
+                ):  # defensive - the helper swallows its own
                     logger.warning(f"Quota budget lookup failed: {res}")
                     continue
                 acc, concurrent, budget = res
@@ -450,7 +526,8 @@ class WorkloadDistributor:
 
         # 3. Atomic pre-flight: every planned kernel_ref must be free BEFORE
         #    the workload row exists (zero side effects on rejection).
-        from app.database import get_active_runs as db_active_runs
+        from database import get_active_runs as db_active_runs
+
         active_refs = {r["kernel_ref"] for r in db_active_runs()}
         planned_conflicts = []
         for s in shards_info:
@@ -462,26 +539,38 @@ class WorkloadDistributor:
             return {
                 "success": False,
                 "status": "conflict",
-                "error": ("Kernel(s) already active with the same title: "
-                          + ", ".join(sorted(set(planned_conflicts)))
-                          + ". Use a different base title or stop those runs first.")
+                "error": (
+                    "Kernel(s) already active with the same title: "
+                    + ", ".join(sorted(set(planned_conflicts)))
+                    + ". Use a different base title or stop those runs first."
+                ),
             }
 
         # 4. Commit workload row only after validation passed
-        create_distributed_workload({
-            "id": workload_id,
-            "title": base_title,
-            "workload_type": workload_type,
-            "total_units": total_units,
-            "accounts_used": json.dumps({
-                "accounts": list(dict.fromkeys(accounts)),
-                "runners": [{"account": s["account_username"], "shard_index": s["shard_index"]} for s in shards_info],
-                "sessions_per_account": sessions_map,
-                "is_manual": bool(manual_shards)
-            }),
-            "created_at": utcnow_iso(),
-            "status": "running"
-        })
+        create_distributed_workload(
+            {
+                "id": workload_id,
+                "title": base_title,
+                "workload_type": workload_type,
+                "total_units": total_units,
+                "accounts_used": json.dumps(
+                    {
+                        "accounts": list(dict.fromkeys(accounts)),
+                        "runners": [
+                            {
+                                "account": s["account_username"],
+                                "shard_index": s["shard_index"],
+                            }
+                            for s in shards_info
+                        ],
+                        "sessions_per_account": sessions_map,
+                        "is_manual": bool(manual_shards),
+                    }
+                ),
+                "created_at": utcnow_iso(),
+                "status": "running",
+            }
+        )
 
         # 4b. One-time log purge for this batch BEFORE any shard writes.
         # Per-shard purge raced when 16-32 shards launched in parallel (each
@@ -513,7 +602,7 @@ class WorkloadDistributor:
                 start_index=shard["start_index"],
                 end_index=shard["end_index"],
                 total_items=total_units,
-                custom_params=shard.get("custom_params")
+                custom_params=shard.get("custom_params"),
             )
 
             # Per-shard env: fold in this account's quota-aware runtime cap
@@ -536,7 +625,7 @@ class WorkloadDistributor:
                     env_vars=shard_env or None,
                     workload_id=workload_id,
                     shard_index=idx,
-                    total_shards=R
+                    total_shards=R,
                 )
             return {
                 "shard_index": idx,
@@ -544,7 +633,7 @@ class WorkloadDistributor:
                 "range": [shard["start_index"], shard["end_index"]],
                 "count": shard["count"],
                 "runtime_budget_minutes": budget,
-                "push_result": result
+                "push_result": result,
             }
 
         by_account: Dict[str, List[Dict[str, Any]]] = {}
@@ -557,19 +646,26 @@ class WorkloadDistributor:
             out = []
             for j, s in enumerate(group):
                 if j > 0 and stagger_seconds > 0:
-                    await asyncio.sleep(stagger_seconds)  # stagger same-account pushes - Kaggle session cap needs time to settle between pushes
+                    await asyncio.sleep(
+                        stagger_seconds
+                    )  # stagger same-account pushes - Kaggle session cap needs time to settle between pushes
                 # The first push of a fresh account may auto-correct its username
                 # (kaggle_xxxx -> real user) right after returning. Re-resolve so
                 # later shards of the same account never push under the stale name.
                 s = dict(s)
-                s["account_username"] = AccountManager.resolve_effective_username(s["account_username"])
+                s["account_username"] = AccountManager.resolve_effective_username(
+                    s["account_username"]
+                )
                 out.append(await launch_shard(s))
             return out
 
         try:
             grouped = await asyncio.gather(
-                *[launch_account_group(acc, group) for acc, group in by_account.items()],
-                return_exceptions=True
+                *[
+                    launch_account_group(acc, group)
+                    for acc, group in by_account.items()
+                ],
+                return_exceptions=True,
             )
         finally:
             os.environ.pop("_WORKLOAD_PURGE_DONE", None)
@@ -580,10 +676,13 @@ class WorkloadDistributor:
                 processed_results.append({"error": str(group_result)})
                 continue
             for r in group_result:
-                processed_results.append(r if not isinstance(r, Exception) else {"error": str(r)})
+                processed_results.append(
+                    r if not isinstance(r, Exception) else {"error": str(r)}
+                )
 
         pushed_ok = sum(
-            1 for r in processed_results
+            1
+            for r in processed_results
             if isinstance(r, dict) and r.get("push_result", {}).get("success")
         )
         if pushed_ok == R:
@@ -604,5 +703,5 @@ class WorkloadDistributor:
             "runner_plan": plan,
             "shards_pushed": pushed_ok,
             "status": final_status,
-            "shards": processed_results
+            "shards": processed_results,
         }

@@ -4,20 +4,24 @@ import os
 import time
 from datetime import datetime, timezone
 from typing import Dict, Any, Tuple
-from app.config import MAX_KAGGLE_SESSION_SECONDS, WARNING_BEFORE_EXPIRY_SECONDS
+from config import MAX_KAGGLE_SESSION_SECONDS, WARNING_BEFORE_EXPIRY_SECONDS
 
 # Throttle parallel status checks - 32 runs checking status at once is the same
 # OOM spike as pushes (each `kaggle kernels status` is a CLI process).
 MONITOR_CONCURRENCY = max(1, int(os.getenv("MONITOR_CONCURRENCY", "3")))
-from app.database import (
-    get_active_runs, update_run_status, update_run_telegram_flag, get_run_by_id,
-    set_run_output_version
+from database import (
+    get_active_runs,
+    update_run_status,
+    update_run_telegram_flag,
+    get_run_by_id,
+    set_run_output_version,
 )
-from app.services.kaggle_service import KaggleService
-from app.services.account_manager import AccountManager
-from app.services.telegram_service import TelegramService
+from services.kaggle_service import KaggleService
+from services.account_manager import AccountManager
+from services.telegram_service import TelegramService
 
 logger = logging.getLogger("session_monitor")
+
 
 class SessionMonitor:
     _is_running: bool = False
@@ -129,25 +133,36 @@ class SessionMonitor:
             elapsed_seconds = 0
 
         # 1. Check Kaggle kernel status via CLI
-        status_resp = await KaggleService.get_kernel_status(account_username, kernel_ref)
+        status_resp = await KaggleService.get_kernel_status(
+            account_username, kernel_ref
+        )
         remote_status = status_resp.get("status", "unknown")
 
         is_trial = bool(run.get("is_trial"))
 
         # 2. Check if run started and notify Telegram
-        if (remote_status == "running" or elapsed_seconds > 60) and run.get("telegram_notified_start") == 0:
+        if (remote_status == "running" or elapsed_seconds > 60) and run.get(
+            "telegram_notified_start"
+        ) == 0:
             await TelegramService.notify_run_started(run)
             update_run_telegram_flag(run_id, "telegram_notified_start", 1)
 
         # 3/4. Long-session alerts only apply to full 12h runs (never to short trials)
         if not is_trial:
             # 11-Hour Warning (1 hour before 12-hour limit)
-            if elapsed_seconds >= (MAX_KAGGLE_SESSION_SECONDS - WARNING_BEFORE_EXPIRY_SECONDS) and run.get("telegram_notified_11h") == 0:
+            if (
+                elapsed_seconds
+                >= (MAX_KAGGLE_SESSION_SECONDS - WARNING_BEFORE_EXPIRY_SECONDS)
+                and run.get("telegram_notified_11h") == 0
+            ):
                 await TelegramService.notify_11h_warning(run)
                 update_run_telegram_flag(run_id, "telegram_notified_11h", 1)
 
             # 12-Hour Expiry Alert
-            if elapsed_seconds >= MAX_KAGGLE_SESSION_SECONDS and run.get("telegram_notified_12h") == 0:
+            if (
+                elapsed_seconds >= MAX_KAGGLE_SESSION_SECONDS
+                and run.get("telegram_notified_12h") == 0
+            ):
                 await TelegramService.notify_12h_limit_reached(run)
                 update_run_telegram_flag(run_id, "telegram_notified_12h", 1)
 
@@ -156,7 +171,9 @@ class SessionMonitor:
         #    spent (nothing progresses, no completion ever arrives). A run
         #    must end on script completion, the 12h limit - or quota gone.
         terminal = ("complete", "error", "stopped", "canceled")
-        if remote_status not in terminal and cls._is_gpu_accelerator(run.get("accelerator")):
+        if remote_status not in terminal and cls._is_gpu_accelerator(
+            run.get("accelerator")
+        ):
             if await cls._gpu_quota_exhausted(account_username):
                 logger.warning(
                     f"GPU quota exhausted for @{account_username}; force-stopping run {run_id}"
@@ -166,22 +183,28 @@ class SessionMonitor:
                     run_id=run_id,
                     status="stopped",
                     status_message="Stopped by monitor: weekly GPU quota fully exhausted",
-                    end_time=now.isoformat()
+                    end_time=now.isoformat(),
                 )
                 if run.get("telegram_notified_end") == 0:
-                    await TelegramService.notify_run_completed(run, "stopped (GPU quota exhausted)")
+                    await TelegramService.notify_run_completed(
+                        run, "stopped (GPU quota exhausted)"
+                    )
                     update_run_telegram_flag(run_id, "telegram_notified_end", 1)
                 if not stop_resp.get("success"):
-                    logger.warning(f"Force-stop push failed for {run_id}: {stop_resp.get('error')}")
+                    logger.warning(
+                        f"Force-stop push failed for {run_id}: {stop_resp.get('error')}"
+                    )
                 return
 
         # 6. Handle completion, error, or stop
         if remote_status in ["complete", "error", "stopped", "canceled"]:
             update_run_status(
                 run_id=run_id,
-                status="stopped" if remote_status in ("stopped", "canceled") else remote_status,
+                status="stopped"
+                if remote_status in ("stopped", "canceled")
+                else remote_status,
                 status_message=status_resp.get("raw", ""),
-                end_time=now.isoformat()
+                end_time=now.isoformat(),
             )
             # Auto-sync output artifacts the moment a run ends, so the Files
             # tab shows the real files without a manual "Pull from Kaggle".
@@ -189,9 +212,15 @@ class SessionMonitor:
             # what Kaggle finalizes on completion/error/cancel) and pins it on
             # the run row so later manual pulls keep working after deletions.
             try:
-                got_path, used_version, _diag = await KaggleService.download_latest_outputs(
-                    account_username, kernel_ref, run_id,
-                    prefer_version=run.get("output_version")
+                (
+                    got_path,
+                    used_version,
+                    _diag,
+                ) = await KaggleService.download_latest_outputs(
+                    account_username,
+                    kernel_ref,
+                    run_id,
+                    prefer_version=run.get("output_version"),
                 )
                 if used_version and not run.get("output_version"):
                     set_run_output_version(run_id, used_version)

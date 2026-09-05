@@ -1,10 +1,10 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from app.services.kaggle_service import KaggleService
-from app.services.account_manager import AccountManager
-from app.services.ops_tracker import tracker
-from app.database import get_all_runs, get_active_runs, get_run_by_id, update_run_status
+from services.kaggle_service import KaggleService
+from services.account_manager import AccountManager
+from services.ops_tracker import tracker
+from database import get_all_runs, get_active_runs, get_run_by_id, update_run_status
 
 router = APIRouter(prefix="/api/runs", tags=["Runs"])
 
@@ -14,7 +14,9 @@ def _is_gpu_accelerator(acc: Any) -> bool:
     return bool(a) and a not in ("none", "default", "cpu")
 
 
-async def _quota_capped_env(account_username: str, accelerator: Any, env_vars: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+async def _quota_capped_env(
+    account_username: str, accelerator: Any, env_vars: Optional[Dict[str, str]]
+) -> Optional[Dict[str, str]]:
     """Merges a quota-aware MAX_RUNTIME_MINUTES into env_vars for GPU launches.
 
     The kernel self-finishes before the account's remaining weekly GPU quota
@@ -25,25 +27,30 @@ async def _quota_capped_env(account_username: str, accelerator: Any, env_vars: O
     if not _is_gpu_accelerator(accelerator):
         return env_vars
     active = [
-        r for r in get_active_runs()
+        r
+        for r in get_active_runs()
         if r.get("account_username") == account_username
         and _is_gpu_accelerator(r.get("accelerator"))
     ]
-    budget = await AccountManager.gpu_runtime_budget_minutes(account_username, 1 + len(active))
+    budget = await AccountManager.gpu_runtime_budget_minutes(
+        account_username, 1 + len(active)
+    )
     if not budget or (env_vars and "MAX_RUNTIME_MINUTES" in env_vars):
         return env_vars
     return {**(env_vars or {}), "MAX_RUNTIME_MINUTES": str(budget)}
+
 
 class LaunchRunJSONRequest(BaseModel):
     account_username: str
     title: str
     code_content: str
     filename: str = "notebook.ipynb"
-    accelerator: str = "none" # "nvidia-tesla-t4-x2", "nvidia-tesla-t4", "v3-8", "none"
+    accelerator: str = "none"  # "nvidia-tesla-t4-x2", "nvidia-tesla-t4", "v3-8", "none"
     enable_internet: bool = True
     is_trial: bool = False
     timeout_seconds: Optional[int] = None
     env_vars: Optional[Dict[str, str]] = None  # injected as os.environ before user code
+
 
 @router.get("")
 async def list_runs(limit: int = 100):
@@ -51,10 +58,12 @@ async def list_runs(limit: int = 100):
     runs = get_all_runs(limit=limit)
     return {"success": True, "runs": runs}
 
+
 @router.get("/active")
 async def list_active_runs():
     active = get_active_runs()
     return {"success": True, "active_runs": active}
+
 
 @router.get("/{run_id}")
 async def get_run_details(run_id: str):
@@ -62,6 +71,7 @@ async def get_run_details(run_id: str):
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
     return {"success": True, "run": run}
+
 
 @router.post("/launch-json")
 async def launch_run_json(payload: LaunchRunJSONRequest):
@@ -79,7 +89,7 @@ async def launch_run_json(payload: LaunchRunJSONRequest):
             enable_internet=payload.enable_internet,
             is_trial=payload.is_trial,
             timeout_seconds=payload.timeout_seconds,
-            env_vars=env_vars
+            env_vars=env_vars,
         )
         return result
     except HTTPException:
@@ -89,6 +99,7 @@ async def launch_run_json(payload: LaunchRunJSONRequest):
     finally:
         tracker.end("launch_run")
 
+
 @router.post("/upload-and-launch")
 async def upload_and_launch(
     file: UploadFile = File(...),
@@ -97,7 +108,7 @@ async def upload_and_launch(
     accelerator: str = Form("none"),
     enable_internet: bool = Form(True),
     is_trial: bool = Form(False),
-    timeout_seconds: Optional[int] = Form(None)
+    timeout_seconds: Optional[int] = Form(None),
 ):
     tracker.begin("launch_run")
     try:
@@ -115,7 +126,7 @@ async def upload_and_launch(
             enable_internet=enable_internet,
             is_trial=is_trial,
             timeout_seconds=timeout_seconds,
-            env_vars=env_vars
+            env_vars=env_vars,
         )
         return result
     except HTTPException:
@@ -124,6 +135,7 @@ async def upload_and_launch(
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         tracker.end("launch_run")
+
 
 @router.post("/{run_id}/stop")
 async def stop_run(run_id: str):
@@ -135,16 +147,19 @@ async def stop_run(run_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.get("/{run_id}/refresh-status")
 async def refresh_single_status(run_id: str):
     run = get_run_by_id(run_id)
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
-    
-    status_resp = await KaggleService.get_kernel_status(run["account_username"], run["kernel_ref"])
+
+    status_resp = await KaggleService.get_kernel_status(
+        run["account_username"], run["kernel_ref"]
+    )
     new_status = status_resp.get("status", run["status"])
     if new_status != "unknown" and new_status != run["status"]:
         update_run_status(run_id, new_status, status_resp.get("raw", ""))
-    
+
     updated_run = get_run_by_id(run_id)
     return {"success": True, "status": new_status, "run": updated_run}

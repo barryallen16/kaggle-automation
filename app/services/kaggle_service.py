@@ -11,17 +11,33 @@ import re
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, AsyncGenerator
-from app.config import NOTEBOOKS_DIR, LOGS_DIR, OUTPUTS_DIR, get_kaggle_cli_path, get_kernel_env_defaults
-from app.services.account_manager import AccountManager
-from app.services.ops_tracker import tracker, run_stop_key
-from app.database import create_run_record, update_run_status, get_run_by_id, get_active_runs, set_run_output_version, utcnow_iso
+from config import (
+    NOTEBOOKS_DIR,
+    LOGS_DIR,
+    OUTPUTS_DIR,
+    get_kaggle_cli_path,
+    get_kernel_env_defaults,
+)
+from services.account_manager import AccountManager
+from services.ops_tracker import tracker, run_stop_key
+from database import (
+    create_run_record,
+    update_run_status,
+    get_run_by_id,
+    get_active_runs,
+    set_run_output_version,
+    utcnow_iso,
+)
 
 logger = logging.getLogger("kaggle_service")
 
 # Helper that talks to kagglesdk with version_label set - the plain CLI
 # downloads only the LATEST kernel output and silently drops the version.
 VERSIONED_OUTPUT_HELPER = Path(__file__).resolve().parent / "kaggle_versioned_output.py"
-VERSIONED_FETCH_TIMEOUT_SECONDS = int(os.getenv("VERSIONED_FETCH_TIMEOUT_SECONDS", "600"))
+VERSIONED_FETCH_TIMEOUT_SECONDS = int(
+    os.getenv("VERSIONED_FETCH_TIMEOUT_SECONDS", "600")
+)
+
 
 class KaggleService:
     # Seconds to wait before each attempt to fetch the cancelled version's
@@ -36,8 +52,12 @@ class KaggleService:
     # pushes (16 accounts x2 sessions) spike to >2GB and the OOM-killer
     # kills uvicorn ("killed uvicorn ..."). Same for status checks.
     PUSH_CONCURRENCY_LIMIT = max(1, int(os.getenv("PUSH_CONCURRENCY", "3")))
-    KERNEL_STATUS_CONCURRENCY_LIMIT = max(1, int(os.getenv("KERNEL_STATUS_CONCURRENCY", "3")))
-    KERNEL_STATUS_TIMEOUT_SECONDS = int(os.getenv("KERNEL_STATUS_TIMEOUT_SECONDS", "90"))
+    KERNEL_STATUS_CONCURRENCY_LIMIT = max(
+        1, int(os.getenv("KERNEL_STATUS_CONCURRENCY", "3"))
+    )
+    KERNEL_STATUS_TIMEOUT_SECONDS = int(
+        os.getenv("KERNEL_STATUS_TIMEOUT_SECONDS", "90")
+    )
     # Stop pushes are even heavier than regular pushes: each stop_kernel runs a
     # pre-stop output pull + a version probe + the stop-stub push (+ retries).
     # "Stop All" on a 32-shard workload used to fire ALL of them at once -> RAM
@@ -59,8 +79,13 @@ class KaggleService:
     @classmethod
     def _get_kernel_status_semaphore(cls) -> asyncio.Semaphore:
         loop_id = id(asyncio.get_running_loop())
-        if cls._kernel_status_semaphore is None or cls._push_primitive_loop_id != loop_id:
-            cls._kernel_status_semaphore = asyncio.Semaphore(cls.KERNEL_STATUS_CONCURRENCY_LIMIT)
+        if (
+            cls._kernel_status_semaphore is None
+            or cls._push_primitive_loop_id != loop_id
+        ):
+            cls._kernel_status_semaphore = asyncio.Semaphore(
+                cls.KERNEL_STATUS_CONCURRENCY_LIMIT
+            )
             cls._push_primitive_loop_id = loop_id
         return cls._kernel_status_semaphore
 
@@ -140,13 +165,15 @@ class KaggleService:
             cell_src = nb["cells"][0]["source"]
             if isinstance(cell_src, list):
                 cell_src = "".join(cell_src)
-            nb["cells"] = [{
-                "cell_type": "code",
-                "execution_count": None,
-                "metadata": {"tags": ["kaggle-automation-env"]},
-                "outputs": [],
-                "source": cell_src
-            }] + nb["cells"]
+            nb["cells"] = [
+                {
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {"tags": ["kaggle-automation-env"]},
+                    "outputs": [],
+                    "source": cell_src,
+                }
+            ] + nb["cells"]
             return json.dumps(nb)
         return text + "\n"
 
@@ -175,7 +202,7 @@ class KaggleService:
     DEFAULT_KERNELSPEC = {
         "name": "python3",
         "display_name": "Python 3",
-        "language": "python"
+        "language": "python",
     }
 
     @classmethod
@@ -195,16 +222,18 @@ class KaggleService:
         except Exception:
             source_lines = code_content.splitlines(keepends=True)
             nb = {
-                "cells": [{
-                    "cell_type": "code",
-                    "execution_count": None,
-                    "metadata": {},
-                    "outputs": [],
-                    "source": source_lines
-                }],
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": source_lines,
+                    }
+                ],
                 "metadata": {},
                 "nbformat": 4,
-                "nbformat_minor": 2
+                "nbformat_minor": 2,
             }
 
         metadata = nb.get("metadata")
@@ -254,7 +283,7 @@ class KaggleService:
         env_vars: Optional[Dict[str, str]] = None,
         workload_id: Optional[str] = None,
         shard_index: Optional[int] = None,
-        total_shards: Optional[int] = None
+        total_shards: Optional[int] = None,
     ) -> Dict[str, Any]:
         """Prepares metadata, writes code, and executes `kaggle kernels push`."""
         # Resolve stale/renamed account names up front: when the first push of
@@ -264,7 +293,9 @@ class KaggleService:
         # metadata id and the subprocess env all on the CURRENT identity.
         account_username = AccountManager.resolve_effective_username(account_username)
         run_hash = uuid.uuid4().hex[:6]
-        run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{run_hash}"
+        run_id = (
+            f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{run_hash}"
+        )
         # Ensure title fits Kaggle's 50-character limit; derive the slug from
         # exactly what we send as the title. Kaggle keys kernels by the
         # slugified title - a mismatched metadata id makes every re-push 409.
@@ -287,13 +318,13 @@ class KaggleService:
                         "or use a different title."
                     ),
                     "conflict_run_id": r["id"],
-                    "run_id": None
+                    "run_id": None,
                 }
-        
+
         # Working folder for this run
         run_dir = NOTEBOOKS_DIR / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Write notebook / script file
         is_notebook = filename.endswith(".ipynb")
         kernel_type = "notebook" if is_notebook else "script"
@@ -316,15 +347,23 @@ class KaggleService:
         code_path = run_dir / filename
         with open(code_path, "w", encoding="utf-8") as f:
             f.write(code_content)
-        
+
         # Accelerator flags
         # Resolve machine shape first so enable_gpu/enable_tpu stay consistent
         # with it even for names lacking the 'gpu'/'tpu' substrings (l4/a100/h100...)
         resolved_machine = cls.resolve_accelerator(accelerator)
         machine_lower = (resolved_machine or accelerator).lower()
-        enable_gpu = "true" if ("gpu" in machine_lower or "nvidia" in machine_lower or "t4" in machine_lower) else "false"
+        enable_gpu = (
+            "true"
+            if (
+                "gpu" in machine_lower
+                or "nvidia" in machine_lower
+                or "t4" in machine_lower
+            )
+            else "false"
+        )
         enable_tpu = "true" if "tpu" in machine_lower else "false"
-        
+
         metadata = {
             "id": kernel_ref,
             "title": clean_title,
@@ -339,9 +378,9 @@ class KaggleService:
             "dataset_sources": [],
             "competition_sources": [],
             "kernel_sources": [],
-            "model_sources": []
+            "model_sources": [],
         }
-        
+
         meta_path = run_dir / "kernel-metadata.json"
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
@@ -349,12 +388,12 @@ class KaggleService:
         # Build CLI command
         cli = get_kaggle_cli_path()
         cmd = [cli, "kernels", "push", "-p", str(run_dir)]
-        
+
         # Accelerator CLI option (map user-friendly name to Kaggle CLI ID)
         resolved_acc = cls.resolve_accelerator(accelerator)
         if resolved_acc:
             cmd.extend(["--accelerator", resolved_acc])
-        
+
         # Timeout handling (for trial run or custom timeout)
         effective_timeout = timeout_seconds or (300 if is_trial else 43200)
         if effective_timeout:
@@ -379,7 +418,7 @@ class KaggleService:
             f.write(f"Command: {' '.join(cmd)}\n\n")
 
         env = AccountManager.get_account_env(account_username)
-        
+
         # Retry logic for 409 Conflict errors (Kaggle rate-limits when a kernel
         # is still starting/running on the same account) and transient batch-GPU
         # session caps. The two need VERY different windows:
@@ -393,11 +432,11 @@ class KaggleService:
         RETRY_BASE_DELAY = 5  # seconds
         SESSION_CAP_RETRY_DELAYS = [20, 30, 45, 60, 90, 120, 180, 240, 300]
         total_attempts = max(MAX_RETRIES, len(SESSION_CAP_RETRY_DELAYS) + 1)
-        
+
         out_str = ""
         err_str = ""
         proc = None
-        
+
         try:
             for attempt in range(total_attempts):
                 async with cls._get_push_semaphore():
@@ -405,7 +444,7 @@ class KaggleService:
                         *cmd,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
-                        env=env
+                        env=env,
                     )
                     stdout, stderr = await proc.communicate()
                 out_str = stdout.decode("utf-8", errors="ignore")
@@ -422,17 +461,25 @@ class KaggleService:
                 retryable = is_push_err and (is_409 or session_cap_hit)
                 if retryable:
                     if session_cap_hit:
-                        delay = SESSION_CAP_RETRY_DELAYS[min(attempt, len(SESSION_CAP_RETRY_DELAYS) - 1)]
+                        delay = SESSION_CAP_RETRY_DELAYS[
+                            min(attempt, len(SESSION_CAP_RETRY_DELAYS) - 1)
+                        ]
                         retry_limit = total_attempts  # long window: let the first session's queue settle
                     else:
-                        delay = RETRY_BASE_DELAY * (2 ** attempt)
-                        retry_limit = MAX_RETRIES  # 409s clear fast - don't burn 25 min on them
+                        delay = RETRY_BASE_DELAY * (2**attempt)
+                        retry_limit = (
+                            MAX_RETRIES  # 409s clear fast - don't burn 25 min on them
+                        )
                     if attempt >= retry_limit - 1:
                         break
                     reason = "session cap" if session_cap_hit else "409 conflict"
-                    logger.warning(f"Kaggle push attempt {attempt + 1}/{retry_limit} hit {reason}, backing off {delay}s...")
+                    logger.warning(
+                        f"Kaggle push attempt {attempt + 1}/{retry_limit} hit {reason}, backing off {delay}s..."
+                    )
                     with open(log_file_path, "a", encoding="utf-8") as f:
-                        f.write(f"[RETRY] attempt {attempt + 1} failed ({reason}), backing off {delay}s...\n")
+                        f.write(
+                            f"[RETRY] attempt {attempt + 1} failed ({reason}), backing off {delay}s...\n"
+                        )
                     await asyncio.sleep(delay)
                     continue
                 break
@@ -450,7 +497,10 @@ class KaggleService:
             status_msg = err_str if is_error else out_str.strip()
 
             # Parse real Kaggle URL, username, and slug from push output if available
-            url_match = re.search(r'https?://(?:www\.)?kaggle\.com/code/([a-zA-Z0-9_\-]+)/([a-zA-Z0-9_\-]+)', out_str)
+            url_match = re.search(
+                r"https?://(?:www\.)?kaggle\.com/code/([a-zA-Z0-9_\-]+)/([a-zA-Z0-9_\-]+)",
+                out_str,
+            )
             if url_match:
                 real_username = url_match.group(1)
                 real_slug = url_match.group(2)
@@ -458,7 +508,9 @@ class KaggleService:
                 kaggle_url = f"https://www.kaggle.com/code/{kernel_ref}"
                 # Auto-correct account username in DB if it was mismatched
                 if real_username != account_username:
-                    logger.info(f"Auto-corrected account username from {account_username} to {real_username}")
+                    logger.info(
+                        f"Auto-corrected account username from {account_username} to {real_username}"
+                    )
                     AccountManager.update_username(account_username, real_username)
                     account_username = real_username
 
@@ -480,7 +532,7 @@ class KaggleService:
                 "workload_id": workload_id,
                 "shard_index": shard_index,
                 "total_shards": total_shards,
-                "log_file": str(log_file_path)
+                "log_file": str(log_file_path),
             }
             create_run_record(run_record)
 
@@ -492,9 +544,15 @@ class KaggleService:
             if not is_error:
                 max_streams = max(1, int(os.getenv("MAX_CONCURRENT_LOG_STREAMS", "6")))
                 if len(cls._active_stream_processes) < max_streams:
-                    asyncio.create_task(cls.start_background_log_stream(run_id, account_username, kernel_ref, log_file_path))
+                    asyncio.create_task(
+                        cls.start_background_log_stream(
+                            run_id, account_username, kernel_ref, log_file_path
+                        )
+                    )
                 else:
-                    logger.info(f"Log streaming deferred for {run_id} ({len(cls._active_stream_processes)}/{max_streams} streams active) - will start on demand")
+                    logger.info(
+                        f"Log streaming deferred for {run_id} ({len(cls._active_stream_processes)}/{max_streams} streams active) - will start on demand"
+                    )
 
             return {
                 "success": not is_error,
@@ -502,17 +560,13 @@ class KaggleService:
                 "kernel_ref": kernel_ref,
                 "kaggle_url": kaggle_url,
                 "status": status,
-                "message": status_msg
+                "message": status_msg,
             }
         except Exception as e:
             logger.error(f"Failed to push kernel {kernel_ref}: {e}")
             with open(log_file_path, "a", encoding="utf-8") as f:
                 f.write(f"\n[EXCEPTION] {str(e)}\n")
-            return {
-                "success": False,
-                "run_id": run_id,
-                "error": str(e)
-            }
+            return {"success": False, "run_id": run_id, "error": str(e)}
 
     @staticmethod
     def _normalize_kernel_status(raw: str) -> str:
@@ -525,7 +579,7 @@ class KaggleService:
         s = (raw or "").strip().lower()
         if not s:
             return "unknown"
-        if "cancel" in s:          # canceled / cancelled / cancel_acknowledged
+        if "cancel" in s:  # canceled / cancelled / cancel_acknowledged
             return "stopped"
         if "complete" in s:
             return "complete"
@@ -538,7 +592,9 @@ class KaggleService:
         return "unknown"
 
     @classmethod
-    async def get_kernel_status(cls, account_username: str, kernel_ref: str) -> Dict[str, Any]:
+    async def get_kernel_status(
+        cls, account_username: str, kernel_ref: str
+    ) -> Dict[str, Any]:
         """Queries `kaggle kernels status <kernel_ref>` - throttled + bounded."""
         cli = get_kaggle_cli_path()
         cmd = [cli, "kernels", "status", kernel_ref]
@@ -551,9 +607,9 @@ class KaggleService:
                         *cmd,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
-                        env=env
+                        env=env,
                     ),
-                    timeout=cls.KERNEL_STATUS_TIMEOUT_SECONDS
+                    timeout=cls.KERNEL_STATUS_TIMEOUT_SECONDS,
                 )
                 stdout, stderr = await asyncio.wait_for(
                     proc.communicate(), timeout=cls.KERNEL_STATUS_TIMEOUT_SECONDS
@@ -565,13 +621,11 @@ class KaggleService:
             captured = status_match.group(1) if status_match else out_str
             status = cls._normalize_kernel_status(captured)
 
-            return {
-                "success": True,
-                "raw": out_str,
-                "status": status
-            }
+            return {"success": True, "raw": out_str, "status": status}
         except asyncio.TimeoutError:
-            logger.warning(f"get_kernel_status timed out for {kernel_ref} (@{account_username})")
+            logger.warning(
+                f"get_kernel_status timed out for {kernel_ref} (@{account_username})"
+            )
             return {"success": False, "status": "unknown", "error": "timeout"}
         except Exception as e:
             return {"success": False, "status": "unknown", "error": str(e)}
@@ -587,7 +641,7 @@ class KaggleService:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=env
+                env=env,
             )
             stdout, stderr = await proc.communicate()
             logs = stdout.decode("utf-8", errors="ignore")
@@ -597,7 +651,9 @@ class KaggleService:
             return f"Error fetching logs: {str(e)}"
 
     @classmethod
-    async def start_background_log_stream(cls, run_id: str, account_username: str, kernel_ref: str, log_file: Path):
+    async def start_background_log_stream(
+        cls, run_id: str, account_username: str, kernel_ref: str, log_file: Path
+    ):
         """Follows kernel logs and survives follower failures until the run ends.
 
         Two failure modes used to kill logging silently:
@@ -644,16 +700,20 @@ class KaggleService:
                         *cmd,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
-                        env=env
+                        env=env,
                     )
                     cls._active_stream_processes[run_id] = proc
                     drainer = asyncio.create_task(drain_stderr(proc.stderr))
 
                     if first_attach:
-                        append_and_broadcast(f"\n--- Live Stream Connected [{utcnow_iso()}] ---\n")
+                        append_and_broadcast(
+                            f"\n--- Live Stream Connected [{utcnow_iso()}] ---\n"
+                        )
                         first_attach = False
                     else:
-                        append_and_broadcast(f"\n--- Live Stream Re-attached [{utcnow_iso()}] ---\n")
+                        append_and_broadcast(
+                            f"\n--- Live Stream Re-attached [{utcnow_iso()}] ---\n"
+                        )
 
                     while True:
                         line = await proc.stdout.readline()
@@ -677,7 +737,9 @@ class KaggleService:
                 status_resp = await cls.get_kernel_status(account_username, kernel_ref)
                 status = status_resp.get("status", "unknown")
                 if status in ("complete", "error", "stopped"):
-                    append_and_broadcast(f"\n--- Stream ended: kernel {status} [{utcnow_iso()}] ---\n")
+                    append_and_broadcast(
+                        f"\n--- Stream ended: kernel {status} [{utcnow_iso()}] ---\n"
+                    )
                     return
 
                 if produced:
@@ -737,7 +799,9 @@ class KaggleService:
                 del cls._log_subscribers[run_id]
 
     @classmethod
-    async def list_output_files(cls, account_username: str, kernel_ref: str) -> List[Dict[str, Any]]:
+    async def list_output_files(
+        cls, account_username: str, kernel_ref: str
+    ) -> List[Dict[str, Any]]:
         """Lists output files generated by the kernel run."""
         cli = get_kaggle_cli_path()
         cmd = [cli, "kernels", "files", "-v", kernel_ref]
@@ -747,11 +811,11 @@ class KaggleService:
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=env
+                env=env,
             )
             stdout, stderr = await proc.communicate()
             out_str = stdout.decode("utf-8", errors="ignore")
-            
+
             files = []
             if out_str:
                 reader = csv.DictReader(io.StringIO(out_str))
@@ -763,9 +827,13 @@ class KaggleService:
             return []
 
     @classmethod
-    async def _run_versioned_helper(cls, account_username: str, args: List[str],
-                                    timeout: int = VERSIONED_FETCH_TIMEOUT_SECONDS,
-                                    ok_codes: tuple = (0,)) -> Optional[str]:
+    async def _run_versioned_helper(
+        cls,
+        account_username: str,
+        args: List[str],
+        timeout: int = VERSIONED_FETCH_TIMEOUT_SECONDS,
+        ok_codes: tuple = (0,),
+    ) -> Optional[str]:
         """Runs the versioned-output helper under the account's credentials.
 
         Returns parsed stdout (JSON) or None on any failure - the helper is a
@@ -774,14 +842,18 @@ class KaggleService:
         env = AccountManager.get_account_env(account_username)
         try:
             proc = await asyncio.create_subprocess_exec(
-                sys.executable, str(VERSIONED_OUTPUT_HELPER), *args,
+                sys.executable,
+                str(VERSIONED_OUTPUT_HELPER),
+                *args,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=env
+                env=env,
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
-            logger.warning("Versioned-output helper timed out for @%s (%s)", account_username, args)
+            logger.warning(
+                "Versioned-output helper timed out for @%s (%s)", account_username, args
+            )
             return None
         except Exception as e:
             logger.warning(f"Versioned-output helper could not start: {e}")
@@ -789,12 +861,16 @@ class KaggleService:
 
         if proc.returncode not in ok_codes:
             tail = stderr.decode("utf-8", errors="ignore").strip()[-300:]
-            logger.info(f"Versioned-output helper failed (rc={proc.returncode}): {tail}")
+            logger.info(
+                f"Versioned-output helper failed (rc={proc.returncode}): {tail}"
+            )
             return None
         return stdout.decode("utf-8", errors="ignore").strip()
 
     @classmethod
-    async def list_account_kernels(cls, account_username: str, search: str = "", page: int = 1, page_size: int = 20) -> Dict[str, Any]:
+    async def list_account_kernels(
+        cls, account_username: str, search: str = "", page: int = 1, page_size: int = 20
+    ) -> Dict[str, Any]:
         """Lists kernels visible to account_username via ListKernels API.
 
         Returns {kernels: [...], nextPageToken: str}. Each kernel has
@@ -808,31 +884,43 @@ class KaggleService:
         out = await cls._run_versioned_helper(
             account_username,
             ["list", account_username, search or "", str(page), str(page_size)],
-            timeout=120
+            timeout=120,
         )
         if not out:
             return {"kernels": [], "nextPageToken": ""}
         try:
             data = json.loads(out)
             kernels = data.get("kernels") or []
+
             # Reverse chronological: newest lastRunTime first
             def _time_key(k):
-                t = k.get("lastRunTime") or k.get("last_run_time") or k.get("creationTime") or ""
+                t = (
+                    k.get("lastRunTime")
+                    or k.get("last_run_time")
+                    or k.get("creationTime")
+                    or ""
+                )
                 try:
                     # Use string compare for ISO; fallback to 0
                     return t or ""
                 except Exception:
                     return ""
+
             try:
                 kernels.sort(key=_time_key, reverse=True)
             except Exception:
                 pass
-            return {"kernels": kernels, "nextPageToken": data.get("nextPageToken") or ""}
+            return {
+                "kernels": kernels,
+                "nextPageToken": data.get("nextPageToken") or "",
+            }
         except Exception:
             return {"kernels": [], "nextPageToken": ""}
 
     @classmethod
-    async def list_kernel_versions(cls, account_username: str, kernel_ref: str, max_versions: int = 20) -> Dict[str, Any]:
+    async def list_kernel_versions(
+        cls, account_username: str, kernel_ref: str, max_versions: int = 20
+    ) -> Dict[str, Any]:
         """Lists per-version snapshots for a kernel, newest first.
 
         Each version entry has version, label, creationTime (ISO or ""), fileCount, status, hasOutput.
@@ -841,28 +929,29 @@ class KaggleService:
         if not owner or not slug:
             return {"versions": [], "current_version": None}
         out = await cls._run_versioned_helper(
-            account_username,
-            ["versions", owner, slug, str(max_versions)],
-            timeout=180
+            account_username, ["versions", owner, slug, str(max_versions)], timeout=180
         )
         if not out:
             return {"versions": [], "current_version": None}
         try:
             data = json.loads(out)
-            return {"versions": data.get("versions") or [], "current_version": data.get("current_version")}
+            return {
+                "versions": data.get("versions") or [],
+                "current_version": data.get("current_version"),
+            }
         except Exception:
             return {"versions": [], "current_version": None}
 
     @classmethod
-    async def fetch_version_log(cls, account_username: str, kernel_ref: str, version: int) -> str:
+    async def fetch_version_log(
+        cls, account_username: str, kernel_ref: str, version: int
+    ) -> str:
         """Fetches log for a specific version snapshot."""
         owner, _, slug = kernel_ref.partition("/")
         if not owner or not slug:
             return ""
         out = await cls._run_versioned_helper(
-            account_username,
-            ["log", owner, slug, str(version)],
-            timeout=60
+            account_username, ["log", owner, slug, str(version)], timeout=60
         )
         if not out:
             return ""
@@ -872,12 +961,16 @@ class KaggleService:
             return ""
 
     @classmethod
-    async def get_kernel_current_version(cls, account_username: str, kernel_ref: str) -> Optional[int]:
+    async def get_kernel_current_version(
+        cls, account_username: str, kernel_ref: str
+    ) -> Optional[int]:
         """Latest pushed version number of the kernel, or None if unknown."""
         owner, _, slug = kernel_ref.partition("/")
         if not owner or not slug:
             return None
-        out = await cls._run_versioned_helper(account_username, ["meta", owner, slug], timeout=120)
+        out = await cls._run_versioned_helper(
+            account_username, ["meta", owner, slug], timeout=120
+        )
         if not out:
             return None
         try:
@@ -887,7 +980,9 @@ class KaggleService:
             return None
 
     @classmethod
-    async def download_outputs_of_version(cls, account_username: str, kernel_ref: str, version: int, run_id: str) -> Optional[Path]:
+    async def download_outputs_of_version(
+        cls, account_username: str, kernel_ref: str, version: int, run_id: str
+    ) -> Optional[Path]:
         """Downloads a SPECIFIC version's output snapshot into data/outputs/{run_id}.
 
         This recovers the partial /kaggle/working contents of cancelled or
@@ -903,7 +998,7 @@ class KaggleService:
         out = await cls._run_versioned_helper(
             account_username,
             ["fetch", owner, slug, str(version), str(target_dir)],
-            ok_codes=(0, 3)
+            ok_codes=(0, 3),
         )
         if not out:
             return None
@@ -912,12 +1007,16 @@ class KaggleService:
             saved = parsed.get("saved", [])
             notes = parsed.get("tried") or []
             if notes:
-                logger.info(f"Version {version} output probe for {run_id}: " + "; ".join(notes))
+                logger.info(
+                    f"Version {version} output probe for {run_id}: " + "; ".join(notes)
+                )
         except Exception:
             saved = []
         if not saved:
             return None
-        logger.info(f"Version {version} output for {run_id}: saved {len(saved)} file(s).")
+        logger.info(
+            f"Version {version} output for {run_id}: saved {len(saved)} file(s)."
+        )
         return target_dir
 
     @classmethod
@@ -927,7 +1026,7 @@ class KaggleService:
         kernel_ref: str,
         run_id: str,
         prefer_version: Optional[int] = None,
-        probe_previous_for_stop: bool = False
+        probe_previous_for_stop: bool = False,
     ):
         """Best-effort output sync. Returns (path, version_used, diagnostics).
 
@@ -952,8 +1051,10 @@ class KaggleService:
         else:
             current = await cls.get_kernel_current_version(account_username, kernel_ref)
             if not current:
-                diagnostics.append("meta: get_kernel_current_version returned None "
-                                    "(auth failure, network error, or kernel list unavailable)")
+                diagnostics.append(
+                    "meta: get_kernel_current_version returned None "
+                    "(auth failure, network error, or kernel list unavailable)"
+                )
             else:
                 if probe_previous_for_stop and current > 1:
                     attempts.append(current - 1)
@@ -961,9 +1062,13 @@ class KaggleService:
 
         for v in attempts:
             try:
-                got = await cls.download_outputs_of_version(account_username, kernel_ref, v, run_id)
+                got = await cls.download_outputs_of_version(
+                    account_username, kernel_ref, v, run_id
+                )
             except Exception as e:
-                diagnostics.append(f"version {v}: download_outputs_of_version raised: {e}")
+                diagnostics.append(
+                    f"version {v}: download_outputs_of_version raised: {e}"
+                )
                 continue
             if got:
                 return got, v, diagnostics
@@ -980,7 +1085,9 @@ class KaggleService:
             return None, None, diagnostics
 
     @classmethod
-    async def download_external_outputs(cls, account_username: str, kernel_ref: str, version: Optional[int] = None):
+    async def download_external_outputs(
+        cls, account_username: str, kernel_ref: str, version: Optional[int] = None
+    ):
         """Downloads output for any kernel_ref (not just dashboard runs).
 
         Uses a synthetic run_id `ext_<account>_<slug>` so files land in
@@ -994,11 +1101,16 @@ class KaggleService:
         if not owner or not slug:
             return None, None, ["invalid kernel_ref"]
         safe_slug = cls.sanitize_slug(slug)
-        safe_owner = "".join(c for c in owner if c.isalnum() or c in ("-", "_")).lower() or "unknown"
+        safe_owner = (
+            "".join(c for c in owner if c.isalnum() or c in ("-", "_")).lower()
+            or "unknown"
+        )
         run_id = f"ext_{safe_owner}_{safe_slug}"
         if version:
             # Exact version fetch - try versioned helper first
-            got = await cls.download_outputs_of_version(account_username, kernel_ref, int(version), run_id)
+            got = await cls.download_outputs_of_version(
+                account_username, kernel_ref, int(version), run_id
+            )
             if got:
                 return got, int(version), []
             # Fallback: if version-specific failed (e.g. single-version kernels),
@@ -1006,17 +1118,34 @@ class KaggleService:
             try:
                 cur = await cls.get_kernel_current_version(account_username, kernel_ref)
                 if cur is None or int(version) == cur:
-                    plain, _, diag = await cls.download_latest_outputs(account_username, kernel_ref, run_id)
+                    plain, _, diag = await cls.download_latest_outputs(
+                        account_username, kernel_ref, run_id
+                    )
                     if plain:
-                        return plain, int(version), [f"version {version}: versioned probe fell back to latest pull"] + diag
+                        return (
+                            plain,
+                            int(version),
+                            [
+                                f"version {version}: versioned probe fell back to latest pull"
+                            ]
+                            + diag,
+                        )
             except Exception:
                 pass
-            return None, None, [f"version {version}: no files published or recoverable for this specific version snapshot"]
+            return (
+                None,
+                None,
+                [
+                    f"version {version}: no files published or recoverable for this specific version snapshot"
+                ],
+            )
         # For external kernels without a specific version, download latest
         return await cls.download_latest_outputs(account_username, kernel_ref, run_id)
 
     @classmethod
-    async def stop_external_kernel(cls, account_username: str, kernel_ref: str, title: Optional[str] = None) -> Dict[str, Any]:
+    async def stop_external_kernel(
+        cls, account_username: str, kernel_ref: str, title: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Stops any kernel_ref (even not in DB) by pushing a 1-sec exit stub.
 
         Throttled via push semaphore like normal pushes. Returns {success, message/error}.
@@ -1033,16 +1162,22 @@ class KaggleService:
         # Always use notebook stub (Kaggle accepts notebook for any kernel type)
         stub_filename = "cell.ipynb"
         stub_nb = {
-            "cells": [{
-                "cell_type": "code",
-                "execution_count": None,
-                "metadata": {},
-                "outputs": [],
-                "source": ["import sys\n", "print('Session explicitly stopped from Account Kernels Explorer.')\n", "sys.exit(0)\n"]
-            }],
+            "cells": [
+                {
+                    "cell_type": "code",
+                    "execution_count": None,
+                    "metadata": {},
+                    "outputs": [],
+                    "source": [
+                        "import sys\n",
+                        "print('Session explicitly stopped from Account Kernels Explorer.')\n",
+                        "sys.exit(0)\n",
+                    ],
+                }
+            ],
             "metadata": {"kernelspec": dict(cls.DEFAULT_KERNELSPEC)},
             "nbformat": 4,
-            "nbformat_minor": 2
+            "nbformat_minor": 2,
         }
         with open(stop_dir / stub_filename, "w", encoding="utf-8") as f:
             json.dump(stub_nb, f, indent=2)
@@ -1055,7 +1190,7 @@ class KaggleService:
             "is_private": "true",
             "enable_gpu": "false",
             "enable_tpu": "false",
-            "enable_internet": "false"
+            "enable_internet": "false",
         }
         with open(stop_dir / "kernel-metadata.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
@@ -1066,7 +1201,10 @@ class KaggleService:
         try:
             async with cls._get_push_semaphore():
                 proc = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, env=env
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
                 )
                 stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
             out_str = stdout.decode("utf-8", errors="ignore")
@@ -1083,11 +1221,13 @@ class KaggleService:
             tracker.end(f"ext_stop:{account_username}/{kernel_ref}")
 
     @classmethod
-    async def download_outputs(cls, account_username: str, kernel_ref: str, run_id: str) -> Path:
+    async def download_outputs(
+        cls, account_username: str, kernel_ref: str, run_id: str
+    ) -> Path:
         """Downloads all output files to `data/outputs/{run_id}`."""
         target_dir = OUTPUTS_DIR / run_id
         target_dir.mkdir(parents=True, exist_ok=True)
-        
+
         cli = get_kaggle_cli_path()
         # NOTE: kernel ref must be the positional argument; `-o` is a boolean
         # force flag in kaggle CLI >= 2.x (not a value-taking option).
@@ -1098,12 +1238,14 @@ class KaggleService:
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=env
+            env=env,
         )
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
             err_tail = stderr.decode("utf-8", errors="ignore").strip()[-500:]
-            raise RuntimeError(f"kaggle kernels output failed (rc={proc.returncode}): {err_tail}")
+            raise RuntimeError(
+                f"kaggle kernels output failed (rc={proc.returncode}): {err_tail}"
+            )
         return target_dir
 
     @classmethod
@@ -1156,12 +1298,18 @@ class KaggleService:
         try:
             saved_dir = await cls.download_outputs(account_username, kernel_ref, run_id)
             n_saved = sum(1 for p in saved_dir.rglob("*") if p.is_file())
-            logger.info(f"Pre-stop output snapshot for {run_id}: {n_saved} file(s) preserved.")
+            logger.info(
+                f"Pre-stop output snapshot for {run_id}: {n_saved} file(s) preserved."
+            )
         except Exception as e:
-            logger.warning(f"Pre-stop output snapshot failed for {run_id} (continuing): {e}")
+            logger.warning(
+                f"Pre-stop output snapshot failed for {run_id} (continuing): {e}"
+            )
 
         # The version that is current right now is the one the stub will cancel.
-        cancelled_version = await cls.get_kernel_current_version(account_username, kernel_ref)
+        cancelled_version = await cls.get_kernel_current_version(
+            account_username, kernel_ref
+        )
 
         # Push an immediate-exit stub as a new version to stop the Kaggle worker.
         # Preserve the original kernel type so we don't corrupt the notebook.
@@ -1172,16 +1320,22 @@ class KaggleService:
         stub_filename = "cell.ipynb" if is_notebook else "main.py"
         if is_notebook:
             stub_nb = {
-                "cells": [{
-                    "cell_type": "code",
-                    "execution_count": None,
-                    "metadata": {},
-                    "outputs": [],
-                    "source": ["import sys\n", "print('Session explicitly stopped by Kaggle Automation Dashboard.')\n", "sys.exit(0)\n"]
-                }],
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": [
+                            "import sys\n",
+                            "print('Session explicitly stopped by Kaggle Automation Dashboard.')\n",
+                            "sys.exit(0)\n",
+                        ],
+                    }
+                ],
                 "metadata": {"kernelspec": dict(cls.DEFAULT_KERNELSPEC)},
                 "nbformat": 4,
-                "nbformat_minor": 2
+                "nbformat_minor": 2,
             }
             with open(stop_dir / stub_filename, "w", encoding="utf-8") as f:
                 json.dump(stub_nb, f, indent=2)
@@ -1199,7 +1353,7 @@ class KaggleService:
             "is_private": "true",
             "enable_gpu": "false",
             "enable_tpu": "false",
-            "enable_internet": "false"
+            "enable_internet": "false",
         }
         with open(stop_dir / "kernel-metadata.json", "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
@@ -1217,7 +1371,7 @@ class KaggleService:
                     *cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    env=env
+                    env=env,
                 )
                 stdout, stderr = await proc.communicate()
                 out_str = stdout.decode("utf-8", errors="ignore")
@@ -1228,8 +1382,12 @@ class KaggleService:
                 if proc.returncode == 0 and not is_push_err:
                     push_ok = True
                     break
-                if ("409" in combined or "conflict" in combined.lower()) and attempt < 2:
-                    logger.warning(f"Stop push 409 Conflict, retry {attempt + 1}/3 in 5s...")
+                if (
+                    "409" in combined or "conflict" in combined.lower()
+                ) and attempt < 2:
+                    logger.warning(
+                        f"Stop push 409 Conflict, retry {attempt + 1}/3 in 5s..."
+                    )
                     await asyncio.sleep(5)
                     continue
                 break
@@ -1239,15 +1397,18 @@ class KaggleService:
                 break
 
         if push_ok:
-            update_run_status(run_id, "stopped", "Explicitly stopped by user", utcnow_iso())
+            update_run_status(
+                run_id, "stopped", "Explicitly stopped by user", utcnow_iso()
+            )
             # Sibling runs sharing this kernel died with the same push - stamp
             # them too so reap-grace windows are measured correctly.
             for r in get_active_runs():
                 if r["kernel_ref"] == kernel_ref and r["id"] != run_id:
                     update_run_status(
-                        r["id"], "stopped",
+                        r["id"],
+                        "stopped",
                         "Stopped: shared kernel received the stop push",
-                        utcnow_iso()
+                        utcnow_iso(),
                     )
 
             # Pin the cancelled version as THE output holder for this run so
@@ -1278,15 +1439,22 @@ class KaggleService:
                         f"Cancelled version {cancelled_version} of {kernel_ref} had no "
                         f"recoverable output (run may have published nothing yet)."
                     )
-                    extra = (f" Cancelled version {cancelled_version} published no output "
-                             f"files yet - only its log.")
+                    extra = (
+                        f" Cancelled version {cancelled_version} published no output "
+                        f"files yet - only its log."
+                    )
                 else:
                     extra = f" Recovered {len(list(got.glob('*')))} file(s) from cancelled version {cancelled_version}."
             else:
                 extra = " (Could not determine the cancelled version number - pull may return the stub log.)"
 
-            return {"success": True,
-                    "message": f"Run {run_id} ({kernel_ref}) stopped successfully.{extra}"}
+            return {
+                "success": True,
+                "message": f"Run {run_id} ({kernel_ref}) stopped successfully.{extra}",
+            }
 
         update_run_status(run_id, run["status"], f"Stop failed: {last_err}")
-        return {"success": False, "error": f"Failed to stop run {run_id}: {last_err or 'unknown CLI error'}"}
+        return {
+            "success": False,
+            "error": f"Failed to stop run {run_id}: {last_err or 'unknown CLI error'}",
+        }

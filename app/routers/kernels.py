@@ -14,9 +14,9 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app.config import OUTPUTS_DIR
-from app.services.kaggle_service import KaggleService
-from app.database import get_account_by_username
+from config import OUTPUTS_DIR
+from services.kaggle_service import KaggleService
+from database import get_account_by_username
 
 router = APIRouter(prefix="/api/kernels", tags=["External Kernels"])
 
@@ -39,7 +39,9 @@ def _parse_ref(ref: str) -> str:
 def _ext_run_id(kernel_ref: str) -> str:
     owner, _, slug = kernel_ref.partition("/")
     safe_slug = KaggleService.sanitize_slug(slug)
-    safe_owner = "".join(c for c in owner if c.isalnum() or c in ("-", "_")).lower() or "unknown"
+    safe_owner = (
+        "".join(c for c in owner if c.isalnum() or c in ("-", "_")).lower() or "unknown"
+    )
     return f"ext_{safe_owner}_{safe_slug}"
 
 
@@ -57,12 +59,14 @@ async def list_kernels(
     # If list is empty and username looks like fallback, try discovering real username via CLI/JWT and retry
     if not (data.get("kernels") or []) and account.startswith("kaggle_"):
         try:
-            from app.database import get_account_by_username
-            from app.services.account_manager import AccountManager
+            from database import get_account_by_username
+            from services.account_manager import AccountManager
+
             acc = get_account_by_username(account)
             if acc and acc.get("api_key"):
                 # Try JWT decode quick
                 import base64, json as _json
+
                 key = acc["api_key"]
                 real = None
                 try:
@@ -71,7 +75,11 @@ async def list_kernels(
                         payload = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
                         claims = _json.loads(base64.urlsafe_b64decode(payload))
                         for f in ["username", "user_name", "sub", "preferred_username"]:
-                            if f in claims and isinstance(claims[f], str) and not claims[f].isdigit():
+                            if (
+                                f in claims
+                                and isinstance(claims[f], str)
+                                and not claims[f].isdigit()
+                            ):
                                 real = claims[f]
                                 break
                 except Exception:
@@ -79,6 +87,7 @@ async def list_kernels(
                 if not real:
                     try:
                         import uuid
+
                         temp_id = f"debug_{uuid.uuid4().hex[:4]}"
                         real = await AccountManager.fetch_username_for_key(temp_id, key)
                         AccountManager._cleanup_temp_dir(temp_id)
@@ -91,14 +100,21 @@ async def list_kernels(
                     # We need to call helper with real as user param but credentials still from stored account
                     # Use helper directly with real user but same account's env (via _run_versioned_helper with stored account)
                     # For now, try listing with real username via same account's token
-                    retry = await KaggleService.list_account_kernels(account, search, page, pageSize)
+                    retry = await KaggleService.list_account_kernels(
+                        account, search, page, pageSize
+                    )
                     # Actually retry with real as user param by calling helper with real user but same account credentials
                     # To do that, we need to call helper with real user param but same account's env - our list_account_kernels uses account as both user and credentials
                     # So we call helper directly with real user
-                    from app.services.kaggle_service import KaggleService as KS
+                    from services.kaggle_service import KaggleService as KS
                     import json as _j
+
                     # Direct helper call with real user but credentials of stored account
-                    out = await KS._run_versioned_helper(account, ["list", real, search or "", str(page), str(pageSize)], timeout=120)
+                    out = await KS._run_versioned_helper(
+                        account,
+                        ["list", real, search or "", str(page), str(pageSize)],
+                        timeout=120,
+                    )
                     if out:
                         try:
                             d2 = _j.loads(out)
@@ -111,25 +127,36 @@ async def list_kernels(
     # Normalize for frontend: ensure every kernel has ref, title, lastRunTime, currentVersionNumber
     kernels = []
     for k in data.get("kernels") or []:
-        kernels.append({
-            "ref": k.get("ref") or "",
-            "title": k.get("title") or k.get("slug") or "",
-            "slug": k.get("slug") or "",
-            "author": k.get("author") or "",
-            "lastRunTime": k.get("lastRunTime") or k.get("last_run_time") or "",
-            "creationTime": k.get("creationTime") or k.get("dateCreated") or "",
-            "totalVotes": k.get("totalVotes") or 0,
-            "currentVersionNumber": k.get("currentVersionNumber") or k.get("current_version_number") or None,
-            "isPrivate": k.get("isPrivate"),
-            "language": k.get("language") or "",
-            "kernelType": k.get("kernelType") or "",
-            "_raw": k,
-        })
+        kernels.append(
+            {
+                "ref": k.get("ref") or "",
+                "title": k.get("title") or k.get("slug") or "",
+                "slug": k.get("slug") or "",
+                "author": k.get("author") or "",
+                "lastRunTime": k.get("lastRunTime") or k.get("last_run_time") or "",
+                "creationTime": k.get("creationTime") or k.get("dateCreated") or "",
+                "totalVotes": k.get("totalVotes") or 0,
+                "currentVersionNumber": k.get("currentVersionNumber")
+                or k.get("current_version_number")
+                or None,
+                "isPrivate": k.get("isPrivate"),
+                "language": k.get("language") or "",
+                "kernelType": k.get("kernelType") or "",
+                "_raw": k,
+            }
+        )
     # If still empty and is fallback, include hint for frontend
     hint = None
     if not kernels and account.startswith("kaggle_"):
         hint = f"No notebooks found for @{account} — this looks like a fallback username (real Kaggle username couldn't be resolved when the account was added). The quota shows {account} has GPU usage, so its real username is different. Try re-adding the account with its correct Kaggle username, or check /api/accounts/{account}/debug to see JWT vs CLI discovered username."
-    return {"success": True, "kernels": kernels, "nextPageToken": data.get("nextPageToken") or "", "page": page, "pageSize": pageSize, "hint": hint}
+    return {
+        "success": True,
+        "kernels": kernels,
+        "nextPageToken": data.get("nextPageToken") or "",
+        "page": page,
+        "pageSize": pageSize,
+        "hint": hint,
+    }
 
 
 @router.get("/status")
@@ -139,8 +166,15 @@ async def kernel_status(account: str = Query(...), kernel_ref: str = Query(...))
     ref = _parse_ref(kernel_ref)
     resp = await KaggleService.get_kernel_status(account, ref)
     if not resp.get("success"):
-        raise HTTPException(status_code=502, detail=resp.get("error") or "status lookup failed")
-    return {"success": True, "kernel_ref": ref, "status": resp.get("status"), "raw": resp.get("raw")}
+        raise HTTPException(
+            status_code=502, detail=resp.get("error") or "status lookup failed"
+        )
+    return {
+        "success": True,
+        "kernel_ref": ref,
+        "status": resp.get("status"),
+        "raw": resp.get("raw"),
+    }
 
 
 @router.get("/files")
@@ -161,12 +195,26 @@ async def kernel_files(account: str = Query(...), kernel_ref: str = Query(...)):
                     rel = str(p.relative_to(target_dir))
                 except ValueError:
                     rel = p.name
-                local_files.append({"name": p.name, "rel_path": rel, "size": p.stat().st_size})
-    return {"success": True, "kernel_ref": ref, "remote_files": remote_files, "local_files": local_files, "has_local_download": bool(local_files)}
+                local_files.append(
+                    {"name": p.name, "rel_path": rel, "size": p.stat().st_size}
+                )
+    return {
+        "success": True,
+        "kernel_ref": ref,
+        "remote_files": remote_files,
+        "local_files": local_files,
+        "has_local_download": bool(local_files),
+    }
 
 
 @router.get("/logs")
-async def kernel_logs(account: str = Query(...), kernel_ref: str = Query(...), version: Optional[int] = Query(None, description="Specific version to fetch log for")):
+async def kernel_logs(
+    account: str = Query(...),
+    kernel_ref: str = Query(...),
+    version: Optional[int] = Query(
+        None, description="Specific version to fetch log for"
+    ),
+):
     """Fetches execution logs for any kernel_ref, optionally for a specific version."""
     _require_account(account)
     ref = _parse_ref(kernel_ref)
@@ -191,9 +239,20 @@ async def kernel_pull(payload: PullRequest):
     """Downloads output files for any kernel_ref into data/outputs/ext_<owner>_<slug>/."""
     account = _require_account(payload.account_username)
     ref = _parse_ref(payload.kernel_ref)
-    target_dir, version_used, diagnostics = await KaggleService.download_external_outputs(account, ref, version=payload.version)
+    (
+        target_dir,
+        version_used,
+        diagnostics,
+    ) = await KaggleService.download_external_outputs(
+        account, ref, version=payload.version
+    )
     if not target_dir or not target_dir.exists():
-        raise HTTPException(status_code=502, detail=" | ".join(diagnostics) if diagnostics else "No output files found for this kernel (it may still be running or published no files).")
+        raise HTTPException(
+            status_code=502,
+            detail=" | ".join(diagnostics)
+            if diagnostics
+            else "No output files found for this kernel (it may still be running or published no files).",
+        )
     files = []
     for p in sorted(target_dir.rglob("*")):
         if p.is_file():
@@ -201,20 +260,35 @@ async def kernel_pull(payload: PullRequest):
                 rel = str(p.relative_to(target_dir))
             except ValueError:
                 rel = p.name
-            files.append({"name": p.name, "rel_path": rel, "size": p.stat().st_size, "path": rel})
+            files.append(
+                {"name": p.name, "rel_path": rel, "size": p.stat().st_size, "path": rel}
+            )
     if not files:
-        raise HTTPException(status_code=502, detail="Pull succeeded but no files were saved (log-only or empty).")
+        raise HTTPException(
+            status_code=502,
+            detail="Pull succeeded but no files were saved (log-only or empty).",
+        )
     msg = f"Downloaded {len(files)} file(s) from Kaggle"
     if version_used:
         msg += f" (version {version_used} snapshot)"
     elif payload.version:
         msg += f" (version {payload.version} snapshot)"
     msg += "."
-    return {"success": True, "message": msg, "files": files, "version_used": version_used or payload.version, "kernel_ref": ref}
+    return {
+        "success": True,
+        "message": msg,
+        "files": files,
+        "version_used": version_used or payload.version,
+        "kernel_ref": ref,
+    }
 
 
 @router.get("/versions")
-async def kernel_versions(account: str = Query(...), kernel_ref: str = Query(...), max_versions: int = Query(20, ge=1, le=50)):
+async def kernel_versions(
+    account: str = Query(...),
+    kernel_ref: str = Query(...),
+    max_versions: int = Query(20, ge=1, le=50),
+):
     """Lists per-version snapshots for a kernel, newest first. Each entry has version, creationTime, status, fileCount."""
     _require_account(account)
     ref = _parse_ref(kernel_ref)
@@ -223,7 +297,9 @@ async def kernel_versions(account: str = Query(...), kernel_ref: str = Query(...
 
 
 @router.get("/debug/current_version")
-async def debug_current_version(account: str = Query(...), kernel_ref: str = Query(...)):
+async def debug_current_version(
+    account: str = Query(...), kernel_ref: str = Query(...)
+):
     """Debug helper: shows what current_version logic returns and raw GetKernel/ListKernels probes."""
     _require_account(account)
     ref = _parse_ref(kernel_ref)
@@ -232,7 +308,12 @@ async def debug_current_version(account: str = Query(...), kernel_ref: str = Que
     cur = await KaggleService.get_kernel_current_version(account, ref)
     # Also try direct helper list_kernels raw for debugging
     raw_list = await KaggleService.list_account_kernels(account, slug, 1, 5)
-    return {"success": True, "kernel_ref": ref, "current_version_via_service": cur, "list_raw_sample": (raw_list.get("kernels") or [])[:2]}
+    return {
+        "success": True,
+        "kernel_ref": ref,
+        "current_version_via_service": cur,
+        "list_raw_sample": (raw_list.get("kernels") or [])[:2],
+    }
 
 
 class StopRequest(BaseModel):
@@ -250,7 +331,11 @@ async def kernel_stop(payload: StopRequest):
     status_resp = await KaggleService.get_kernel_status(account, ref)
     st = (status_resp.get("status") or "unknown").lower()
     if st in ("complete", "error", "stopped"):
-        return {"success": False, "error": f"Kernel already {st} - no stop needed", "status": st}
+        return {
+            "success": False,
+            "error": f"Kernel already {st} - no stop needed",
+            "status": st,
+        }
     result = await KaggleService.stop_external_kernel(account, ref, title=payload.title)
     if result.get("success"):
         return {"success": True, "message": result.get("message"), "kernel_ref": ref}
@@ -258,7 +343,9 @@ async def kernel_stop(payload: StopRequest):
 
 
 @router.get("/files/download/{filename:path}")
-async def download_single_file(account: str = Query(...), kernel_ref: str = Query(...), filename: str = ""):
+async def download_single_file(
+    account: str = Query(...), kernel_ref: str = Query(...), filename: str = ""
+):
     """Downloads a single pulled file for an external kernel."""
     _require_account(account)
     ref = _parse_ref(kernel_ref)
@@ -295,7 +382,9 @@ async def download_zip(account: str = Query(...), kernel_ref: str = Query(...)):
     run_id = _ext_run_id(ref)
     target_dir = OUTPUTS_DIR / run_id
     if not target_dir.exists() or not any(target_dir.rglob("*")):
-        raise HTTPException(status_code=404, detail="No local files to zip - pull first")
+        raise HTTPException(
+            status_code=404, detail="No local files to zip - pull first"
+        )
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
     tmp.close()
     with zipfile.ZipFile(tmp.name, "w", zipfile.ZIP_DEFLATED) as zf:
@@ -303,4 +392,6 @@ async def download_zip(account: str = Query(...), kernel_ref: str = Query(...)):
             if p.is_file():
                 zf.write(p, arcname=str(p.relative_to(target_dir)))
     safe_slug = KaggleService.sanitize_slug(ref.split("/", 1)[1])
-    return FileResponse(path=tmp.name, filename=f"{safe_slug}_outputs.zip", media_type="application/zip")
+    return FileResponse(
+        path=tmp.name, filename=f"{safe_slug}_outputs.zip", media_type="application/zip"
+    )

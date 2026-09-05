@@ -3,18 +3,20 @@ from fastapi.responses import PlainTextResponse, FileResponse
 from pathlib import Path
 import asyncio
 import re
-from app.services.kaggle_service import KaggleService
-from app.database import get_run_by_id
-from app.config import LOGS_DIR
+from services.kaggle_service import KaggleService
+from database import get_run_by_id
+from config import LOGS_DIR
 
 router = APIRouter(tags=["Logs"])
 
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
+
 def _safe_log_path(run_id: str) -> Path:
     if not SAFE_ID_RE.match(run_id or ""):
         raise HTTPException(status_code=400, detail="Invalid run id")
     return LOGS_DIR / f"{run_id}.log"
+
 
 @router.get("/api/runs/{run_id}/logs")
 async def get_logs(run_id: str, fetch_remote: bool = False):
@@ -29,7 +31,9 @@ async def get_logs(run_id: str, fetch_remote: bool = False):
             local_log = f.read()
 
     if fetch_remote:
-        remote_logs = await KaggleService.fetch_full_logs(run["account_username"], run["kernel_ref"])
+        remote_logs = await KaggleService.fetch_full_logs(
+            run["account_username"], run["kernel_ref"]
+        )
         if remote_logs and not remote_logs.startswith("Error"):
             local_log += "\n--- Remote Logs from Kaggle API ---\n" + remote_logs
             with open(log_path, "w", encoding="utf-8") as f:
@@ -37,18 +41,22 @@ async def get_logs(run_id: str, fetch_remote: bool = False):
 
     return PlainTextResponse(content=local_log)
 
+
 @router.get("/api/runs/{run_id}/logs/download")
 async def download_log_file(run_id: str):
     log_path = _safe_log_path(run_id)
     if not log_path.exists():
         raise HTTPException(status_code=404, detail="Log file does not exist")
-    return FileResponse(path=str(log_path), filename=f"{run_id}_logs.txt", media_type="text/plain")
+    return FileResponse(
+        path=str(log_path), filename=f"{run_id}_logs.txt", media_type="text/plain"
+    )
+
 
 @router.websocket("/ws/runs/{run_id}/logs")
 async def websocket_logs(websocket: WebSocket, run_id: str, skip_initial: bool = False):
     # WebSockets bypass HTTP middleware - enforce the session cookie here
-    from app.config import APP_AUTH_TOKEN
-    from app import auth as auth_mod
+    from config import APP_AUTH_TOKEN
+    import auth as auth_mod
 
     if APP_AUTH_TOKEN:
         cookie = websocket.cookies.get(auth_mod.SESSION_COOKIE_NAME)
@@ -85,7 +93,7 @@ async def websocket_logs(websocket: WebSocket, run_id: str, skip_initial: bool =
             KaggleService.ensure_log_stream(run)
     except Exception:
         pass
-    
+
     try:
         while True:
             # Check for incoming messages or ping/pong

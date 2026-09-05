@@ -11,10 +11,12 @@ import logging
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional
-from app.config import ACCOUNTS_DIR, KAGGLE_APIKEYS_RAW, get_kaggle_cli_path
-from app.database import (
-    save_account, get_all_accounts, get_account_by_username,
-    delete_account as db_delete_account
+from config import ACCOUNTS_DIR, KAGGLE_APIKEYS_RAW, get_kaggle_cli_path
+from database import (
+    save_account,
+    get_all_accounts,
+    get_account_by_username,
+    delete_account as db_delete_account,
 )
 
 logger = logging.getLogger("account_manager")
@@ -60,6 +62,7 @@ QUOTA_CAP_MIN_INJECT_MINUTES = 10
 # applies. While runs are active the monitor refreshes every ~5 min, so rows
 # stay fresh and normal launches never pay for a CLI call.
 QUOTA_CAP_MAX_QUOTA_AGE_MINUTES = 15
+
 
 class AccountManager:
     _lock = asyncio.Lock()
@@ -125,7 +128,9 @@ class AccountManager:
     @staticmethod
     def get_account_config_dir(username_or_id: str) -> Path:
         """Returns the isolated config directory for a specific Kaggle account."""
-        safe_id = "".join(c for c in username_or_id if c.isalnum() or c in ("-", "_")).lower()
+        safe_id = "".join(
+            c for c in username_or_id if c.isalnum() or c in ("-", "_")
+        ).lower()
         acc_dir = ACCOUNTS_DIR / safe_id / ".kaggle"
         acc_dir.mkdir(parents=True, exist_ok=True)
         return acc_dir
@@ -134,7 +139,7 @@ class AccountManager:
     def setup_account_files(cls, username: str, api_key_or_token: str) -> Path:
         """Writes the access_token and/or kaggle.json to the account's isolated config directory."""
         acc_dir = cls.get_account_config_dir(username)
-        
+
         # Check if the key is JSON (kaggle.json format) or raw access token
         stripped = api_key_or_token.strip()
         if stripped.startswith("{") and stripped.endswith("}"):
@@ -205,19 +210,24 @@ class AccountManager:
                     return data["username"]
             except Exception:
                 pass
-        
+
         # Check if JWT format (header.payload.signature)
         parts = stripped.split(".")
         if len(parts) == 3:
             try:
                 import base64
+
                 payload = parts[1]
                 # Add padding if needed
                 payload += "=" * ((4 - len(payload) % 4) % 4)
                 decoded = base64.urlsafe_b64decode(payload)
                 claims = json.loads(decoded)
                 for field in ["username", "user_name", "sub", "preferred_username"]:
-                    if field in claims and isinstance(claims[field], str) and not claims[field].isdigit():
+                    if (
+                        field in claims
+                        and isinstance(claims[field], str)
+                        and not claims[field].isdigit()
+                    ):
                         return claims[field]
             except Exception:
                 pass
@@ -237,20 +247,24 @@ class AccountManager:
 
         env = cls.get_account_env(temp_id)
         cli = get_kaggle_cli_path()
-        
+
         # Try kernels list, datasets list, models list
-        for subcmd in [["kernels", "list", "-m", "-v"], ["datasets", "list", "-m", "-v"], ["models", "list", "-m", "-v"]]:
+        for subcmd in [
+            ["kernels", "list", "-m", "-v"],
+            ["datasets", "list", "-m", "-v"],
+            ["models", "list", "-m", "-v"],
+        ]:
             try:
                 proc = await asyncio.create_subprocess_exec(
                     cli,
                     *subcmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    env=env
+                    env=env,
                 )
                 stdout, stderr = await proc.communicate()
                 out_str = stdout.decode("utf-8", errors="ignore")
-                
+
                 if out_str:
                     csv_reader = csv.DictReader(io.StringIO(out_str))
                     rows = list(csv_reader)
@@ -281,7 +295,8 @@ class AccountManager:
         referencing the placeholder name - that session then died with
         "Authentication required to call the Kaggle API.".
         """
-        from app.database import update_account_username
+        from database import update_account_username
+
         if old_username == new_username:
             return
 
@@ -316,7 +331,7 @@ class AccountManager:
             async with cls._get_quota_semaphore():
                 return await asyncio.wait_for(
                     cls._fetch_quota_unthrottled(username),
-                    timeout=cls.QUOTA_CALL_TIMEOUT_SECONDS
+                    timeout=cls.QUOTA_CALL_TIMEOUT_SECONDS,
                 )
         except asyncio.TimeoutError:
             logger.warning(
@@ -324,9 +339,21 @@ class AccountManager:
             )
             return {
                 "raw": [],
-                "gpu": {"name": "GPU (T4 x 2)", "used": 0, "limit": 30, "unit": "hours", "percent": 0},
-                "tpu": {"name": "TPU VM v3-8", "used": 0, "limit": 20, "unit": "hours", "percent": 0},
-                "error": f"quota lookup timed out after {cls.QUOTA_CALL_TIMEOUT_SECONDS}s"
+                "gpu": {
+                    "name": "GPU (T4 x 2)",
+                    "used": 0,
+                    "limit": 30,
+                    "unit": "hours",
+                    "percent": 0,
+                },
+                "tpu": {
+                    "name": "TPU VM v3-8",
+                    "used": 0,
+                    "limit": 20,
+                    "unit": "hours",
+                    "percent": 0,
+                },
+                "error": f"quota lookup timed out after {cls.QUOTA_CALL_TIMEOUT_SECONDS}s",
             }
 
     @classmethod
@@ -335,21 +362,23 @@ class AccountManager:
         cli = get_kaggle_cli_path()
         cmd = [cli, "quota", "-v"]
         env = cls.get_account_env(username)
-        
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env=env
+                env=env,
             )
             stdout, stderr = await proc.communicate()
             out_str = stdout.decode("utf-8", errors="ignore")
             err_str = stderr.decode("utf-8", errors="ignore")
-            
+
             if proc.returncode != 0:
-                logger.warning(f"kaggle quota failed for {username} (rc={proc.returncode}): {err_str.strip()}")
-            
+                logger.warning(
+                    f"kaggle quota failed for {username} (rc={proc.returncode}): {err_str.strip()}"
+                )
+
             quotas = []
             if out_str:
                 try:
@@ -358,19 +387,38 @@ class AccountManager:
                         quotas.append(row)
                 except Exception as e:
                     logger.error(f"Failed to parse quota CSV for {username}: {e}")
-            
+
             # Format summarized quota stats
             summary = {
                 "raw": quotas,
-                "gpu": {"name": "GPU (T4 x 2)", "used": 0, "limit": 30, "unit": "hours", "percent": 0},
-                "tpu": {"name": "TPU VM v3-8", "used": 0, "limit": 20, "unit": "hours", "percent": 0}
+                "gpu": {
+                    "name": "GPU (T4 x 2)",
+                    "used": 0,
+                    "limit": 30,
+                    "unit": "hours",
+                    "percent": 0,
+                },
+                "tpu": {
+                    "name": "TPU VM v3-8",
+                    "used": 0,
+                    "limit": 20,
+                    "unit": "hours",
+                    "percent": 0,
+                },
             }
 
             def _hours(value_str) -> Optional[float]:
                 """Parses quota hour strings like '12.50h' / '30.00 hours' / '0'."""
                 if value_str is None:
                     return None
-                cleaned = str(value_str).lower().replace("hours", "").replace("hour", "").replace("h", "").strip()
+                cleaned = (
+                    str(value_str)
+                    .lower()
+                    .replace("hours", "")
+                    .replace("hour", "")
+                    .replace("h", "")
+                    .strip()
+                )
                 try:
                     return float(cleaned)
                 except ValueError:
@@ -381,7 +429,9 @@ class AccountManager:
                 # Legacy schema:  acceleratorMaxHours / accelerator,used,limit
                 acc_name = (q.get("resource") or q.get("accelerator") or "").lower()
                 raw_used = q.get("used")
-                limit_val = _hours(q.get("total")) if q.get("total") else _hours(q.get("limit"))
+                limit_val = (
+                    _hours(q.get("total")) if q.get("total") else _hours(q.get("limit"))
+                )
                 used_val = _hours(raw_used)
                 if used_val is None or limit_val is None or limit_val <= 0:
                     continue
@@ -391,7 +441,7 @@ class AccountManager:
                     "used": used_val,
                     "limit": limit_val,
                     "unit": "hours",
-                    "percent": min(100.0, pct)
+                    "percent": min(100.0, pct),
                 }
                 if "tpu" in acc_name:
                     summary["tpu"] = entry
@@ -403,13 +453,27 @@ class AccountManager:
             logger.error(f"Error fetching quota for {username}: {e}")
             return {
                 "raw": [],
-                "gpu": {"name": "GPU (T4 x 2)", "used": 0, "limit": 30, "unit": "hours", "percent": 0},
-                "tpu": {"name": "TPU VM v3-8", "used": 0, "limit": 20, "unit": "hours", "percent": 0},
-                "error": str(e)
+                "gpu": {
+                    "name": "GPU (T4 x 2)",
+                    "used": 0,
+                    "limit": 30,
+                    "unit": "hours",
+                    "percent": 0,
+                },
+                "tpu": {
+                    "name": "TPU VM v3-8",
+                    "used": 0,
+                    "limit": 20,
+                    "unit": "hours",
+                    "percent": 0,
+                },
+                "error": str(e),
             }
 
     @classmethod
-    async def add_account(cls, api_key_or_token: str, custom_username: Optional[str] = None) -> Dict[str, Any]:
+    async def add_account(
+        cls, api_key_or_token: str, custom_username: Optional[str] = None
+    ) -> Dict[str, Any]:
         """Registers a new Kaggle account, discovers its username, writes configs and saves to DB.
 
         Idempotent: if the exact same key is already registered (and no custom username
@@ -421,8 +485,12 @@ class AccountManager:
             # Reuse an existing registration for the same key unless renaming
             if not custom_username:
                 existing = next(
-                    (a for a in get_all_accounts() if a.get("api_key", "").strip() == stripped_key),
-                    None
+                    (
+                        a
+                        for a in get_all_accounts()
+                        if a.get("api_key", "").strip() == stripped_key
+                    ),
+                    None,
                 )
                 if existing:
                     username = existing["username"]
@@ -431,7 +499,7 @@ class AccountManager:
                         "id": existing["id"],
                         "username": username,
                         "quota": existing.get("last_quota"),
-                        "existing": True
+                        "existing": True,
                     }
 
             temp_id = uuid.uuid4().hex[:8]
@@ -450,18 +518,14 @@ class AccountManager:
             # Save in database
             save_account(temp_id, username, api_key_or_token, quota_data)
 
-            return {
-                "id": temp_id,
-                "username": username,
-                "quota": quota_data
-            }
+            return {"id": temp_id, "username": username, "quota": quota_data}
 
     @classmethod
     async def initialize_from_env(cls):
         """Loads all API keys listed in .env KAGGLE_APIKEYS on startup."""
         if not KAGGLE_APIKEYS_RAW:
             return
-        
+
         keys = [k.strip() for k in KAGGLE_APIKEYS_RAW.split(",") if k.strip()]
         for key in keys:
             try:
@@ -478,16 +542,20 @@ class AccountManager:
         is what used to OOM-kill the server with many accounts.
         """
         if cls._get_refresh_all_lock().locked():
-            logger.info("Quota refresh already in progress - waiting for it instead of starting another.")
+            logger.info(
+                "Quota refresh already in progress - waiting for it instead of starting another."
+            )
         async with cls._get_refresh_all_lock():
             accounts = get_all_accounts()
             results = await asyncio.gather(
                 *(cls.refresh_account_quota(acc["username"]) for acc in accounts),
-                return_exceptions=True
+                return_exceptions=True,
             )
             for acc, res in zip(accounts, results):
                 if isinstance(res, Exception):
-                    logger.warning(f"Quota refresh failed for @{acc['username']}: {res}")
+                    logger.warning(
+                        f"Quota refresh failed for @{acc['username']}: {res}"
+                    )
             return get_all_accounts()
 
     @classmethod
@@ -502,9 +570,7 @@ class AccountManager:
 
     @staticmethod
     def compute_gpu_runtime_budget_minutes(
-        used_hours,
-        limit_hours,
-        concurrent_sessions: int
+        used_hours, limit_hours, concurrent_sessions: int
     ) -> Optional[int]:
         """Minutes a NEW GPU session may run before the account's remaining
         weekly GPU quota would kill it - or None when the quota is not the
