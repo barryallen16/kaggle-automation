@@ -360,7 +360,7 @@ async function refreshGlobalData() {
   try {
     const [accRes, runsRes, healthRes, opsRes] = await Promise.all([
       fetchAuthedJson('/api/accounts'),
-      fetchAuthedJson('/api/runs'),
+      fetchAuthedJson('/api/runs?limit=500'),
       fetch('/api/health').then(r => r.json()).catch(() => null),
       fetchAuthedJson('/api/ops/status').catch(() => null)
     ]);
@@ -411,7 +411,7 @@ async function refreshGlobalData() {
       const kar = document.getElementById('kpi-active-runs');
       if (kar) kar.innerText = AppState.activeRuns.length;
       const ktr = document.getElementById('kpi-total-runs');
-      if (ktr) ktr.innerText = AppState.allRuns.length;
+      if (ktr) ktr.innerText = runsRes.total ?? AppState.allRuns.length;
       // Keep dropdowns that depend on runs in sync
       if (typeof updateTerminalRunDropdown === 'function' && AppState.activeTab === 'terminal') {
         try { updateTerminalRunDropdown(); } catch (_) {}
