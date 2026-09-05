@@ -83,7 +83,7 @@ HF_TOKEN=hf_read_token
 
 ### 3. Start the Server
 ```bash
-uv run fastapi app/main.py 
+uv run fastapi run app/main.py 
 ```
 The server binds to `127.0.0.1:8000` by default (safe). Override with `APP_HOST=0.0.0.0` / `APP_PORT=8000` in `.env` **only if you understand the exposure** — set `APP_AUTH_TOKEN` first.
 
