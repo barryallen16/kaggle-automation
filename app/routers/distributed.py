@@ -5,6 +5,7 @@ import asyncio
 import json
 from app.services.workload_distributor import WorkloadDistributor
 from app.services.kaggle_service import KaggleService
+from app.services.ops_tracker import tracker, workload_stop_key
 from app.database import get_all_workloads, get_all_runs, get_active_runs, update_workload_status
 
 router = APIRouter(prefix="/api/distributed", tags=["Distributed Workload"])
@@ -50,6 +51,9 @@ async def launch_distributed_json(payload: DistributedLaunchJSON):
     if len(payload.accounts) < 1:
         raise HTTPException(status_code=400, detail="At least one Kaggle account must be selected.")
 
+    if tracker.is_active("distribute"):
+        raise HTTPException(status_code=409, detail="A distributed launch is already in progress - wait for it to finish first.")
+    tracker.begin("distribute")
     try:
         result = await WorkloadDistributor.distribute_and_launch(
             base_title=payload.base_title,
@@ -71,6 +75,8 @@ async def launch_distributed_json(payload: DistributedLaunchJSON):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        tracker.end("distribute")
 
 @router.post("/{workload_id}/stop")
 async def stop_workload(workload_id: str):
@@ -79,10 +85,20 @@ async def stop_workload(workload_id: str):
     if not targets:
         raise HTTPException(status_code=404, detail=f"No active shards found for workload {workload_id}")
 
-    results = await asyncio.gather(
-        *[KaggleService.stop_kernel(r["id"]) for r in targets],
-        return_exceptions=True
-    )
+    if tracker.is_active(workload_stop_key(workload_id)):
+        return {
+            "success": False,
+            "detail": "Stop is already in progress for this workload - please wait.",
+            "workload_id": workload_id
+        }
+    tracker.begin(workload_stop_key(workload_id))
+    try:
+        results = await asyncio.gather(
+            *[KaggleService.stop_kernel(r["id"]) for r in targets],
+            return_exceptions=True
+        )
+    finally:
+        tracker.end(workload_stop_key(workload_id))
     stopped, failed = [], []
     for r, res in zip(targets, results):
         if isinstance(res, Exception):
@@ -165,21 +181,27 @@ async def upload_and_launch_distributed(
             except ValueError:
                 raise HTTPException(status_code=400, detail="sessions_per_account must be an int or JSON object")
 
-        result = await WorkloadDistributor.distribute_and_launch(
-            base_title=base_title,
-            code_content=code_content,
-            filename=filename,
-            accounts=acc_list,
-            total_items=total_items,
-            start_offset=start_offset,
-            accelerator=accelerator,
-            enable_internet=enable_internet,
-            is_trial=is_trial,
-            timeout_seconds=timeout_seconds,
-            env_vars=parsed_env_vars,
-            sessions_per_account=sessions_val
-        )
-        return result
+        if tracker.is_active("distribute"):
+            raise HTTPException(status_code=409, detail="A distributed launch is already in progress - wait for it to finish first.")
+        tracker.begin("distribute")
+        try:
+            result = await WorkloadDistributor.distribute_and_launch(
+                base_title=base_title,
+                code_content=code_content,
+                filename=filename,
+                accounts=acc_list,
+                total_items=total_items,
+                start_offset=start_offset,
+                accelerator=accelerator,
+                enable_internet=enable_internet,
+                is_trial=is_trial,
+                timeout_seconds=timeout_seconds,
+                env_vars=parsed_env_vars,
+                sessions_per_account=sessions_val
+            )
+            return result
+        finally:
+            tracker.end("distribute")
     except HTTPException:
         raise
     except Exception as e:

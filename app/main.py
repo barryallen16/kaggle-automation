@@ -18,7 +18,7 @@ from app.services.session_monitor import SessionMonitor
 from app import auth
 
 # Import routers
-from app.routers import accounts, runs, distributed, logs, files, settings, kernels
+from app.routers import accounts, runs, distributed, logs, files, settings, kernels, ops
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,6 +78,7 @@ app.include_router(logs.router)
 app.include_router(files.router)
 app.include_router(settings.router)
 app.include_router(kernels.router)
+app.include_router(ops.router)
 
 # Static files & Jinja templates
 static_dir = BASE_DIR / "app" / "static"

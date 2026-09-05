@@ -6,8 +6,104 @@ const AppState = {
   allRuns: [],
   selectedTerminalRunId: null,
   selectedFilesRunId: null,
-  cartFiles: [] // merge cart: [{run_id, filename, label}] across finished notebooks
+  cartFiles: [], // merge cart: [{run_id, filename, label}] across finished notebooks
+  // Long-running server operations (fetched from /api/ops/status). Buttons
+  // stay disabled/"Stopping..." while the matching op is in flight so a page
+  // refresh mid-operation never lets the user re-trigger Stop All, launch
+  // another distribute batch, etc.
+  ops: {
+    stopping_run_ids: [],
+    stopping_workload_ids: [],
+    stopping_kernel_refs: [],
+    distributing: false,
+    single_launching: false,
+    refreshing_quotas: false
+  }
 };
+
+function isRunStopping(runId) {
+  return (AppState.ops?.stopping_run_ids || []).includes(runId);
+}
+
+function isWorkloadStopping(workloadId) {
+  return (AppState.ops?.stopping_workload_ids || []).includes(workloadId);
+}
+
+function isKernelStopping(account, ref) {
+  return (AppState.ops?.stopping_kernel_refs || []).includes(`${account}/${ref}`);
+}
+
+// Optimistically mark a run/workload as stopping so renders flip to the busy
+// button before the next server poll confirms it.
+function markRunStopping(runId, on) {
+  const list = AppState.ops.stopping_run_ids;
+  const i = list.indexOf(runId);
+  if (on && i === -1) list.push(runId);
+  if (!on && i !== -1) list.splice(i, 1);
+}
+
+function markWorkloadStopping(workloadId, on) {
+  const list = AppState.ops.stopping_workload_ids;
+  const i = list.indexOf(workloadId);
+  if (on && i === -1) list.push(workloadId);
+  if (!on && i !== -1) list.splice(i, 1);
+}
+
+function markKernelStopping(account, ref, on) {
+  const list = AppState.ops.stopping_kernel_refs;
+  const key = `${account}/${ref}`;
+  const i = list.indexOf(key);
+  if (on && i === -1) list.push(key);
+  if (!on && i !== -1) list.splice(i, 1);
+}
+
+// Busy-stop button markup shared by dashboard/history rows.
+function stoppingRunButtonHtml(runId, cls) {
+  if (isRunStopping(runId)) {
+    return `<button type="button" disabled class="${cls} opacity-60 cursor-not-allowed"><i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i><span>Stopping...</span></button>`;
+  }
+  return `<button type="button" onclick="stopRun('${esc(runId)}')" class="${cls}"><span>Stop</span></button>`;
+}
+
+// Apply ops state to static (non-row) buttons: distribute + single-run launch
+// + top-bar quota refresh. Row buttons are handled by their render functions.
+function syncOpsStaticButtons() {
+  const distBtn = document.getElementById('btn-launch-dist');
+  if (distBtn) setButtonBusy(distBtn, !!AppState.ops?.distributing, 'Deploying Shards to Accounts...');
+
+  const runBtn = document.getElementById('btn-launch-run');
+  if (runBtn) setButtonBusy(runBtn, !!AppState.ops?.single_launching, 'Deploying to Kaggle CLI...');
+
+  const refreshBtn = document.getElementById('btn-refresh-quotas');
+  if (refreshBtn) setButtonBusy(refreshBtn, !!AppState.ops?.refreshing_quotas, 'Refreshing Quotas...');
+}
+
+// Generic busy toggler that remembers + restores the original button HTML.
+function setButtonBusy(btn, busy, busyLabel) {
+  if (!btn) return;
+  if (busy) {
+    if (!btn.dataset.origHtml) btn.dataset.origHtml = btn.innerHTML;
+    btn.disabled = true;
+    btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>${esc(busyLabel || 'Working...')}</span>`;
+  } else {
+    btn.disabled = false;
+    if (btn.dataset.origHtml) {
+      btn.innerHTML = btn.dataset.origHtml;
+      delete btn.dataset.origHtml;
+    }
+  }
+  try { refreshIcons(); } catch (_) {}
+}
+
+// Fetch the authoritative ops snapshot (e.g. right after an operation we
+// started finishes) so stale poll data can't keep a button busy.
+async function refreshOps() {
+  try {
+    const opsRes = await fetchAuthedJson('/api/ops/status');
+    if (opsRes && opsRes.success) AppState.ops = Object.assign({}, AppState.ops, opsRes);
+  } catch (_) {}
+  syncOpsStaticButtons();
+}
 
 // HTML escaping helper - ALWAYS use for user-controlled data inserted into innerHTML
 function esc(value) {
@@ -98,6 +194,45 @@ function toggleSidebar(force) {
   if (overlay) overlay.classList.toggle('hidden', !shouldOpen);
 }
 
+// Desktop sidebar collapse: full column (labels + quick stats) <-> narrow
+// icon-only rail that gives the content more room. The choice is saved per
+// browser so it survives reloads, and only applies on lg+ screens - the
+// mobile drawer always opens fully expanded.
+function toggleSidebarCollapse() {
+  const collapsed = localStorage.getItem('sidebarCollapsed') === '1';
+  localStorage.setItem('sidebarCollapsed', collapsed ? '0' : '1');
+  applySidebarCollapse();
+}
+
+function applySidebarCollapse() {
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  const collapsed = window.innerWidth >= 1024 && localStorage.getItem('sidebarCollapsed') === '1';
+  sidebar.classList.toggle('sidebar-collapsed', collapsed);
+
+  const btn = document.getElementById('btn-sidebar-collapse');
+  const iconCollapse = document.getElementById('icon-sidebar-collapse');
+  const iconExpand = document.getElementById('icon-sidebar-expand');
+  if (btn) {
+    const label = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
+    btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+  }
+  if (iconCollapse) iconCollapse.classList.toggle('hidden', collapsed);
+  if (iconExpand) iconExpand.classList.toggle('hidden', !collapsed);
+
+  // When collapsed, surface each destination as a tooltip from its label text
+  sidebar.querySelectorAll('.nav-tab').forEach(btnEl => {
+    const label = btnEl.querySelector(':scope > span');
+    if (collapsed && label && label.textContent.trim()) {
+      btnEl.title = label.textContent.trim();
+    } else {
+      btnEl.removeAttribute('title');
+    }
+  });
+}
+
 // Tab navigation router.
 // Tabs are pushed onto browser history (/?tab=<id>) so Back/Forward move
 // between app views instead of exiting to the stale /login entry - the whole
@@ -156,6 +291,9 @@ function switchTab(tabId, push = true) {
   if (tabId === 'runner' || tabId === 'distributed') populateAccountSelects();
   if (tabId === 'kernels') initKernelsTab();
   if (tabId === 'settings') loadSettingsData();
+
+  // Apply in-flight op state immediately (launch/distribute/quota buttons)
+  syncOpsStaticButtons();
 }
 
 const KNOWN_TABS = ['dashboard', 'runner', 'distributed', 'terminal', 'files', 'history', 'kernels', 'settings'];
@@ -195,13 +333,28 @@ async function fetchAuthedJson(url) {
 // Global data refresh
 async function refreshGlobalData() {
   try {
-    const [accRes, runsRes, healthRes] = await Promise.all([
+    const [accRes, runsRes, healthRes, opsRes] = await Promise.all([
       fetchAuthedJson('/api/accounts'),
       fetchAuthedJson('/api/runs'),
-      fetch('/api/health').then(r => r.json()).catch(() => null)
+      fetch('/api/health').then(r => r.json()).catch(() => null),
+      fetchAuthedJson('/api/ops/status').catch(() => null)
     ]);
 
     updateEngineIndicator(healthRes ? healthRes.cli_available : false);
+
+    if (opsRes && opsRes.success) {
+      AppState.ops = Object.assign({}, AppState.ops, opsRes);
+    }
+    syncOpsStaticButtons();
+    // Keep the distributed workload rows live while on that tab: a Stop All
+    // (possibly started before a page refresh) must flip back to "Stop All"
+    // the moment the server finishes, so reload on every poll tick.
+    if (AppState.activeTab === 'distributed' && typeof loadWorkloadsData === 'function') {
+      if (!window.__workloadsReloading) {
+        window.__workloadsReloading = true;
+        loadWorkloadsData().finally(() => { window.__workloadsReloading = false; });
+      }
+    }
 
     if (accRes.success) {
       AppState.accounts = sortAccountsDescending(accRes.accounts || []);
@@ -263,6 +416,10 @@ document.addEventListener('DOMContentLoaded', () => {
     const tab = tabFromLocation() || 'dashboard';
     switchTab(tab, false);
   });
+
+  // Restore the saved desktop sidebar state and react to viewport changes
+  applySidebarCollapse();
+  window.addEventListener('resize', applySidebarCollapse);
 
   refreshGlobalData();
   setInterval(refreshGlobalData, 8000);

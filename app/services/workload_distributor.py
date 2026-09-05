@@ -558,6 +558,11 @@ class WorkloadDistributor:
             for j, s in enumerate(group):
                 if j > 0 and stagger_seconds > 0:
                     await asyncio.sleep(stagger_seconds)  # stagger same-account pushes - Kaggle session cap needs time to settle between pushes
+                # The first push of a fresh account may auto-correct its username
+                # (kaggle_xxxx -> real user) right after returning. Re-resolve so
+                # later shards of the same account never push under the stale name.
+                s = dict(s)
+                s["account_username"] = AccountManager.resolve_effective_username(s["account_username"])
                 out.append(await launch_shard(s))
             return out
 

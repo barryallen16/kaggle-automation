@@ -303,11 +303,11 @@ function renderManualShards() {
   if (manualShardsList.length === 0) {
     container.innerHTML = `
       <div class="p-6 text-center border border-dashed border-[#222d4a] rounded-xl text-slate-500 text-xs">
-        <i data-lucide="layers" class="w-8 h-8 mx-auto mb-2 text-slate-600"></i>
+        <i data-lucide="file" class="w-8 h-8 mx-auto mb-2 text-slate-600"></i>
         <p class="font-medium text-slate-400">No manual shards defined</p>
         <p class="text-[11px] text-slate-500 mt-1 mb-3">Click "+ Add Shard" or "Prefill from Auto" to configure custom workload splits.</p>
         <button type="button" onclick="populateManualFromAuto()" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-purple-600 text-white hover:bg-purple-500 transition">
-          <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
+          <i data-lucide="zap" class="w-3.5 h-3.5"></i>
           <span>Prefill from Auto</span>
         </button>
       </div>
@@ -539,9 +539,11 @@ async function handleDistributedSubmit(e) {
   }
 
   const btn = document.getElementById('btn-launch-dist');
-  btn.disabled = true;
-  btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Deploying Shards to ${targetAccountsCount} Accounts...</span>`;
-  refreshIcons();
+  if (AppState.ops?.distributing) {
+    showToast('A distributed launch is already in progress - please wait.', 'warning');
+    return;
+  }
+  setButtonBusy(btn, true, `Deploying Shards to ${targetAccountsCount} Accounts...`);
 
   try {
     showToast(`Distributing workload across ${targetAccountsCount} Kaggle accounts...`, 'info');
@@ -566,9 +568,7 @@ async function handleDistributedSubmit(e) {
   } catch (err) {
     showToast('Distributed launch error: ' + err.message, 'error');
   } finally {
-    btn.disabled = false;
-    btn.innerHTML = `<i data-lucide="cpu" class="w-4 h-4"></i><span>Distribute & Launch Across Accounts</span>`;
-    refreshIcons();
+    await refreshOps();
   }
 }
 
@@ -619,8 +619,11 @@ async function loadWorkloadsData() {
       const shards = w.shards || [];
       const activeShards = shards.filter(s => s.status === 'queued' || s.status === 'running').length;
       const badge = badges[w.status] || 'bg-slate-800 text-slate-300 border-slate-700';
+      const stopping = isWorkloadStopping(w.id);
       const stopBtn = activeShards > 0
-        ? `<button onclick="stopWorkload('${esc(w.id)}')" class="px-2.5 py-1 rounded text-xs font-semibold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 border border-rose-500/30 transition">Stop All</button>`
+        ? (stopping
+            ? `<button type="button" disabled class="inline-flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-semibold bg-rose-600/20 text-rose-400 border border-rose-500/30 transition opacity-60 cursor-not-allowed"><i data-lucide="loader-2" class="w-3.5 h-3.5 animate-spin"></i><span>Stopping...</span></button>`
+            : `<button onclick="stopWorkload('${esc(w.id)}')" class="px-2.5 py-1 rounded text-xs font-semibold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 border border-rose-500/30 transition">Stop All</button>`)
         : '';
       const accounts = Array.isArray(w.accounts_used)
         ? w.accounts_used.join(', ')
@@ -643,7 +646,13 @@ async function loadWorkloadsData() {
 }
 
 async function stopWorkload(workloadId) {
+  if (isWorkloadStopping(workloadId)) {
+    showToast('This workload is already being stopped - please wait.', 'warning');
+    return;
+  }
   if (!confirm('Stop ALL active shards of this workload on Kaggle?')) return;
+  markWorkloadStopping(workloadId, true);
+  await loadWorkloadsData(); // flip the Stop All row to its busy state immediately
   showToast('Stopping all workload shards...', 'warning');
   try {
     const res = await fetch(`/api/distributed/${workloadId}/stop`, { method: 'POST' });
@@ -653,9 +662,11 @@ async function stopWorkload(workloadId) {
     } else {
       showToast(data.detail || 'Failed to stop workload', 'error');
     }
-    refreshGlobalData();
-    loadWorkloadsData();
   } catch (err) {
     showToast('Error stopping workload: ' + err.message, 'error');
+  } finally {
+    markWorkloadStopping(workloadId, false);
+    await refreshGlobalData();
+    await loadWorkloadsData();
   }
 }

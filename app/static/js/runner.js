@@ -204,9 +204,11 @@ async function handleSingleRunSubmit(e) {
   };
 
   const btn = document.getElementById('btn-launch-run');
-  btn.disabled = true;
-  btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Deploying to Kaggle CLI...</span>`;
-  refreshIcons();
+  if (AppState.ops?.single_launching) {
+    showToast('A kernel launch is already in progress - please wait.', 'warning');
+    return;
+  }
+  setButtonBusy(btn, true, 'Deploying to Kaggle CLI...');
 
   try {
     showToast(isTrial ? 'Initiating Trial Run on Kaggle...' : 'Deploying full notebook session to Kaggle...', 'info');
@@ -233,8 +235,6 @@ async function handleSingleRunSubmit(e) {
   } catch (err) {
     showToast('Launch failed: ' + err.message, 'error');
   } finally {
-    btn.disabled = false;
-    btn.innerHTML = `<i data-lucide="rocket" class="w-4 h-4"></i><span>Deploy & Launch to Kaggle</span>`;
-    refreshIcons();
+    await refreshOps();
   }
 }
