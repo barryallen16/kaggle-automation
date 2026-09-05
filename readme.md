@@ -27,6 +27,37 @@ A centralized dashboard and FastAPI backend to orchestrate, monitor, and distrib
 
 ## Quick Start
 
+### Using docker (recommended)
+
+### 1. Configure `.env` (edit .env.example)
+```env
+# Kaggle access tokens (comma-separated; auto-registered on startup)
+KAGGLE_APIKEYS=your_kaggle_access_token_1,your_kaggle_access_token_2
+
+# Dashboard login secret. Leave EMPTY to disable auth (local dev only).
+APP_AUTH_TOKEN=a-long-random-string
+
+# Telegram alerts: the bot DMs this account when runs start/warn/finish.
+# Get your numeric ID from @userinfobot, then press START on your bot once.
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token
+TELEGRAM_CHAT_ID=123456789
+
+#hf read token for faster model, datasets downloads.
+HF_TOKEN=hf_read_token
+```
+
+### 2. Build the image
+```bash
+docker compose build
+```
+
+### 3. start container
+```bash
+docker compose up
+```
+
+---
+
 ### 1. Activate Environment & Install Dependencies using uv
 ```bash
 uv sync --locked
