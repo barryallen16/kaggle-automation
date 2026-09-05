@@ -1,17 +1,18 @@
+import asyncio
 import os
 import re
 import shutil
-import zipfile
 import tempfile
+import zipfile
 from pathlib import Path
-from typing import List
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
-from starlette.background import BackgroundTask
-from services.kaggle_service import KaggleService
+
+from config import LOGS_DIR, OUTPUTS_DIR
 from database import get_run_by_id
-from config import OUTPUTS_DIR, LOGS_DIR
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+from services.kaggle_service import KaggleService
+from starlette.background import BackgroundTask
 
 router = APIRouter(prefix="/api/runs", tags=["Output Files"])
 
@@ -37,6 +38,24 @@ def _safe_output_path(run_id: str, filename: str) -> Path:
     except ValueError:
         raise HTTPException(status_code=400, detail="Path traversal blocked")
     return target
+
+
+def _concat_files_to_temp(resolved: list[Path], ext: str) -> str:
+    """Byte-concatenates resolved files into a temp file; returns its path.
+
+    Runs inside a worker thread (see merge_selected_files). Cleans the temp
+    file up if any read fails, then re-raises.
+    """
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as out:
+        name = out.name
+        try:
+            for p in resolved:
+                with open(p, "rb") as src:
+                    shutil.copyfileobj(src, out, length=1024 * 1024)
+        except Exception:
+            os.unlink(name)
+            raise
+    return name
 
 
 @router.get("/{run_id}/files")
@@ -141,7 +160,7 @@ async def download_single_file(run_id: str, filename: str):
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
         try:
-            target_dir, _ver, _diag = await KaggleService.download_latest_outputs(
+            _target_dir, _ver, _diag = await KaggleService.download_latest_outputs(
                 run["account_username"],
                 run["kernel_ref"],
                 run_id,
@@ -191,26 +210,25 @@ async def download_all_zip(run_id: str):
         )
 
     # Stream from a temp file instead of buffering the whole archive in RAM
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+        tmp_name = tmp.name
     try:
-        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        with zipfile.ZipFile(tmp_name, "w", zipfile.ZIP_DEFLATED) as zip_file:
             for root, dirs, files in os.walk(target_dir):
                 for file in files:
                     file_path = Path(root) / file
                     archive_name = file_path.relative_to(target_dir)
                     zip_file.write(file_path, archive_name)
-        tmp.close()
     except Exception:
-        tmp.close()
-        os.unlink(tmp.name)
+        os.unlink(tmp_name)
         raise
 
     safe_slug = re.sub(r"[^A-Za-z0-9_\-]", "_", run["kernel_slug"])
     return FileResponse(
-        path=tmp.name,
+        path=tmp_name,
         media_type="application/zip",
         filename=f"{safe_slug}_outputs.zip",
-        background=BackgroundTask(os.unlink, tmp.name),
+        background=BackgroundTask(os.unlink, tmp_name),
     )
 
 
@@ -310,7 +328,7 @@ class MergeItem(BaseModel):
 
 
 class MergeRequest(BaseModel):
-    items: List[MergeItem]
+    items: list[MergeItem]
 
 
 @router.post("/files/merge-download")
@@ -327,7 +345,7 @@ async def merge_selected_files(request: MergeRequest):
         )
 
     # 1. Resolve every selected file locally; auto-pull missing runs from Kaggle.
-    resolved: List[Path] = []
+    resolved: list[Path] = []
     seen_runs: set = set()
     pull_failed_runs: set = set()
     for item in request.items:
@@ -371,16 +389,9 @@ async def merge_selected_files(request: MergeRequest):
     if not re.fullmatch(r"\.[A-Za-z0-9_]{1,10}", ext):
         ext = ".bin"
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-    tmp.close()
-    try:
-        with open(tmp.name, "wb") as out:
-            for p in resolved:
-                with open(p, "rb") as src:
-                    shutil.copyfileobj(src, out, length=1024 * 1024)
-    except Exception:
-        os.unlink(tmp.name)
-        raise
+    # The concatenation can move hundreds of MB - run it in a worker thread so
+    # the event loop stays responsive for other requests.
+    tmp_name = await asyncio.to_thread(_concat_files_to_temp, resolved, ext)
 
     media_type = "application/octet-stream"
     if ext in (".jsonl", ".ndjson"):
@@ -389,8 +400,8 @@ async def merge_selected_files(request: MergeRequest):
         media_type = "text/plain"
 
     return FileResponse(
-        path=tmp.name,
+        path=tmp_name,
         filename=f"merged{ext}",
         media_type=media_type,
-        background=BackgroundTask(os.unlink, tmp.name),
+        background=BackgroundTask(os.unlink, tmp_name),
     )

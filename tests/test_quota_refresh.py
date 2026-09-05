@@ -9,8 +9,8 @@ These tests prove:
 """
 
 import os
-import sys
 import shutil
+import sys
 import tempfile
 import unittest
 
@@ -35,8 +35,9 @@ def tearDownModule():
 def _fresh_am():
     """Fresh config + database + AccountManager bound to the temp data dir."""
     import importlib
-    import app.config as cfg
-    import app.database as db
+
+    import config as cfg
+    import database as db
     db_file = cfg.DB_PATH
     for suffix in ("", "-wal", "-shm"):
         try:
@@ -45,7 +46,7 @@ def _fresh_am():
             pass
     importlib.reload(cfg)
     importlib.reload(db)
-    import app.services.account_manager as am_mod
+    import services.account_manager as am_mod
     importlib.reload(am_mod)
     db.init_db()
     return cfg, db, am_mod.AccountManager
@@ -60,7 +61,7 @@ class TestQuotaRefreshSafety(unittest.TestCase):
     def test_1_concurrency_capped(self):
         os.environ["QUOTA_REFRESH_CONCURRENCY"] = "3"
         try:
-            cfg, db, AM = _fresh_am()
+            _cfg, db, AM = _fresh_am()
             _seed_accounts(db, 8)
 
             state = {"active": 0, "max_active": 0}
@@ -80,7 +81,7 @@ class TestQuotaRefreshSafety(unittest.TestCase):
             os.environ.pop("QUOTA_REFRESH_CONCURRENCY", None)
 
     def test_2_single_flight_joins_inflight_run(self):
-        cfg, db, AM = _fresh_am()
+        _cfg, db, AM = _fresh_am()
         _seed_accounts(db, 4)
 
         batches = {"peak": 0}
@@ -103,7 +104,7 @@ class TestQuotaRefreshSafety(unittest.TestCase):
         self.assertLessEqual(batches["peak"], 4)
 
     def test_3_timeout_returns_graceful_error(self):
-        cfg, db, AM = _fresh_am()
+        _cfg, _db, AM = _fresh_am()
         AM.QUOTA_CALL_TIMEOUT_SECONDS = 0.05
 
         async def hanging_lookup(username):

@@ -1,12 +1,12 @@
+import csv
+import io
 import os
+import subprocess
+from collections import defaultdict
+from pathlib import Path
+
 from dotenv import load_dotenv
 from fastapi import FastAPI
-import subprocess
-import csv
-from pathlib import Path
-import json
-import io
-from collections import defaultdict
 
 kaggle_dir = Path.home() / ".kaggle"
 ACCESS_TOKEN_FILEPATH = kaggle_dir / "access_token"

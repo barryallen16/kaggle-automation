@@ -1,13 +1,14 @@
-import sqlite3
 import json
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+import sqlite3
+from datetime import UTC, datetime
+from typing import Any
+
 from config import DB_PATH
 
 
 def utcnow_iso() -> str:
     """Timezone-aware UTC timestamp (ISO-8601 with Z suffix, parseable by JS Date)."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def get_db_connection() -> sqlite3.Connection:
@@ -105,7 +106,7 @@ def init_db():
 
 # Database helper functions
 def save_account(
-    account_id: str, username: str, api_key: str, last_quota: Optional[Dict] = None
+    account_id: str, username: str, api_key: str, last_quota: dict | None = None
 ):
     conn = get_db_connection()
     now = utcnow_iso()
@@ -125,7 +126,7 @@ def save_account(
     conn.close()
 
 
-def get_all_accounts() -> List[Dict[str, Any]]:
+def get_all_accounts() -> list[dict[str, Any]]:
     conn = get_db_connection()
     rows = conn.execute("SELECT * FROM accounts ORDER BY username ASC").fetchall()
     accounts = []
@@ -141,7 +142,7 @@ def get_all_accounts() -> List[Dict[str, Any]]:
     return accounts
 
 
-def get_account_by_username(username: str) -> Optional[Dict[str, Any]]:
+def get_account_by_username(username: str) -> dict[str, Any] | None:
     conn = get_db_connection()
     row = conn.execute(
         "SELECT * FROM accounts WHERE username = ?", (username,)
@@ -179,7 +180,7 @@ def update_account_username(old_username: str, new_username: str):
     conn.close()
 
 
-def create_run_record(run_data: Dict[str, Any]):
+def create_run_record(run_data: dict[str, Any]):
     conn = get_db_connection()
     with conn:
         conn.execute(
@@ -202,7 +203,7 @@ def create_run_record(run_data: Dict[str, Any]):
 
 
 def update_run_status(
-    run_id: str, status: str, status_message: str = "", end_time: Optional[str] = None
+    run_id: str, status: str, status_message: str = "", end_time: str | None = None
 ):
     conn = get_db_connection()
     with conn:
@@ -253,7 +254,7 @@ def set_run_output_version(run_id: str, version: int):
     conn.close()
 
 
-def get_all_runs(limit: int = 100) -> List[Dict[str, Any]]:
+def get_all_runs(limit: int = 100) -> list[dict[str, Any]]:
     conn = get_db_connection()
     rows = conn.execute(
         "SELECT * FROM runs ORDER BY start_time DESC LIMIT ?", (limit,)
@@ -263,7 +264,7 @@ def get_all_runs(limit: int = 100) -> List[Dict[str, Any]]:
     return runs
 
 
-def get_active_runs() -> List[Dict[str, Any]]:
+def get_active_runs() -> list[dict[str, Any]]:
     conn = get_db_connection()
     rows = conn.execute(
         "SELECT * FROM runs WHERE status IN ('queued', 'running') ORDER BY start_time DESC"
@@ -273,14 +274,14 @@ def get_active_runs() -> List[Dict[str, Any]]:
     return runs
 
 
-def get_run_by_id(run_id: str) -> Optional[Dict[str, Any]]:
+def get_run_by_id(run_id: str) -> dict[str, Any] | None:
     conn = get_db_connection()
     row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
     conn.close()
     return dict(row) if row else None
 
 
-def create_distributed_workload(workload_data: Dict[str, Any]):
+def create_distributed_workload(workload_data: dict[str, Any]):
     conn = get_db_connection()
     with conn:
         conn.execute(
@@ -293,7 +294,7 @@ def create_distributed_workload(workload_data: Dict[str, Any]):
     conn.close()
 
 
-def get_all_workloads() -> List[Dict[str, Any]]:
+def get_all_workloads() -> list[dict[str, Any]]:
     conn = get_db_connection()
     rows = conn.execute(
         "SELECT * FROM distributed_workloads ORDER BY created_at DESC"
@@ -320,7 +321,7 @@ def update_workload_status(workload_id: str, status: str):
     conn.close()
 
 
-def get_setting(key: str, default: Optional[str] = None) -> Optional[str]:
+def get_setting(key: str, default: str | None = None) -> str | None:
     conn = get_db_connection()
     row = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
     conn.close()

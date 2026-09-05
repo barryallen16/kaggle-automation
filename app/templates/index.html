@@ -37,7 +37,7 @@
     }
   </script>
   <!-- Lucide Icons -->
-  <script src="/static/js/pixel-icons.js"></script>
+  <script src="/static/js/pixel-icons.js?v=5"></script>
   <!-- Local fonts (Geist / Geist Mono / Geist Pixel) -->
   <link rel="stylesheet" href="/static/css/fonts.css">
   <link rel="stylesheet" href="/static/css/custom.css">
@@ -104,9 +104,9 @@
         </button>
 
         <button onclick="switchTab('kernels')" id="nav-kernels" class="nav-tab w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all border border-transparent">
-          <i data-lucide="database" class="w-4 h-4 text-indigo-400"></i>
+          <!-- Inline SVG (not JS-replaced) so this nav icon always renders -->
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true" focusable="false" class="w-4 h-4 text-indigo-400 flex-shrink-0"><path d="M6 2h2v2h-2zM8 2h2v2h-2zM10 2h2v2h-2zM12 2h2v2h-2zM14 2h2v2h-2zM16 2h2v2h-2zM18 2h2v2h-2zM4 4h2v2h-2zM6 4h2v2h-2zM8 4h2v2h-2zM10 4h2v2h-2zM12 4h2v2h-2zM14 4h2v2h-2zM16 4h2v2h-2zM18 4h2v2h-2zM20 4h2v2h-2zM4 6h2v2h-2zM6 6h2v2h-2zM8 6h2v2h-2zM10 6h2v2h-2zM12 6h2v2h-2zM14 6h2v2h-2zM16 6h2v2h-2zM18 6h2v2h-2zM20 6h2v2h-2zM4 8h2v2h-2zM6 8h2v2h-2zM8 8h2v2h-2zM10 8h2v2h-2zM12 8h2v2h-2zM14 8h2v2h-2zM16 8h2v2h-2zM18 8h2v2h-2zM20 8h2v2h-2zM4 10h2v2h-2zM6 10h2v2h-2zM8 10h2v2h-2zM10 10h2v2h-2zM12 10h2v2h-2zM14 10h2v2h-2zM16 10h2v2h-2zM18 10h2v2h-2zM20 10h2v2h-2zM4 12h2v2h-2zM6 12h2v2h-2zM8 12h2v2h-2zM10 12h2v2h-2zM12 12h2v2h-2zM14 12h2v2h-2zM16 12h2v2h-2zM18 12h2v2h-2zM20 12h2v2h-2zM4 14h2v2h-2zM6 14h2v2h-2zM8 14h2v2h-2zM10 14h2v2h-2zM12 14h2v2h-2zM14 14h2v2h-2zM16 14h2v2h-2zM18 14h2v2h-2zM20 14h2v2h-2zM6 16h2v2h-2zM8 16h2v2h-2zM10 16h2v2h-2zM12 16h2v2h-2zM14 16h2v2h-2zM16 16h2v2h-2zM18 16h2v2h-2z"/></svg>
           <span>Account Kernels</span>
-          <i data-lucide="hard-drive" class="w-3.5 h-3.5 text-slate-500 ml-auto"></i>
         </button>
 
         <div class="pt-4 pb-2">
@@ -956,14 +956,14 @@
   </div>
 
   <!-- Scripts (v=4 cache-bust for kernels versioning) -->
-  <script src="/static/js/app.js?v=4"></script>
-  <script src="/static/js/dashboard.js?v=4"></script>
-  <script src="/static/js/runner.js?v=4"></script>
-  <script src="/static/js/distributed.js?v=4"></script>
-  <script src="/static/js/terminal.js?v=4"></script>
-  <script src="/static/js/files.js?v=4"></script>
-  <script src="/static/js/kernels.js?v=4"></script>
-  <script src="/static/js/settings.js?v=4"></script>
+  <script src="/static/js/app.js?v=5"></script>
+  <script src="/static/js/dashboard.js?v=5"></script>
+  <script src="/static/js/runner.js?v=5"></script>
+  <script src="/static/js/distributed.js?v=5"></script>
+  <script src="/static/js/terminal.js?v=5"></script>
+  <script src="/static/js/files.js?v=5"></script>
+  <script src="/static/js/kernels.js?v=5"></script>
+  <script src="/static/js/settings.js?v=5"></script>
   <script>
     // Initialize Lucide icons on page load
     document.addEventListener('DOMContentLoaded', () => {

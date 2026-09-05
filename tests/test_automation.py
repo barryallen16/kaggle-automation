@@ -7,23 +7,21 @@ import tempfile
 _TEST_TMP = tempfile.mkdtemp(prefix="kaggle_automation_test_")
 os.environ["AUTOMATION_DATA_DIR"] = _TEST_TMP
 
-import unittest
 import json
+import unittest
 import uuid
-import asyncio
-from pathlib import Path
-from config import DATA_DIR, NOTEBOOKS_DIR, DB_PATH
+
+from config import DB_PATH
 from database import (
+    create_run_record,
+    get_all_accounts,
+    get_run_by_id,
     init_db,
     save_account,
-    get_all_accounts,
-    create_run_record,
-    get_all_runs,
-    get_run_by_id,
     update_run_status,
 )
-from services.workload_distributor import WorkloadDistributor
 from services.account_manager import AccountManager
+from services.workload_distributor import WorkloadDistributor
 
 
 class TestKaggleAutomation(unittest.TestCase):

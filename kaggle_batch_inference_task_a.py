@@ -2,15 +2,16 @@
 # This Python 3 environment comes with many helpful analytics libraries installed
 # It is defined by the kaggle/python Docker image: https://github.com/kaggle/docker-python
 
+import json
 import os
 import sys
-import json
 import time
-import requests
 from io import BytesIO
+
+import requests
+import torch
 from PIL import Image
 from tqdm.auto import tqdm
-import torch
 
 # ------------------------------------------------------------------------------
 # LOG VISIBILITY FIX: when piped (Kaggle/papermill), stdout is block-buffered
@@ -62,10 +63,11 @@ print("=" * 60)
 # 1. Install & Upgrade required libraries for Vision-Language Inference on Kaggle
 import subprocess
 
+
 def run_cmd(cmd, description):
     """Run a shell command and exit on failure."""
     print(f"{description}...")
-    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True, check=False)
     if result.returncode != 0:
         print(f"[ERROR] {description} failed (rc={result.returncode}):")
         out = (result.stdout or '')[-300:]
@@ -75,7 +77,9 @@ def run_cmd(cmd, description):
         sys.exit(1)
     return result
 
-USE_UV = subprocess.run("uv --version", shell=True, capture_output=True).returncode == 0
+USE_UV = subprocess.run(
+    "uv --version", shell=True, capture_output=True, check=False
+).returncode == 0
 
 def install_cmd(args):
     """uv requires --system when no venv is active (Kaggle has none); pip gets -q."""
@@ -122,15 +126,16 @@ PRIOR_LABELED_URL = ("https://huggingface.co/datasets/barryallen16/"
                      "fitcheck-annotate-dataset/resolve/main/task_a_labeled.jsonl")
 PRIOR_LABELED_PATH = os.path.join(SCRATCH_DIR, "task_a_labeled_prior.jsonl")
 _prior = subprocess.run(f"wget -q -O '{PRIOR_LABELED_PATH}' '{PRIOR_LABELED_URL}'",
-                        shell=True, capture_output=True, text=True)
+                        shell=True, capture_output=True, text=True, check=False)
 if _prior.returncode == 0 and os.path.exists(PRIOR_LABELED_PATH):
-    _n_prior = sum(1 for l in open(PRIOR_LABELED_PATH, encoding="utf-8") if l.strip())
+    with open(PRIOR_LABELED_PATH, encoding="utf-8") as _f:
+        _n_prior = sum(1 for l in _f if l.strip())
     print(f"Downloaded prior labels from HuggingFace ({_n_prior} items) - will skip them.")
 else:
     print("No prior labels on the hub yet (404) - starting fresh.")
 
-from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 from qwen_vl_utils import process_vision_info
+from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 
 # %% [code]
 # 2. Configuration & Paths
@@ -352,7 +357,9 @@ print(f"Remaining items to process on this shard: {len(items_to_process)}")
 
 # %% [code]
 # 6. Run Batch Inference Loop on Assigned Shard
-out_handle = open(OUTPUT_FILE, "a", encoding="utf-8")
+out_handle = open(  # noqa: SIM115 - kept open across the loop, closed at end
+    OUTPUT_FILE, "a", encoding="utf-8"
+)
 success_count = 0
 failed_count = 0
 completion_lengths = []  # generated-token counts, for headroom tuning

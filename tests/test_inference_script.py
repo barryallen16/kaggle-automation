@@ -5,23 +5,24 @@ a patched subprocess (installs/wget recorded, not run), REAL requests against a 
 HTTP image server, and REAL file I/O - so slicing, resume, checkpointing, output
 format, install flags and env-var coercion are all genuinely exercised.
 """
-import os
-import sys
-import io
+import contextlib
+import http.server
 import json
-import types
+import os
 import shutil
+import socketserver
+import subprocess
+import sys
 import tempfile
 import threading
-import contextlib
-import subprocess
+import types
 import unittest
-import http.server
-import socketserver
+from typing import ClassVar
 
-REPO = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCRIPT_PATH = os.path.join(REPO, "kaggle_batch_inference_task_a.py")
-SRC = open(SCRIPT_PATH, encoding="utf-8").read()
+with open(SCRIPT_PATH, encoding="utf-8") as f:
+    SRC = f.read()
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\nfakeimagebytes"
 
@@ -92,7 +93,7 @@ def _build_fakes():
 
     class FakeModel:
         device = "cpu"
-        loaded_with = {}
+        loaded_with: ClassVar[dict] = {}
         @classmethod
         def from_pretrained(cls, model_id, **kw):
             cls.loaded_with = {"model_id": model_id, **kw}
@@ -153,8 +154,7 @@ def sandbox(dataset_items, extra_ns=None, gpu_count=2, responses=None, env_overr
     """Isolated CWD + fakes + patched subprocess; yields the exec namespace."""
     tmp = tempfile.mkdtemp(prefix="task_a_harness_")
     with open(os.path.join(tmp, "task_a_dataset.jsonl"), "w", encoding="utf-8") as f:
-        for item in dataset_items:
-            f.write(json.dumps(item) + "\n")
+        f.writelines(json.dumps(item) + "\n" for item in dataset_items)
 
     STATE["gpu_count"] = gpu_count
     STATE["responses"] = list(responses or [])
@@ -174,7 +174,9 @@ def sandbox(dataset_items, extra_ns=None, gpu_count=2, responses=None, env_overr
     if extra_ns:
         ns.update(extra_ns)
     try:
-        exec(compile(SRC, SCRIPT_PATH, "exec"), ns)
+        exec(  # noqa: S102 - the harness intentionally executes the notebook under test
+            compile(SRC, SCRIPT_PATH, "exec"), ns
+        )
         # NOTE: yield INSIDE try - the with-body must run while tmp/ fakes are live;
         # cleanup happens only after the body finishes (or raises).
         ns["_transformers"] = tr_mod
@@ -218,7 +220,7 @@ class TestScript(unittest.TestCase):
     def test_A_compiles_and_install_flags(self):
         compile(SRC, SCRIPT_PATH, "exec")  # syntax gate
         items = make_items(0)
-        with sandbox(items, responses=[], gpu_count=2) as ns:
+        with sandbox(items, responses=[], gpu_count=2) as _ns:
             cmds = "\n".join(STATE["commands"])
             self.assertIn("--no-deps accelerate bitsandbytes qwen-vl-utils", cmds)
             self.assertIn("--no-deps git+https://github.com/huggingface/transformers.git", cmds)
@@ -250,7 +252,8 @@ class TestScript(unittest.TestCase):
 
             out_path = ns["OUTPUT_FILE"]
             self.assertTrue(os.path.exists(out_path))
-            rows = [json.loads(l) for l in open(out_path, encoding="utf-8") if l.strip()]
+            with open(out_path, encoding="utf-8") as f:
+                rows = [json.loads(l) for l in f if l.strip()]
             self.assertEqual(len(rows), 3)
             self.assertEqual([r["id"] for r in rows], ["id0", "id2", "id4"])
 
@@ -278,28 +281,33 @@ class TestScript(unittest.TestCase):
         tmp = tempfile.mkdtemp(prefix="task_a_resume_")
         try:
             with open(os.path.join(tmp, "task_a_dataset.jsonl"), "w", encoding="utf-8") as f:
-                for item in items:
-                    f.write(json.dumps(item) + "\n")
+                f.writelines(json.dumps(item) + "\n" for item in items)
 
             STATE.update({"gpu_count": 2, "responses": list(RESPONSES_B), "commands": []})
             _build_fakes(); subprocess.run = _fake_run
             saved_cwd = os.getcwd(); os.chdir(tmp)
             try:
                 ns = {"__name__": "__main__"}
-                exec(compile(SRC, SCRIPT_PATH, "exec"), ns)
+                exec(  # noqa: S102 - the harness intentionally executes the notebook under test
+                    compile(SRC, SCRIPT_PATH, "exec"), ns
+                )
                 out_path = ns["OUTPUT_FILE"]
                 # 3 clean rows; id5's unparseable output was skipped, not written
-                self.assertEqual(len(open(out_path, encoding="utf-8").readlines()), 3)
+                with open(out_path, encoding="utf-8") as f:
+                    self.assertEqual(len(f.readlines()), 3)
 
                 # second execution in SAME dir -> everything already done except
                 # failures. id1/id3 fail on images again; id5 is retried and its
                 # fresh (still unparseable) response is skipped by the guard.
                 STATE["responses"] = ["also no json"]
                 ns2 = {"__name__": "__main__"}
-                exec(compile(SRC, SCRIPT_PATH, "exec"), ns2)
+                exec(  # noqa: S102 - the harness intentionally executes the notebook under test
+                    compile(SRC, SCRIPT_PATH, "exec"), ns2
+                )
                 self.assertEqual(ns2["success_count"], 0)
                 self.assertEqual(ns2["failed_count"], 3)
-                self.assertEqual(len(open(ns2["OUTPUT_FILE"], encoding="utf-8").readlines()), 3)
+                with open(ns2["OUTPUT_FILE"], encoding="utf-8") as f:
+                    self.assertEqual(len(f.readlines()), 3)
             finally:
                 os.chdir(saved_cwd)
                 subprocess.run = _orig_run
@@ -309,19 +317,22 @@ class TestScript(unittest.TestCase):
 
     def test_D_multi_shard_partition_exact(self):
         items = make_items(5, good_predicate=lambda i: True)
-        responses = ['{"ok":%d}' % i for i in range(5)]
+        responses = [f'{{"ok":{i}}}' for i in range(5)]
         seen = {}
         for shard in range(3):
             with sandbox(items, responses=list(responses), gpu_count=2,
                          extra_ns={"SHARD_ID": shard, "TOTAL_SHARDS": 3}) as ns:
                 self.assertEqual(ns["success_count"], len(ns["shard_items"]))
-                out_rows = [json.loads(l) for l in open(ns["OUTPUT_FILE"], encoding="utf-8") if l.strip()]
+                with open(ns["OUTPUT_FILE"], encoding="utf-8") as f:
+                    out_rows = [json.loads(l) for l in f if l.strip()]
                 seen[shard] = [r["id"] for r in out_rows]
 
         self.assertEqual(seen[0], ["id0", "id1"])
         self.assertEqual(seen[1], ["id2", "id3"])
         self.assertEqual(seen[2], ["id4"])
-        union = sum(seen.values(), [])
+        union: list = []
+        for shard in range(3):
+            union.extend(seen[shard])
         self.assertEqual(sorted(union), [f"id{i}" for i in range(5)])
         self.assertEqual(len(union), len(set(union)))  # zero overlap
 
@@ -349,7 +360,6 @@ class TestScript(unittest.TestCase):
             self.assertEqual(fn('   '), {"raw_output": ""})
 
     def test_G_no_gpu_exits(self):
-        items = make_items(1, good_predicate=lambda i: True)
         tmp = tempfile.mkdtemp(prefix="task_a_nogpu_")
         try:
             open(os.path.join(tmp, "task_a_dataset.jsonl"), "w").close()
@@ -358,7 +368,9 @@ class TestScript(unittest.TestCase):
             saved = os.getcwd(); os.chdir(tmp)
             try:
                 with self.assertRaises(SystemExit) as cm:
-                    exec(compile(SRC, SCRIPT_PATH, "exec"), {"__name__": "__main__"})
+                    exec(  # noqa: S102 - the harness intentionally executes the notebook under test
+                        compile(SRC, SCRIPT_PATH, "exec"), {"__name__": "__main__"}
+                    )
                 self.assertEqual(cm.exception.code, 1)
             finally:
                 os.chdir(saved); subprocess.run = _orig_run; _teardown_fakes()
@@ -379,8 +391,11 @@ class TestScript(unittest.TestCase):
             with sandbox(items, responses=['{"fit":"x"}', '{"fit":"y"}'], gpu_count=2) as ns:
                 self.assertEqual(ns["success_count"], 0)
                 self.assertEqual(ns["failed_count"], 2)
-                self.assertFalse(os.path.exists(ns["OUTPUT_FILE"]) and
-                                 open(ns["OUTPUT_FILE"], encoding="utf-8").read().strip())
+                content = ""
+                if os.path.exists(ns["OUTPUT_FILE"]):
+                    with open(ns["OUTPUT_FILE"], encoding="utf-8") as f:
+                        content = f.read()
+                self.assertFalse(content.strip())
         finally:
             STATE["gen_tail"] = old_tail
 

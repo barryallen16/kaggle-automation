@@ -1,45 +1,46 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any, Union
 import asyncio
 import json
-from services.workload_distributor import WorkloadDistributor
-from services.kaggle_service import KaggleService
-from services.ops_tracker import tracker, workload_stop_key
+from typing import Annotated, Any
+
 from database import (
-    get_all_workloads,
-    get_all_runs,
     get_active_runs,
+    get_all_runs,
+    get_all_workloads,
     update_workload_status,
 )
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
+from services.kaggle_service import KaggleService
+from services.ops_tracker import tracker, workload_stop_key
+from services.workload_distributor import WorkloadDistributor
 
 router = APIRouter(prefix="/api/distributed", tags=["Distributed Workload"])
 
 
 class ManualShardItem(BaseModel):
-    shard_index: Optional[int] = None
+    shard_index: int | None = None
     account: str
     start_index: int
     end_index: int
-    custom_params: Optional[Dict[str, Any]] = None
+    custom_params: dict[str, Any] | None = None
 
 
 class DistributedLaunchJSON(BaseModel):
     base_title: str
     code_content: str
     filename: str = "notebook.ipynb"
-    accounts: List[str]
+    accounts: list[str]
     total_items: int = 10000000
     start_offset: int = 0
     accelerator: str = "none"
     enable_internet: bool = True
     is_trial: bool = False
-    timeout_seconds: Optional[int] = None
-    env_vars: Optional[Dict[str, str]] = None
+    timeout_seconds: int | None = None
+    env_vars: dict[str, str] | None = None
     # Global session count (int) OR per-account overrides {username: 1|2}
-    sessions_per_account: Union[int, Dict[str, int]] = 2
+    sessions_per_account: int | dict[str, int] = 2
     # Optional manual shards configuration
-    manual_shards: Optional[List[ManualShardItem]] = None
+    manual_shards: list[ManualShardItem] | None = None
 
 
 @router.get("")
@@ -145,7 +146,7 @@ async def stop_workload(workload_id: str):
 
 @router.post("/upload-and-launch")
 async def upload_and_launch_distributed(
-    file: UploadFile = File(...),
+    file: Annotated[UploadFile, File()],
     base_title: str = Form(...),
     accounts: str = Form(...),  # JSON array string or comma separated
     total_items: int = Form(10000000),
@@ -153,8 +154,8 @@ async def upload_and_launch_distributed(
     accelerator: str = Form("none"),
     enable_internet: bool = Form(True),
     is_trial: bool = Form(False),
-    timeout_seconds: Optional[int] = Form(None),
-    env_vars: Optional[str] = Form(None),
+    timeout_seconds: int | None = Form(None),
+    env_vars: str | None = Form(None),
     sessions_per_account: str = Form("2"),  # "2" or JSON object {"user": 2}
 ):
     try:
@@ -214,7 +215,7 @@ async def upload_and_launch_distributed(
                     status_code=400,
                     detail="sessions_per_account must be an int or JSON object",
                 )
-            sessions_val: Union[int, Dict[str, int]] = sessions_obj
+            sessions_val: int | dict[str, int] = sessions_obj
         else:
             try:
                 sessions_val = int(sessions_raw)

@@ -1,10 +1,11 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
+from typing import Annotated, Any
+
+from database import get_active_runs, get_all_runs, get_run_by_id, update_run_status
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
-from services.kaggle_service import KaggleService
 from services.account_manager import AccountManager
+from services.kaggle_service import KaggleService
 from services.ops_tracker import tracker
-from database import get_all_runs, get_active_runs, get_run_by_id, update_run_status
 
 router = APIRouter(prefix="/api/runs", tags=["Runs"])
 
@@ -15,8 +16,8 @@ def _is_gpu_accelerator(acc: Any) -> bool:
 
 
 async def _quota_capped_env(
-    account_username: str, accelerator: Any, env_vars: Optional[Dict[str, str]]
-) -> Optional[Dict[str, str]]:
+    account_username: str, accelerator: Any, env_vars: dict[str, str] | None
+) -> dict[str, str] | None:
     """Merges a quota-aware MAX_RUNTIME_MINUTES into env_vars for GPU launches.
 
     The kernel self-finishes before the account's remaining weekly GPU quota
@@ -48,8 +49,8 @@ class LaunchRunJSONRequest(BaseModel):
     accelerator: str = "none"  # "nvidia-tesla-t4-x2", "nvidia-tesla-t4", "v3-8", "none"
     enable_internet: bool = True
     is_trial: bool = False
-    timeout_seconds: Optional[int] = None
-    env_vars: Optional[Dict[str, str]] = None  # injected as os.environ before user code
+    timeout_seconds: int | None = None
+    env_vars: dict[str, str] | None = None  # injected as os.environ before user code
 
 
 @router.get("")
@@ -102,13 +103,13 @@ async def launch_run_json(payload: LaunchRunJSONRequest):
 
 @router.post("/upload-and-launch")
 async def upload_and_launch(
-    file: UploadFile = File(...),
+    file: Annotated[UploadFile, File()],
     account_username: str = Form(...),
     title: str = Form(...),
     accelerator: str = Form("none"),
     enable_internet: bool = Form(True),
     is_trial: bool = Form(False),
-    timeout_seconds: Optional[int] = Form(None),
+    timeout_seconds: int | None = Form(None),
 ):
     tracker.begin("launch_run")
     try:

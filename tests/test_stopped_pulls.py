@@ -9,8 +9,8 @@ run's real partial output lives on the CANCELLED version. Pull paths must:
 """
 
 import os
-import sys
 import shutil
+import sys
 import tempfile
 import unittest
 
@@ -35,9 +35,10 @@ def tearDownModule():
 def _fresh():
     global cfg, db, ks, fr
     import importlib
-    import app.config as _cfg
-    import app.database as _db
-    import app.services.kaggle_service as _ks
+
+    import config as _cfg
+    import database as _db
+    import services.kaggle_service as _ks
     for suffix in ("", "-wal", "-shm"):
         try:
             os.remove(str(_cfg.DB_PATH) + suffix)
@@ -51,7 +52,7 @@ def _fresh():
         return None
     ks.KaggleService.start_background_log_stream = staticmethod(_noop)
 
-    import app.routers.files as _files
+    import routers.files as _files
     fr = importlib.reload(_files)
     db.init_db()
     return cfg, db, ks, fr
@@ -101,7 +102,6 @@ class TestStoppedRunPulls(unittest.TestCase):
 
         async def fake_plain(account, ref, run_id):
             calls["plain"] += 1
-            return None
 
         ks.KaggleService.get_kernel_current_version = staticmethod(fake_current)
         ks.KaggleService.download_outputs_of_version = staticmethod(fake_versioned)
@@ -165,7 +165,6 @@ class TestStoppedRunPulls(unittest.TestCase):
 
         async def fake_plain(account, ref, run_id):
             calls["plain"] += 1
-            return None
 
         ks.KaggleService.get_kernel_current_version = staticmethod(fake_current)
         ks.KaggleService.download_outputs_of_version = staticmethod(fake_versioned)

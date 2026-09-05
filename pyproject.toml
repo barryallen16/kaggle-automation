@@ -13,4 +13,18 @@ dependencies = [
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "ruff>=0.16.6",
 ]
+
+[tool.pytest.ini_options]
+pythonpath = [".", "app"]
+
+[tool.ruff.lint]
+# The automation layer intentionally wraps every external call (Kaggle API,
+# Telegram bot, subprocess/CLI) in a broad try/except so one failing account,
+# a transient network error or a vanished kernel can never kill a background
+# loop - and the fallbacks double as best-effort cleanups. Keep those
+# deliberate catch-all handlers (BLE001) and silent degradation paths (S110)
+# allowed; every other rule from ruff's default set stays enforced.
+ignore = ["BLE001", "S110"]
+

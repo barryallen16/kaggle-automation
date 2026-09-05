@@ -6,8 +6,8 @@ and must fall back to pulling a run's outputs when a file is local-missing.
 """
 
 import os
-import sys
 import shutil
+import sys
 import tempfile
 import unittest
 
@@ -32,9 +32,10 @@ def _fresh():
     """Reload config/database/service/files modules bound to the temp dir."""
     global cfg, db, files_router
     import importlib
-    import app.config as _cfg
-    import app.database as _db
-    import app.services.kaggle_service as _ks
+
+    import config as _cfg
+    import database as _db
+    import services.kaggle_service as _ks
     for suffix in ("", "-wal", "-shm"):
         try:
             os.remove(str(_cfg.DB_PATH) + suffix)
@@ -45,10 +46,10 @@ def _fresh():
     ks = importlib.reload(_ks)
     # Stub CLI: pushes/pulls would fail fast if ever invoked
     ks.get_kaggle_cli_path = lambda: os.path.join(DATA_TMP, "no_such_kaggle_cli")
-    import app.routers.files as _files
+    import routers.files as _files
     files_router = importlib.reload(_files)
     db.init_db()
-    return cfg, db, files_router, __import__("app.services.kaggle_service", fromlist=["x"]).KaggleService
+    return cfg, db, files_router, __import__("services.kaggle_service", fromlist=["x"]).KaggleService
 
 
 def _seed_run(db, run_id):
@@ -79,7 +80,7 @@ class TestCatMerge(unittest.TestCase):
         return _fresh()
 
     def test_1_jsonl_concat_in_cart_order(self):
-        cfg, db, fr, ks = self._setup()
+        cfg, db, fr, _ks = self._setup()
         _seed_run(db, "m1")
         _seed_run(db, "m2")
 
@@ -100,12 +101,13 @@ class TestCatMerge(unittest.TestCase):
         resp = asyncio_run(fr.merge_selected_files(req))
 
         self.assertEqual(resp.filename, "merged.jsonl")
-        merged = open(resp.path, "rb").read()
+        with open(resp.path, "rb") as f:
+            merged = f.read()
         # Pure cat: exact bytes, exact order, duplicate ids preserved
         self.assertEqual(merged, a_bytes + b_bytes)
 
     def test_2_extension_follows_majority_and_binary_intact(self):
-        cfg, db, fr, ks = self._setup()
+        cfg, db, fr, _ks = self._setup()
         _seed_run(db, "m3")
         out = cfg.OUTPUTS_DIR / "m3"
         out.mkdir(parents=True, exist_ok=True)
@@ -121,7 +123,8 @@ class TestCatMerge(unittest.TestCase):
         ])
         resp = asyncio_run(fr.merge_selected_files(req))
         self.assertEqual(resp.filename, "merged.jsonl")  # majority suffix wins
-        merged = open(resp.path, "rb").read()
+        with open(resp.path, "rb") as f:
+            merged = f.read()
         self.assertTrue(merged.startswith(b'{"x":1}\n'))
         self.assertIn(bin_marker, merged)
         self.assertTrue(merged.endswith(b'{"x":2}\n'))
@@ -145,7 +148,7 @@ class TestCatMerge(unittest.TestCase):
         self.assertEqual(cm.exception.status_code, 502)
 
     def test_4_empty_cart_rejected(self):
-        cfg, db, fr, ks = self._setup()
+        _cfg, _db, fr, _ks = self._setup()
         from fastapi import HTTPException
         with self.assertRaises(HTTPException) as cm:
             asyncio_run(fr.merge_selected_files(fr.MergeRequest(items=[])))
