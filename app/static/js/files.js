@@ -231,6 +231,21 @@ async function deleteAllLocalFiles() {
     showToast('Error deleting output files: ' + err.message, 'error');
   }
 }
+async function clearAllNotebooks() {
+  if (!confirm('Free disk space: delete ALL local push payloads (run code + stop stubs) for every run?\n\nPushed kernels on Kaggle are NOT touched — local copies are never read back after a push.\n\nContinue?')) return;
+  const btn = document.getElementById('btn-clear-notebooks');
+  const orig = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Clearing...</span>`; try{refreshIcons()}catch(_){} }
+  try {
+    const res = await fetch(`/api/runs/files/clear-all-notebooks`, { method: 'DELETE' });
+    const data = await res.json();
+    showToast(data.success ? (data.message || 'Cleared notebook cache') : (data.detail || 'Failed to clear notebook cache'), data.success ? 'success' : 'error');
+  } catch (err) {
+    showToast('Error clearing notebook cache: ' + err.message, 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = orig; try{refreshIcons()}catch(_){} }
+  }
+}
 async function clearAllServerFiles() {
   if (!confirm('Free disk space: delete ALL local outputs and logs for EVERY run on this server?\n\nRemote files on Kaggle are NOT touched — you can re-pull any run later.\n\nContinue?')) return;
   const btn = document.getElementById('btn-clear-all-server');
@@ -314,7 +329,7 @@ function renderMergeCart() {
   }
 
   list.innerHTML = cart.map((item, idx) => `
-    <div class="flex items-center justify-between gap-3 p-2.5 rounded-lg bg-[#080b12] border border-[#1e293b]">
+    <div class="flex items-center justify-between gap-3 p-2.5 rounded-lg bg-[#070709] border border-[#1E1E24]">
       <div class="min-w-0">
         <p class="text-xs font-mono font-semibold text-white truncate">${esc(item.filename)}</p>
         <p class="text-[10px] text-slate-400 truncate">${esc(item.label)}</p>

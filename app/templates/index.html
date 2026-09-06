@@ -10,7 +10,7 @@
   <link rel="icon" type="image/png" sizes="16x16" href="/static/icons/favicon-16x16.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
   <link rel="manifest" href="/static/icons/site.webmanifest">
-  <meta name="theme-color" content="#0a0d14">
+  <meta name="theme-color" content="#060608">
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com/3.4.17"></script>
   <script>
@@ -19,14 +19,31 @@
       theme: {
         extend: {
           colors: {
-            brand: {
-              cyan: '#00f2fe',
-              blue: '#4facfe',
-              dark: '#0a0d14',
-              surface: '#121829',
-              card: '#161e33',
-              border: '#222d4a',
-            }
+            // Neo-Tokyo night: crushed black, firebrick red + teal neon.
+            // These REPLACE the default cyan/rose/purple/slate ramps wholesale,
+            // so every existing *-400 text accent, *-600 button and *-950 tint
+            // re-renders in-film without touching a single class name.
+            // Luminance steps mirror the defaults, so contrast relationships hold.
+            cyan: {   // Kaneda-teal neon (was electric cyan)
+              50: '#EFFCFA', 100: '#C9F5EE', 200: '#93E9DD', 300: '#6FDBD1',
+              400: '#45C8C4', 500: '#22A9A3', 600: '#0F8B84', 700: '#0C6E69',
+              800: '#0D4F4B', 900: '#0A3331', 950: '#041B1A',
+            },
+            rose: {   // firebrick headlight-trail red (was pink-red)
+              50: '#FBF0EE', 100: '#F6D9D2', 200: '#ECB3A6', 300: '#E08E7D',
+              400: '#D2604F', 500: '#C94838', 600: '#B23227', 700: '#8E2620',
+              800: '#6E1F1B', 900: '#471512', 950: '#250C0A',
+            },
+            purple: { // cold steel-indigo signage (was synthwave purple)
+              50: '#EFF0FC', 100: '#DFE1F6', 200: '#C6CAF0', 300: '#A9ADEF',
+              400: '#8288E0', 500: '#6770D8', 600: '#4F59C4', 700: '#3E46A3',
+              800: '#323A7E', 900: '#262C60', 950: '#14173A',
+            },
+            slate: {  // neutral night grays (was blue-gray)
+              50: '#F6F6F5', 100: '#E7E7E5', 200: '#D1D1CE', 300: '#B4B4B0',
+              400: '#8E8E8A', 500: '#6E6E6A', 600: '#4C4C49', 700: '#2E2E33',
+              800: '#1B1B20', 900: '#101014', 950: '#060608',
+            },
           },
           fontFamily: {
             sans: ['Geist Pixel Square', 'Geist', 'monospace'],
@@ -42,7 +59,7 @@
   <link rel="stylesheet" href="/static/css/fonts.css">
   <link rel="stylesheet" href="/static/css/custom.css">
 </head>
-<body class="bg-[#0a0d14] text-slate-100 min-h-screen flex flex-col antialiased">
+<body class="bg-[#060608] text-slate-100 min-h-screen flex flex-col antialiased">
 
   <!-- Toast Notification Container (z-[60]: above modals so alerts stay visible; full-width on phones) -->
   <div id="toast-container" class="fixed top-5 right-4 left-4 sm:left-auto z-[60] flex flex-col space-y-3 pointer-events-none">
@@ -57,9 +74,9 @@
   <div class="flex flex-1 h-screen h-[100dvh] overflow-hidden">
 
     <!-- Sidebar Navigation (off-canvas drawer on mobile, fixed column on desktop) -->
-    <aside id="sidebar" class="fixed lg:fixed lg:top-0 lg:left-0 inset-y-0 left-0 z-50 w-64 max-w-[85vw] h-[100dvh] bg-[#0d121f] border-r border-[#1e293b] flex flex-col flex-shrink-0 overflow-hidden transform -translate-x-full lg:translate-x-0 transition-[transform,width] duration-300 ease-in-out sidebar-collapsed">
+    <aside id="sidebar" class="fixed lg:fixed lg:top-0 lg:left-0 inset-y-0 left-0 z-50 w-64 max-w-[85vw] h-[100dvh] bg-[#0C0C10] border-r border-[#1E1E24] flex flex-col flex-shrink-0 overflow-hidden transform -translate-x-full lg:translate-x-0 transition-[transform,width] duration-300 ease-in-out sidebar-collapsed">
     <!-- App Header / Logo -->
-      <div class="h-16 flex items-center px-6 border-b border-[#1e293b] space-x-3 flex-shrink-0">
+      <div class="h-16 flex items-center px-6 border-b border-[#1E1E24] space-x-3 flex-shrink-0">
         <img src="/static/icons/android-chrome-192x192.png" alt="Logo" class="w-9 h-9 rounded-xl">
         <div class="min-w-0">
           <h1 class="font-pixel text-sm text-white">KAGGLE AUTO</h1>
@@ -120,7 +137,7 @@
       </nav>
 
       <!-- Sidebar Footer / Quick Stats (pinned to the bottom of the viewport) -->
-      <div class="flex-shrink-0 p-4 border-t border-[#1e293b] bg-[#0a0d14]/40">
+      <div class="flex-shrink-0 p-4 border-t border-[#1E1E24] bg-[#060608]/40">
         <div class="flex items-center justify-between text-xs text-slate-400 mb-2">
           <span>Active Runs:</span>
           <span id="sidebar-active-count" class="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-400 font-semibold font-mono">0</span>
@@ -133,10 +150,10 @@
     </aside>
 
     <!-- Main Content Area -->
-    <main class="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#0a0d14]">
+    <main class="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#060608]">
       
       <!-- Top Bar -->
-      <header class="h-16 border-b border-[#1e293b] bg-[#0e1424] px-4 sm:px-8 flex items-center justify-between flex-shrink-0 gap-3">
+      <header class="h-16 border-b border-[#1E1E24] bg-[#101015] px-4 sm:px-8 flex items-center justify-between flex-shrink-0 gap-3">
         <div class="flex items-center space-x-2 sm:space-x-4 min-w-0">
           <button onclick="toggleSidebar()" class="lg:hidden inline-flex items-center justify-center w-9 h-9 flex-shrink-0 rounded-lg bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700 transition" aria-label="Open menu">
             <i data-lucide="menu" class="w-5 h-5"></i>
@@ -187,7 +204,7 @@
         <section id="tab-dashboard" class="space-y-6">
           <!-- Top KPI Cards -->
           <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-5">
-            <div class="glass-card rounded-2xl p-5 border border-[#222d4a]">
+            <div class="glass-card rounded-2xl p-5 border border-[#26262E]">
               <div class="flex items-center justify-between">
                 <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Connected Accounts</span>
                 <i data-lucide="users" class="w-5 h-5 text-cyan-400 flex-shrink-0"></i>
@@ -196,7 +213,7 @@
               <p class="text-xs text-slate-500 mt-1">Multi-credential pool</p>
             </div>
 
-            <div class="glass-card rounded-2xl p-5 border border-[#222d4a]">
+            <div class="glass-card rounded-2xl p-5 border border-[#26262E]">
               <div class="flex items-center justify-between">
                 <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Active Executions</span>
                 <i data-lucide="activity" class="w-5 h-5 text-emerald-400 flex-shrink-0"></i>
@@ -205,7 +222,7 @@
               <p class="text-xs text-slate-500 mt-1">Kernels in session</p>
             </div>
 
-            <div class="glass-card rounded-2xl p-5 border border-[#222d4a]">
+            <div class="glass-card rounded-2xl p-5 border border-[#26262E]">
               <div class="flex items-center justify-between">
                 <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Max Session Limit</span>
                 <i data-lucide="clock" class="w-5 h-5 text-amber-400 flex-shrink-0"></i>
@@ -214,7 +231,7 @@
               <p class="text-xs text-slate-500 mt-1">Telegram alert on cutoff</p>
             </div>
 
-            <div class="glass-card rounded-2xl p-5 border border-[#222d4a]">
+            <div class="glass-card rounded-2xl p-5 border border-[#26262E]">
               <div class="flex items-center justify-between">
                 <span class="text-xs font-medium text-slate-400 uppercase tracking-wider">Total Runs Executed</span>
                 <i data-lucide="check-circle" class="w-5 h-5 text-blue-400 flex-shrink-0"></i>
@@ -231,7 +248,7 @@
                 <i data-lucide="shield-check" class="w-5 h-5 text-cyan-400 flex-shrink-0"></i>
                 <span>Managed Kaggle Accounts & Quota Balances</span>
               </h3>
-              <span class="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-[#131b2e] border border-[#222d4a] text-cyan-300" title="Accounts automatically ordered by most available quota first">
+              <span class="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-mono font-medium bg-[#101015] border border-[#26262E] text-cyan-300" title="Accounts automatically ordered by most available quota first">
                 <i data-lucide="download" class="w-3.5 h-3.5 mr-1.5 text-cyan-400"></i>
                 Arranged: Highest Quota First
               </span>
@@ -256,7 +273,7 @@
             <div class="glass-panel rounded-2xl overflow-hidden">
               <div class="overflow-x-auto">
                 <table class="w-full text-left text-sm text-slate-300 min-w-[720px]">
-                <thead class="bg-[#0e1424] text-xs uppercase font-semibold text-slate-400 border-b border-[#222d4a]">
+                <thead class="bg-[#101015] text-xs uppercase font-semibold text-slate-400 border-b border-[#26262E]">
                   <tr>
                     <th class="px-6 py-3.5">Account</th>
                     <th class="px-6 py-3.5">Notebook Title</th>
@@ -266,7 +283,7 @@
                     <th class="px-6 py-3.5 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody id="active-runs-table-body" class="divide-y divide-[#1e293b]">
+                <tbody id="active-runs-table-body" class="divide-y divide-[#1E1E24]">
                   <tr>
                     <td colspan="6" class="px-6 py-8 text-center text-slate-500">No active notebook sessions currently running.</td>
                   </tr>
@@ -282,8 +299,8 @@
         <!-- TAB 2: SINGLE RUN & TRIAL                     -->
         <!-- ============================================== -->
         <section id="tab-runner" class="hidden space-y-6">
-          <div class="max-w-4xl mx-auto glass-panel rounded-2xl p-5 sm:p-8 border border-[#222d4a]">
-            <div class="border-b border-[#1e293b] pb-5 mb-6">
+          <div class="max-w-4xl mx-auto glass-panel rounded-2xl p-5 sm:p-8 border border-[#26262E]">
+            <div class="border-b border-[#1E1E24] pb-5 mb-6">
               <h3 class="text-lg font-bold text-white flex items-center space-x-2">
                 <i data-lucide="play" class="w-5 h-5 text-blue-400 flex-shrink-0"></i>
                 <span>Launch Kaggle Notebook Session</span>
@@ -296,7 +313,7 @@
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                 <div>
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Target Kaggle Account</label>
-                  <select id="runner-account-select" required class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
+                  <select id="runner-account-select" required class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
                     <option value="">-- Select Account --</option>
                   </select>
                   <!-- Live Quota Balance Card -->
@@ -305,7 +322,7 @@
 
                 <div>
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Notebook Title</label>
-                  <input type="text" id="runner-title" required placeholder="e.g. My Heavy ML Model Training" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
+                  <input type="text" id="runner-title" required placeholder="e.g. My Heavy ML Model Training" class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
                 </div>
               </div>
 
@@ -313,7 +330,7 @@
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                 <div>
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Hardware Accelerator</label>
-                  <select id="runner-accelerator-select" onchange="updateRunnerQuotaWarning()" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
+                  <select id="runner-accelerator-select" onchange="populateAccountSelects()" class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
                     <option value="none">Default / CPU</option>
                     <option value="nvidia-tesla-t4-x2" selected>⚡ T4 GPU x 2 (High Performance)</option>
                     <option value="nvidia-tesla-t4-highmem">⚡ T4 GPU High Memory</option>
@@ -345,7 +362,7 @@
                   
                   <div id="trial-timeout-container" class="mt-3 hidden">
                     <label class="block text-xs font-medium text-amber-200 mb-1">Trial Timeout Limit (Seconds)</label>
-                    <input type="number" id="runner-trial-timeout" value="300" min="60" max="3600" class="w-48 bg-[#0d121f] border border-amber-700/60 rounded-lg px-3 py-1.5 text-xs text-white">
+                    <input type="number" id="runner-trial-timeout" value="300" min="60" max="3600" class="w-48 bg-[#0C0C10] border border-amber-700/60 rounded-lg px-3 py-1.5 text-xs text-white">
                   </div>
                 </div>
               </div>
@@ -355,13 +372,13 @@
                 <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Notebook / Script Code</label>
                 
                 <!-- File Upload Dropzone -->
-                <div class="border-2 border-dashed border-[#242f49] hover:border-cyan-500/60 rounded-xl p-4 text-center cursor-pointer mb-3 transition" onclick="document.getElementById('runner-file-input').click()">
-                  <input type="file" id="runner-file-input" accept=".ipynb,.py" class="hidden" onchange="handleFileInputChange(event)">
+                <div class="border-2 border-dashed border-[#282832] hover:border-cyan-500/60 focus-within:border-cyan-500/60 rounded-xl p-4 text-center cursor-pointer mb-3 transition" onclick="document.getElementById('runner-file-input').click()">
+                  <input type="file" id="runner-file-input" accept=".ipynb,.py" class="sr-only" onchange="handleFileInputChange(event)" aria-label="Upload notebook or script file">
                   <i data-lucide="upload-cloud" class="w-6 h-6 text-slate-400 mx-auto mb-1"></i>
                   <span id="file-upload-label" class="text-xs text-slate-400">Click to upload <code class="text-cyan-400">.ipynb</code> or <code class="text-cyan-400">.py</code> file, or paste code below</span>
                 </div>
 
-                <textarea id="runner-code-textarea" rows="8" class="w-full terminal-font text-xs bg-[#060911] border border-[#222d4a] rounded-xl p-4 text-cyan-300 focus:outline-none focus:border-cyan-500" placeholder="# Paste Python code or edit uploaded script here..."></textarea>
+                <textarea id="runner-code-textarea" rows="8" class="w-full terminal-font text-xs bg-[#050507] border border-[#26262E] rounded-xl p-4 text-cyan-300 focus:outline-none focus:border-cyan-500" placeholder="# Paste Python code or edit uploaded script here..."></textarea>
               </div>
 
               <!-- Submit Button -->
@@ -380,8 +397,8 @@
         <!-- TAB 3: DISTRIBUTED WORKLOAD RUNNER            -->
         <!-- ============================================== -->
         <section id="tab-distributed" class="hidden space-y-6">
-          <div class="max-w-4xl mx-auto glass-panel rounded-2xl p-5 sm:p-8 border border-[#222d4a]">
-            <div class="border-b border-[#1e293b] pb-5 mb-6">
+          <div class="max-w-4xl mx-auto glass-panel rounded-2xl p-5 sm:p-8 border border-[#26262E]">
+            <div class="border-b border-[#1E1E24] pb-5 mb-6">
               <h3 class="text-lg font-bold text-white flex items-center space-x-2">
                 <i data-lucide="network" class="w-5 h-5 text-purple-400 flex-shrink-0"></i>
                 <span>Distributed Workload Sharder</span>
@@ -394,19 +411,19 @@
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                 <div>
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Workload Base Title</label>
-                  <input type="text" id="dist-title" required placeholder="e.g. Distributed 10M Data Cruncher" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
+                  <input type="text" id="dist-title" required placeholder="e.g. Distributed 10M Data Cruncher" class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
                 </div>
 
                 <div>
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Total Workload Count (Items / Iterations)</label>
-                  <input type="number" id="dist-total-items" value="10000000" min="1" required class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500" oninput="updateShardsPreview()">
+                  <input type="number" id="dist-total-items" value="10000000" min="1" required class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500" oninput="updateShardsPreview()">
                 </div>
               </div>
 
               <!-- Participating Accounts Selection -->
               <div>
                 <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Select Participating Kaggle Accounts</label>
-                <div id="dist-accounts-checkboxes" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 p-4 bg-[#0d121f] border border-[#222d4a] rounded-xl">
+                <div id="dist-accounts-checkboxes" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 p-4 bg-[#0C0C10] border border-[#26262E] rounded-xl">
                   <!-- Checkboxes dynamically rendered -->
                 </div>
               </div>
@@ -415,7 +432,7 @@
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                 <div>
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Accelerator per Account</label>
-                  <select id="dist-accelerator" onchange="renderDistributedAccountCheckboxes(); if (typeof distShardingMode !== 'undefined' && distShardingMode === 'manual') renderManualShards();" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
+                  <select id="dist-accelerator" onchange="renderDistributedAccountCheckboxes(); if (typeof distShardingMode !== 'undefined' && distShardingMode === 'manual') renderManualShards();" class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
                     <option value="none">Default / CPU</option>
                     <option value="nvidia-tesla-t4-x2" selected>⚡ T4 GPU x 2 (High Performance)</option>
                     <option value="nvidia-tesla-t4-highmem">⚡ T4 GPU High Memory</option>
@@ -435,7 +452,7 @@
                   </label>
                   <label class="flex items-center space-x-2.5 cursor-pointer">
                     <span class="text-sm font-medium text-slate-300">GPU Sessions / Account</span>
-                    <select id="dist-sessions-per-account" onchange="applyGlobalSessionsToAll(); updateShardsPreview(); updateQuotaHint();" class="bg-[#0d121f] border border-[#222d4a] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500" title="Global default - override individually next to each account">
+                    <select id="dist-sessions-per-account" onchange="applyGlobalSessionsToAll(); updateShardsPreview(); updateQuotaHint();" class="bg-[#0C0C10] border border-[#26262E] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500" title="Global default - override individually next to each account">
                       <option value="1">1</option>
                       <option value="2" selected>2</option>
                     </select>
@@ -452,7 +469,7 @@
                     <h4 class="text-xs font-bold text-slate-300 uppercase tracking-wider">Partition Strategy</h4>
                     <p class="text-[11px] text-slate-500">Choose between automated equal splits or manual custom range sharding</p>
                   </div>
-                  <div class="inline-flex p-1 bg-[#080c16] rounded-xl border border-[#222d4a]">
+                  <div class="inline-flex p-1 bg-[#08080B] rounded-xl border border-[#26262E]">
                     <button type="button" id="dist-mode-btn-auto" onclick="setDistShardingMode('auto')" class="px-3.5 py-1.5 text-xs font-bold rounded-lg bg-purple-600 text-white transition-all">
                       Auto-Partition (Equal Slices)
                     </button>
@@ -474,8 +491,8 @@
                 </div>
 
                 <!-- Panel 2: Manual Sharding Custom Rows (Hidden by default) -->
-                <div id="dist-manual-shards-panel" class="hidden p-4 rounded-xl bg-[#080d1a] border border-purple-800/50 space-y-4">
-                  <div class="flex items-center justify-between flex-wrap gap-2 border-b border-[#1e293b] pb-3">
+                <div id="dist-manual-shards-panel" class="hidden p-4 rounded-xl bg-[#0D0D12] border border-purple-800/50 space-y-4">
+                  <div class="flex items-center justify-between flex-wrap gap-2 border-b border-[#1E1E24] pb-3">
                     <div>
                       <h4 class="text-xs font-bold text-purple-300 uppercase tracking-wider">Custom Manual Shards</h4>
                       <p class="text-[11px] text-slate-400">Configure exact ranges and target accounts for each shard</p>
@@ -501,7 +518,7 @@
                   </div>
 
                   <!-- Summary & Live Validation Bar -->
-                  <div id="dist-manual-summary" class="p-3 rounded-xl bg-[#040711] border border-[#1e293b] flex items-center justify-between flex-wrap gap-2 text-xs">
+                  <div id="dist-manual-summary" class="p-3 rounded-xl bg-[#07070A] border border-[#1E1E24] flex items-center justify-between flex-wrap gap-2 text-xs">
                     <div class="flex items-center space-x-4">
                       <span class="text-slate-400">Shards: <strong id="dist-manual-count" class="text-white">0</strong></span>
                       <span class="text-slate-400">Items Spanned: <strong id="dist-manual-total-items" class="text-cyan-300 font-mono">0</strong></span>
@@ -516,12 +533,12 @@
               <!-- Notebook Source Code -->
               <div>
                 <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Base Notebook Code (Shard variables will be auto-injected)</label>
-                <div class="border-2 border-dashed border-[#242f49] hover:border-purple-500/60 rounded-xl p-4 text-center cursor-pointer mb-3 transition" onclick="document.getElementById('dist-file-input').click()">
-                  <input type="file" id="dist-file-input" accept=".ipynb,.py" class="hidden" onchange="handleDistFileInputChange(event)">
+                <div class="border-2 border-dashed border-[#282832] hover:border-purple-500/60 focus-within:border-purple-500/60 rounded-xl p-4 text-center cursor-pointer mb-3 transition" onclick="document.getElementById('dist-file-input').click()">
+                  <input type="file" id="dist-file-input" accept=".ipynb,.py" class="sr-only" onchange="handleDistFileInputChange(event)" aria-label="Upload base notebook file">
                   <i data-lucide="upload-cloud" class="w-6 h-6 text-slate-400 mx-auto mb-1"></i>
                   <span id="dist-file-upload-label" class="text-xs text-slate-400">Click to upload <code class="text-purple-400">.ipynb</code> or <code class="text-purple-400">.py</code> base file</span>
                 </div>
-                <textarea id="dist-code-textarea" rows="6" class="w-full terminal-font text-xs bg-[#060911] border border-[#222d4a] rounded-xl p-4 text-purple-300 focus:outline-none focus:border-purple-500" placeholder="# In your notebook, variables SHARD_ID, TOTAL_SHARDS, START_INDEX, END_INDEX will be injected automatically!"></textarea>
+                <textarea id="dist-code-textarea" rows="6" class="w-full terminal-font text-xs bg-[#050507] border border-[#26262E] rounded-xl p-4 text-purple-300 focus:outline-none focus:border-purple-500" placeholder="# In your notebook, variables SHARD_ID, TOTAL_SHARDS, START_INDEX, END_INDEX will be injected automatically!"></textarea>
               </div>
 
               <!-- Submit -->
@@ -542,7 +559,7 @@
             <div class="glass-panel rounded-2xl overflow-hidden">
               <div class="overflow-x-auto">
                 <table class="w-full text-left text-sm text-slate-300 min-w-[720px]">
-                <thead class="bg-[#0e1424] text-xs uppercase font-semibold text-slate-400 border-b border-[#222d4a]">
+                <thead class="bg-[#101015] text-xs uppercase font-semibold text-slate-400 border-b border-[#26262E]">
                   <tr>
                     <th class="px-6 py-3.5">Workload</th>
                     <th class="px-6 py-3.5">Status</th>
@@ -551,7 +568,7 @@
                     <th class="px-6 py-3.5 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody id="workloads-table-body" class="divide-y divide-[#1e293b]">
+                <tbody id="workloads-table-body" class="divide-y divide-[#1E1E24]">
                   <tr>
                     <td colspan="5" class="px-6 py-8 text-center text-slate-500">No distributed workloads dispatched yet.</td>
                   </tr>
@@ -569,10 +586,10 @@
         <!-- ============================================== -->
         <section id="tab-terminal" class="hidden space-y-4">
           <!-- Terminal Control Toolbar -->
-          <div class="glass-card rounded-2xl p-4 border border-[#222d4a] flex flex-wrap items-center justify-between gap-3 sm:gap-4">
+          <div class="glass-card rounded-2xl p-4 border border-[#26262E] flex flex-wrap items-center justify-between gap-3 sm:gap-4">
             <div class="flex items-center space-x-3 sm:space-x-4 flex-1 min-w-[240px]">
               <label for="terminal-run-select" class="text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Select Run:</label>
-              <select id="terminal-run-select" onchange="handleTerminalRunSelect(event)" class="bg-[#0d121f] border border-[#222d4a] rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 flex-1 min-w-0">
+              <select id="terminal-run-select" onchange="handleTerminalRunSelect(event)" class="bg-[#0C0C10] border border-[#26262E] rounded-xl px-3 py-1.5 text-xs text-white focus:outline-none focus:border-emerald-500 flex-1 min-w-0">
                 <option value="">-- Select a run to view output logs --</option>
               </select>
             </div>
@@ -598,7 +615,7 @@
           </div>
 
           <!-- Terminal Screen -->
-          <div class="terminal-window rounded-2xl p-4 border border-[#1e293b] flex flex-col h-[480px] sm:h-[600px] shadow-2xl relative">
+          <div class="terminal-window rounded-2xl p-4 border border-[#1E1E24] flex flex-col h-[480px] sm:h-[600px] shadow-2xl relative">
             <div class="flex items-center justify-between pb-3 mb-2 border-b border-slate-800 text-xs text-slate-500">
               <div class="flex items-center space-x-2">
                 <span class="w-3 h-3 rounded-full bg-rose-500/80 inline-block"></span>
@@ -618,11 +635,11 @@
         <!-- TAB 5: OUTPUT FILES EXPLORER                  -->
         <!-- ============================================== -->
         <section id="tab-files" class="hidden space-y-6">
-          <div class="glass-card rounded-2xl p-6 border border-[#222d4a] space-y-5">
+          <div class="glass-card rounded-2xl p-6 border border-[#26262E] space-y-5">
             <!-- Run selector row -->
             <div class="flex flex-wrap items-center gap-x-4 gap-y-3 w-full">
               <label for="files-run-select" class="text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Select Run:</label>
-              <select id="files-run-select" onchange="handleFilesRunSelect(event)" class="flex-1 min-w-[240px] max-w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500">
+              <select id="files-run-select" onchange="handleFilesRunSelect(event)" class="flex-1 min-w-[240px] max-w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500">
                 <option value="">-- Select run to inspect output files --</option>
               </select>
             </div>
@@ -642,6 +659,10 @@
                 <span>Delete Run Files</span>
               </button>
               <div class="ml-auto flex items-center gap-2 border-l border-slate-700 pl-3">
+                <button onclick="clearAllNotebooks()" id="btn-clear-notebooks" title="Free disk space: deletes local push payloads (run code + stop stubs) for every run. Pushed kernels on Kaggle untouched." class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700 transition">
+                  <i data-lucide="archive" class="w-4 h-4"></i>
+                  <span>Clear Notebook Cache</span>
+                </button>
                 <button onclick="clearAllServerFiles()" id="btn-clear-all-server" title="Free disk space: deletes ALL local outputs + logs for every run (remote Kaggle files untouched)" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-slate-800 text-amber-300 hover:bg-amber-900/30 hover:text-amber-200 border border-amber-700/50 transition">
                   <i data-lucide="hard-drive" class="w-4 h-4"></i>
                   <span>Clear All Server Files</span>
@@ -653,7 +674,7 @@
             <div class="glass-panel rounded-xl overflow-hidden mt-1">
               <div class="overflow-x-auto">
                 <table class="w-full text-left text-sm text-slate-300 min-w-[720px]">
-                <thead class="bg-[#0e1424] text-xs uppercase font-semibold text-slate-400 border-b border-[#222d4a]">
+                <thead class="bg-[#101015] text-xs uppercase font-semibold text-slate-400 border-b border-[#26262E]">
                   <tr>
                     <th class="px-4 py-3.5 w-10"><input type="checkbox" id="files-select-all" onchange="toggleSelectAllFiles(this.checked)" class="w-4 h-4 text-amber-500 rounded bg-slate-900 border-slate-700 align-middle" title="Add all listed files to Merge Cart"></th>
                     <th class="px-6 py-3.5">Filename</th>
@@ -662,7 +683,7 @@
                     <th class="px-6 py-3.5 text-right">Actions</th>
                   </tr>
                 </thead>
-                <tbody id="files-table-body" class="divide-y divide-[#1e293b]">
+                <tbody id="files-table-body" class="divide-y divide-[#1E1E24]">
                   <tr>
                     <td colspan="5" class="px-6 py-8 text-center text-slate-500">Select a notebook run to view generated output artifacts and files.</td>
                   </tr>
@@ -674,7 +695,7 @@
 
           <!-- Merge Cart: collect files across finished notebooks -> single merged download -->
           <div id="merge-cart-panel" class="glass-card rounded-2xl border border-emerald-800/50 bg-gradient-to-br from-emerald-950/20 to-transparent p-0 overflow-hidden">
-            <div class="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-[#1e293b]">
+            <div class="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-[#1E1E24]">
               <h3 class="text-sm font-bold text-white flex items-center space-x-2">
                 <i data-lucide="archive" class="w-4 h-4 text-emerald-400"></i>
                 <span>Merge Cart</span>
@@ -687,7 +708,7 @@
               <p class="text-xs text-slate-500 text-center py-4">Cart is empty. Select files from the table above to build your merged download.</p>
             </div>
 
-            <div class="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-t border-[#1e293b] bg-[#0a0d14]/40">
+            <div class="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-t border-[#1E1E24] bg-[#060608]/40">
               <p class="text-[11px] text-slate-500">Files are concatenated raw (<code class="text-cyan-400">cat shard/* &gt; merged.jsonl</code>), top to bottom in the order listed above.</p>
               <div class="flex items-center space-x-3">
                 <button onclick="clearMergeCart()" class="inline-flex items-center space-x-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-slate-800 text-slate-400 hover:text-white border border-slate-700 transition">
@@ -708,10 +729,10 @@
         <!-- TAB 6: RUN CATALOG & HISTORY                  -->
         <!-- ============================================== -->
         <section id="tab-history" class="hidden space-y-4">
-          <div class="glass-panel rounded-2xl overflow-hidden border border-[#222d4a]">
+          <div class="glass-panel rounded-2xl overflow-hidden border border-[#26262E]">
             <div class="overflow-x-auto">
               <table class="w-full text-left text-sm text-slate-300 min-w-[860px]">
-              <thead class="bg-[#0e1424] text-xs uppercase font-semibold text-slate-400 border-b border-[#222d4a]">
+              <thead class="bg-[#101015] text-xs uppercase font-semibold text-slate-400 border-b border-[#26262E]">
                 <tr>
                   <th class="px-6 py-3.5">Notebook Title & Link</th>
                   <th class="px-6 py-3.5">Account</th>
@@ -721,7 +742,7 @@
                   <th class="px-6 py-3.5 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody id="history-table-body" class="divide-y divide-[#1e293b]">
+              <tbody id="history-table-body" class="divide-y divide-[#1E1E24]">
                 <tr>
                   <td colspan="6" class="px-6 py-8 text-center text-slate-500">Loading execution history...</td>
                 </tr>
@@ -736,7 +757,7 @@
         <!-- TAB 7: ACCOUNT KERNELS (any notebook per account) -->
         <!-- ============================================== -->
         <section id="tab-kernels" class="hidden space-y-6">
-          <div class="glass-card rounded-2xl p-6 border border-[#222d4a] space-y-5">
+          <div class="glass-card rounded-2xl p-6 border border-[#26262E] space-y-5">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 class="text-base font-bold text-white flex items-center space-x-2">
@@ -747,7 +768,7 @@
                 <p class="text-xs text-slate-400 mt-1">Browse <span class="text-white font-semibold">any</span> notebook (running or completed) owned by an account — even if it was not launched from this dashboard. Pull outputs/logs directly.</p>
               </div>
               <div class="flex items-center gap-2">
-                <select id="kernels-account-select" class="bg-[#0d121f] border border-[#222d4a] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 min-w-[180px]">
+                <select id="kernels-account-select" class="bg-[#0C0C10] border border-[#26262E] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 min-w-[180px]">
                   <option value="">-- Select Account --</option>
                 </select>
                 <button onclick="fetchAndPopulateKernelsAccounts().then(()=>showToast('Accounts refreshed','info'))" title="Refresh account list" class="inline-flex items-center justify-center w-9 h-9 rounded-xl bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700 transition">
@@ -761,7 +782,7 @@
             </div>
 
             <div class="flex flex-wrap items-center gap-3">
-              <input type="text" id="kernels-search" placeholder="Filter by title / slug (optional)" class="flex-1 min-w-[200px] bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-500" onkeydown="if(event.key==='Enter') loadKernelsForAccount()">
+              <input type="text" id="kernels-search" placeholder="Filter by title / slug (optional)" class="flex-1 min-w-[200px] bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2 text-xs text-white placeholder:text-slate-500 focus:outline-none focus:border-indigo-500" onkeydown="if(event.key==='Enter') loadKernelsForAccount()">
               <button onclick="loadKernelsForAccount()" class="px-3 py-2 rounded-xl text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700 transition">Search</button>
               <span id="kernels-count" class="text-xs text-slate-500 font-mono"></span>
             </div>
@@ -769,7 +790,7 @@
             <div class="glass-panel rounded-xl overflow-hidden">
               <div class="overflow-x-auto">
                 <table class="w-full text-left text-sm text-slate-300 min-w-[820px]">
-                  <thead class="bg-[#0e1424] text-xs uppercase font-semibold text-slate-400 border-b border-[#222d4a]">
+                  <thead class="bg-[#101015] text-xs uppercase font-semibold text-slate-400 border-b border-[#26262E]">
                     <tr>
                       <th class="px-4 py-3.5">Title & Ref</th>
                       <th class="px-4 py-3.5">Status</th>
@@ -778,7 +799,7 @@
                       <th class="px-4 py-3.5 text-right">Actions</th>
                     </tr>
                   </thead>
-                  <tbody id="kernels-table-body" class="divide-y divide-[#1e293b]">
+                  <tbody id="kernels-table-body" class="divide-y divide-[#1E1E24]">
                     <tr><td colspan="5" class="px-6 py-8 text-center text-slate-500">Select an account and click Load to browse its notebooks.</td></tr>
                   </tbody>
                 </table>
@@ -793,7 +814,7 @@
 
           <!-- Selected kernel detail: files + logs -->
           <div id="kernels-detail-panel" class="hidden glass-card rounded-2xl p-6 border border-indigo-800/50 space-y-4">
-            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[#1e293b] pb-3">
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[#1E1E24] pb-3">
               <h4 class="text-sm font-bold text-white flex items-center gap-2">
                 <i data-lucide="file" class="w-4 h-4 text-indigo-400"></i>
                 <span id="kernels-detail-title">Kernel detail</span>
@@ -825,10 +846,10 @@
                 <h5 class="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">Output Files</h5>
                 <div class="glass-panel rounded-xl overflow-hidden max-h-[320px] overflow-y-auto">
                   <table class="w-full text-left text-xs text-slate-300">
-                    <thead class="bg-[#0e1424] text-[10px] uppercase font-semibold text-slate-400 sticky top-0">
+                    <thead class="bg-[#101015] text-[10px] uppercase font-semibold text-slate-400 sticky top-0">
                       <tr><th class="px-3 py-2">Filename</th><th class="px-3 py-2">Size</th><th class="px-3 py-2 text-right">Download</th></tr>
                     </thead>
-                    <tbody id="kernels-files-body" class="divide-y divide-[#1e293b]">
+                    <tbody id="kernels-files-body" class="divide-y divide-[#1E1E24]">
                       <tr><td colspan="3" class="px-3 py-6 text-center text-slate-500">No files yet — click Pull.</td></tr>
                     </tbody>
                   </table>
@@ -836,12 +857,12 @@
               </div>
               <div>
                 <h5 class="text-xs font-bold text-slate-300 uppercase tracking-wider mb-2">Logs</h5>
-                <pre id="kernels-logs-pre" class="w-full h-[320px] overflow-auto bg-[#060911] border border-[#222d4a] rounded-xl p-3 text-[11px] font-mono text-slate-300 whitespace-pre-wrap">Logs will appear here after Fetch.</pre>
+                <pre id="kernels-logs-pre" class="w-full h-[320px] overflow-auto bg-[#050507] border border-[#26262E] rounded-xl p-3 text-[11px] font-mono text-slate-300 whitespace-pre-wrap">Logs will appear here after Fetch.</pre>
               </div>
             </div>
 
             <!-- Version History -->
-            <div class="border-t border-[#1e293b] pt-4 space-y-3">
+            <div class="border-t border-[#1E1E24] pt-4 space-y-3">
               <div class="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <h5 class="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-2">
@@ -862,10 +883,10 @@
               </div>
               <div class="glass-panel rounded-xl overflow-hidden max-h-[360px] overflow-y-auto">
                 <table class="w-full text-left text-xs text-slate-300">
-                  <thead class="bg-[#0e1424] text-[10px] uppercase font-semibold text-slate-400 sticky top-0">
+                  <thead class="bg-[#101015] text-[10px] uppercase font-semibold text-slate-400 sticky top-0">
                     <tr><th class="px-3 py-2">Ver</th><th class="px-3 py-2">Time</th><th class="px-3 py-2">Status</th><th class="px-3 py-2">Files</th><th class="px-3 py-2 text-right">Actions</th></tr>
                   </thead>
-                  <tbody id="kernels-versions-body" class="divide-y divide-[#1e293b]">
+                  <tbody id="kernels-versions-body" class="divide-y divide-[#1E1E24]">
                     <tr><td colspan="5" class="px-3 py-6 text-center text-slate-500">Click Load Versions to see per-version snapshots.</td></tr>
                   </tbody>
                 </table>
@@ -879,8 +900,8 @@
         <!-- TAB 8: SETTINGS & TELEGRAM BOT                -->
         <!-- ============================================== -->
         <section id="tab-settings" class="hidden space-y-6">
-          <div class="max-w-3xl mx-auto glass-panel rounded-2xl p-5 sm:p-8 border border-[#222d4a] space-y-6">
-            <div class="border-b border-[#1e293b] pb-5">
+          <div class="max-w-3xl mx-auto glass-panel rounded-2xl p-5 sm:p-8 border border-[#26262E] space-y-6">
+            <div class="border-b border-[#1E1E24] pb-5">
               <h3 class="text-lg font-bold text-white flex items-center space-x-2">
                 <i data-lucide="send" class="w-5 h-5 text-sky-400 flex-shrink-0"></i>
                 <span>Telegram Bot & Direct Message Alerts</span>
@@ -891,12 +912,12 @@
             <form onsubmit="handleSaveTelegramSettings(event)" class="space-y-5">
               <div>
                 <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Telegram Bot Token</label>
-                <input type="text" id="settings-bot-token" placeholder="e.g. 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500 font-mono">
+                <input type="text" id="settings-bot-token" placeholder="e.g. 123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ" class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500 font-mono">
               </div>
 
               <div>
                 <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Telegram User ID (Direct Messages)</label>
-                <input type="text" id="settings-chat-id" placeholder="e.g. 123456789 (your numeric Telegram user ID)" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500 font-mono">
+                <input type="text" id="settings-chat-id" placeholder="e.g. 123456789 (your numeric Telegram user ID)" class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500 font-mono">
                 <p class="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
                   1. Message <code class="text-cyan-400">@userinfobot</code> on Telegram to get your numeric ID.<br>
                   2. Open your bot and press <span class="text-slate-300 font-semibold">START</span> first — bots cannot message users who never started them.
@@ -925,8 +946,8 @@
   <!-- Add Account Modal (click outside card or press ESC to close) -->
   <div id="modal-add-account" class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center hidden p-4"
        onclick="if(event.target === this) closeAddAccountModal()">
-    <div class="glass-card max-w-lg w-full rounded-2xl p-6 border border-[#222d4a] shadow-2xl">
-      <div class="flex items-center justify-between border-b border-[#1e293b] pb-4 mb-4">
+    <div class="glass-card max-w-lg w-full rounded-2xl p-6 border border-[#26262E] shadow-2xl">
+      <div class="flex items-center justify-between border-b border-[#1E1E24] pb-4 mb-4">
         <h3 class="text-base font-bold text-white flex items-center space-x-2">
           <i data-lucide="user-plus" class="w-5 h-5 text-cyan-400"></i>
           <span>Add Kaggle Account</span>
@@ -939,13 +960,13 @@
       <form onsubmit="handleAddAccountSubmit(event)" class="space-y-4">
         <div>
           <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Kaggle Access Token / API Key</label>
-          <textarea id="modal-api-key" required rows="4" placeholder="Paste your Kaggle access_token or kaggle.json content here..." class="w-full font-mono text-xs bg-[#0d121f] border border-[#222d4a] rounded-xl p-3 text-white focus:outline-none focus:border-cyan-500"></textarea>
+          <textarea id="modal-api-key" required rows="4" placeholder="Paste your Kaggle access_token or kaggle.json content here..." class="w-full font-mono text-xs bg-[#0C0C10] border border-[#26262E] rounded-xl p-3 text-white focus:outline-none focus:border-cyan-500"></textarea>
           <p class="text-[11px] text-slate-500 mt-1">Found in Kaggle Settings -> API -> Create New Token / Access Token.</p>
         </div>
 
         <div>
           <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">Custom Username (Optional)</label>
-          <input type="text" id="modal-username" placeholder="Leave empty for auto-discovery" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2 text-xs text-white focus:outline-none focus:border-cyan-500">
+          <input type="text" id="modal-username" placeholder="Leave empty for auto-discovery" class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2 text-xs text-white focus:outline-none focus:border-cyan-500">
         </div>
 
         <div class="flex justify-end space-x-3 pt-2">

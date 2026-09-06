@@ -44,7 +44,7 @@ function renderDashboard() {
       : `<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-800 text-slate-400">Idle</span>`;
 
     const activeList = activeRuns.map(r => `
-      <div class="mt-2 p-2 rounded-lg bg-[#0a0d14] border border-[#1e293b] flex items-center justify-between text-xs">
+      <div class="mt-2 p-2 rounded-lg bg-[#060608] border border-[#1E1E24] flex items-center justify-between text-xs">
         <div class="truncate max-w-[200px]">
           <p class="font-bold text-white truncate">${esc(r.title)}</p>
           <p class="text-[10px] text-slate-400 font-mono">${esc(r.accelerator)}</p>
@@ -54,7 +54,7 @@ function renderDashboard() {
     `).join('');
 
     return `
-      <div class="glass-card rounded-2xl p-5 border border-[#222d4a] relative flex flex-col justify-between space-y-4 min-w-0">
+      <div class="glass-card rounded-2xl p-5 border border-[#26262E] relative flex flex-col justify-between space-y-4 min-w-0">
         <!-- Account Header -->
         <div class="flex items-start justify-between gap-2">
           <div class="flex items-center space-x-3 min-w-0">
@@ -85,7 +85,7 @@ function renderDashboard() {
               </span>
               <span class="text-white font-mono text-[11px]">${gpuRemaining}h left / ${gpu.limit}h</span>
             </div>
-            <div class="w-full bg-[#0a0d14] rounded-full h-2 overflow-hidden border border-slate-800">
+            <div class="w-full bg-[#060608] rounded-full h-2 overflow-hidden border border-slate-800">
               <div class="bg-cyan-400 h-2 rounded-full transition-all duration-500" style="width: ${gpuPercent}%"></div>
             </div>
           </div>
@@ -99,7 +99,7 @@ function renderDashboard() {
               </span>
               <span class="text-white font-mono text-[11px]">${tpuRemaining}h left / ${tpu.limit}h</span>
             </div>
-            <div class="w-full bg-[#0a0d14] rounded-full h-2 overflow-hidden border border-slate-800">
+            <div class="w-full bg-[#060608] rounded-full h-2 overflow-hidden border border-slate-800">
               <div class="bg-purple-400 h-2 rounded-full transition-all duration-500" style="width: ${tpuPercent}%"></div>
             </div>
           </div>
@@ -109,7 +109,7 @@ function renderDashboard() {
         ${activeRuns.length > 0 ? `<div><p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Active Execution:</p>${activeList}</div>` : ''}
 
         <!-- Footer Actions -->
-        <div class="pt-2 border-t border-[#1e293b] flex items-center justify-between text-xs">
+        <div class="pt-2 border-t border-[#1E1E24] flex items-center justify-between text-xs">
           <button onclick="refreshSingleQuota('${esc(acc.username)}')" ${AppState.ops?.refreshing_quotas ? 'disabled' : ''} class="text-slate-400 hover:text-cyan-400 flex items-center space-x-1 transition text-[11px] ${AppState.ops?.refreshing_quotas ? 'opacity-50 cursor-not-allowed' : ''}">
             <i data-lucide="rotate-cw" class="w-3 h-3 ${AppState.ops?.refreshing_quotas ? 'animate-spin' : ''}"></i>
             <span>${AppState.ops?.refreshing_quotas ? 'Refreshing...' : 'Refresh Quota'}</span>

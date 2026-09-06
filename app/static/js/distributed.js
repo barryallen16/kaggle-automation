@@ -42,24 +42,36 @@ function renderDistributedAccountCheckboxes() {
     const q = typeof getAccountRemainingQuota === 'function' ? getAccountRemainingQuota(acc) : { gpuLeft: 30, tpuLeft: 20 };
     const left = quotaKind === 'tpu' ? q.tpuLeft : q.gpuLeft;
     const hasQuota = !quotaKind || left > 0;
-    const quotaLabel = !quotaKind
-      ? 'CPU — no quota needed'
-      : (quotaKind === 'tpu' ? `${fmtHours(q.tpuLeft)}h TPU left` : `${fmtHours(q.gpuLeft)}h GPU left`) + (hasQuota ? '' : ' — CPU only');
-    const wasChecked = prevChecked.has(acc.username);
-    const shouldChecked = isFirstRender ? hasQuota : wasChecked;
     const prevSess = prevSessions[acc.username];
     const sessVal = prevSess ? prevSess : globalSessions;
+    // No free slot for the chosen session count = not an option while capped
+    // (a shard there cannot land). CPU needs no slot and is never capped.
+    const busy = typeof gpuSessionsBusy === 'function' ? gpuSessionsBusy(acc) : 0;
+    const capped = !!quotaKind && Math.max(0, (parseInt(sessVal, 10) || 1) - busy) <= 0;
+    const quotaLabel = !quotaKind
+      ? 'CPU — no quota needed'
+      : (quotaKind === 'tpu' ? `${fmtHours(q.tpuLeft)}h TPU left` : `${fmtHours(q.gpuLeft)}h GPU left`)
+        + (capped ? ' · capped' : (hasQuota ? '' : ' — CPU only'));
+    const wasChecked = prevChecked.has(acc.username);
+    const shouldChecked = capped ? false : (isFirstRender ? hasQuota : wasChecked);
+    const rowTone = capped
+      ? 'border-rose-800/50 opacity-60'
+      : (hasQuota ? 'border-[#1E1E24] hover:border-purple-500/50' : 'border-amber-800/50 opacity-75');
+    const subTone = capped ? 'text-rose-400/90' : (hasQuota ? 'text-slate-400' : 'text-amber-400/90');
+    const tip = capped
+      ? `All sessions busy (${busy} active) — stop a run to free a slot`
+      : (hasQuota ? '' : 'No ' + (quotaKind === 'tpu' ? 'TPU' : 'GPU') + ' quota left — fine for CPU runs');
     return `
-    <div class="flex items-center space-x-2.5 p-2.5 rounded-lg bg-[#080b12] border ${hasQuota ? 'border-[#1e293b] hover:border-purple-500/50' : 'border-amber-800/50 opacity-75'} transition">
-      <label class="flex items-center space-x-2.5 flex-1 min-w-0 cursor-pointer" title="${hasQuota ? '' : 'No ' + (quotaKind === 'tpu' ? 'TPU' : 'GPU') + ' quota left — fine for CPU runs'}">
-        <input type="checkbox" name="dist-acc" value="${esc(acc.username)}" ${shouldChecked ? 'checked' : ''} onchange="updateShardsPreview()" class="w-4 h-4 text-purple-500 rounded bg-slate-900 border-slate-700 focus:ring-0 flex-shrink-0">
+    <div class="flex items-center space-x-2.5 p-2.5 rounded-lg bg-[#070709] border ${rowTone} transition">
+      <label class="flex items-center space-x-2.5 flex-1 min-w-0 ${capped ? 'cursor-not-allowed' : 'cursor-pointer'}" title="${tip}">
+        <input type="checkbox" name="dist-acc" value="${esc(acc.username)}" ${shouldChecked ? 'checked' : ''}${capped ? ' disabled' : ''} onchange="updateShardsPreview()" class="w-4 h-4 text-purple-500 rounded bg-slate-900 border-slate-700 focus:ring-0 flex-shrink-0 disabled:cursor-not-allowed">
         <div class="truncate flex-1">
           <span class="text-xs font-bold text-white block truncate">@${esc(acc.username)}</span>
-          <span class="text-[10px] ${hasQuota ? 'text-slate-400' : 'text-amber-400/90'} font-mono">${esc(quotaLabel)}</span>
+          <span class="text-[10px] ${subTone} font-mono">${esc(quotaLabel)}</span>
         </div>
       </label>
       <select onchange="updateShardsPreview();" 
-              class="dist-session-select bg-[#0d121f] border border-[#222d4a] rounded-md px-1.5 py-1 text-[10px] text-purple-300 focus:outline-none focus:border-purple-500 flex-shrink-0"
+              class="dist-session-select bg-[#0C0C10] border border-[#26262E] rounded-md px-1.5 py-1 text-[10px] text-purple-300 focus:outline-none focus:border-purple-500 flex-shrink-0"
               title="GPU sessions for this account (overrides the global setting)"
               data-acc="${esc(acc.username)}">
         <option value="1" ${sessVal === '1' ? 'selected' : ''}>1x</option>
@@ -321,7 +333,7 @@ function renderManualShards() {
 
   if (manualShardsList.length === 0) {
     container.innerHTML = `
-      <div class="p-6 text-center border border-dashed border-[#222d4a] rounded-xl text-slate-500 text-xs">
+      <div class="p-6 text-center border border-dashed border-[#26262E] rounded-xl text-slate-500 text-xs">
         <i data-lucide="file" class="w-8 h-8 mx-auto mb-2 text-slate-600"></i>
         <p class="font-medium text-slate-400">No manual shards defined</p>
         <p class="text-[11px] text-slate-500 mt-1 mb-3">Click "+ Add Shard" or "Prefill from Auto" to configure custom workload splits.</p>
@@ -350,14 +362,16 @@ function renderManualShards() {
         tpuLeft: Math.max(0, (a.last_quota?.tpu?.limit || 20) - (a.last_quota?.tpu?.used || 0))
       };
       const left = manualKind === 'tpu' ? q.tpuLeft : (manualKind === 'gpu' ? q.gpuLeft : Infinity);
+      const busy = manualKind && typeof gpuSessionsBusy === 'function' ? gpuSessionsBusy(a) : 0;
+      const optCapped = !!manualKind && busy >= 2;
       const label = !manualKind
         ? `@${esc(a.username)} (CPU — no quota needed)`
-        : `@${esc(a.username)} (${(manualKind === 'tpu' ? q.tpuLeft : q.gpuLeft).toFixed(1)}h ${manualKind === 'tpu' ? 'TPU' : 'GPU'} left${left <= 0 ? ' — empty' : ''})`;
-      return `<option value="${esc(a.username)}" ${a.username === row.account ? 'selected' : ''}>${label}</option>`;
+        : `@${esc(a.username)} (${(manualKind === 'tpu' ? q.tpuLeft : q.gpuLeft).toFixed(1)}h ${manualKind === 'tpu' ? 'TPU' : 'GPU'} left${optCapped ? ' — capped' : (left <= 0 ? ' — empty' : '')})`;
+      return `<option value="${esc(a.username)}" ${a.username === row.account ? 'selected' : ''}${optCapped ? ' disabled' : ''}>${label}</option>`;
     }).join('');
 
     return `
-      <div class="flex items-center gap-2 sm:gap-3 p-2.5 rounded-xl bg-[#0b101d] border ${isInvalid ? 'border-amber-600/60' : 'border-[#1e293b]'} hover:border-purple-600/50 transition flex-wrap sm:flex-nowrap" data-row-id="${row.id}">
+      <div class="flex items-center gap-2 sm:gap-3 p-2.5 rounded-xl bg-[#0D0D12] border ${isInvalid ? 'border-amber-600/60' : 'border-[#1E1E24]'} hover:border-purple-600/50 transition flex-wrap sm:flex-nowrap" data-row-id="${row.id}">
         <!-- Shard Badge -->
         <span class="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-purple-950/80 text-purple-300 font-bold text-xs flex-shrink-0 border border-purple-800/60">
           #${idx + 1}
@@ -365,7 +379,7 @@ function renderManualShards() {
 
         <!-- Account Selector -->
         <div class="w-full sm:w-56 flex-shrink-0">
-          <select onchange="updateManualRowAccount(${row.id}, this.value)" class="w-full bg-[#080c16] border border-[#222d4a] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500">
+          <select onchange="updateManualRowAccount(${row.id}, this.value)" class="w-full bg-[#08080B] border border-[#26262E] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500">
             ${accountOptions}
           </select>
         </div>
@@ -374,12 +388,12 @@ function renderManualShards() {
         <div class="flex items-center space-x-2 flex-1 min-w-[200px]">
           <div class="relative flex-1">
             <span class="absolute left-2.5 top-1.5 text-[10px] text-slate-500 uppercase font-mono pointer-events-none">Start</span>
-            <input type="number" min="0" value="${row.startIndex}" oninput="updateManualRowRange(${row.id}, 'start', this.value)" class="w-full bg-[#080c16] border ${isInvalid ? 'border-amber-500' : 'border-[#222d4a]'} rounded-lg pl-12 pr-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-purple-500">
+            <input type="number" min="0" value="${row.startIndex}" oninput="updateManualRowRange(${row.id}, 'start', this.value)" class="w-full bg-[#08080B] border ${isInvalid ? 'border-amber-500' : 'border-[#26262E]'} rounded-lg pl-12 pr-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-purple-500">
           </div>
           <span class="text-slate-500 text-xs flex-shrink-0 font-bold">➔</span>
           <div class="relative flex-1">
             <span class="absolute left-2.5 top-1.5 text-[10px] text-slate-500 uppercase font-mono pointer-events-none">End</span>
-            <input type="number" min="0" value="${row.endIndex}" oninput="updateManualRowRange(${row.id}, 'end', this.value)" class="w-full bg-[#080c16] border ${isInvalid ? 'border-amber-500' : 'border-[#222d4a]'} rounded-lg pl-10 pr-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-purple-500">
+            <input type="number" min="0" value="${row.endIndex}" oninput="updateManualRowRange(${row.id}, 'end', this.value)" class="w-full bg-[#08080B] border ${isInvalid ? 'border-amber-500' : 'border-[#26262E]'} rounded-lg pl-10 pr-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-purple-500">
           </div>
         </div>
 
@@ -404,6 +418,7 @@ function updateManualRowAccount(rowId, account) {
   const row = manualShardsList.find(r => r.id === rowId);
   if (row) {
     row.account = account;
+    updateManualShardsSummary();
   }
 }
 
@@ -460,10 +475,22 @@ function updateManualShardsSummary() {
     return (quotaKind === 'tpu' ? q.tpuLeft : q.gpuLeft) <= 0;
   }) : -1;
 
+  // Hard stop: shards aimed past the 2-session cap cannot land at all
+  // (mirrors the server's assigned + active > 2 reject).
+  const overCapShard = quotaKind ? manualShardsList.findIndex((r) => {
+    const assigned = manualShardsList.filter(x => x.account && x.account === r.account).length;
+    const info = (AppState.accounts || []).find(a => a.username === r.account);
+    const busy = info && typeof gpuSessionsBusy === 'function' ? gpuSessionsBusy(info) : 0;
+    return r.account && assigned + busy > 2;
+  }) : -1;
+
   if (hasInvalidRange) {
     statusEl.innerHTML = `<span class="inline-flex items-center text-amber-400 font-semibold"><i data-lucide="alert-triangle" class="w-3.5 h-3.5 mr-1"></i>Start index must be less than end index</span>`;
   } else if (hasMissingAccount) {
     statusEl.innerHTML = `<span class="inline-flex items-center text-rose-400 font-semibold"><i data-lucide="alert-circle" class="w-3.5 h-3.5 mr-1"></i>Every shard must have an assigned account</span>`;
+  } else if (overCapShard !== -1) {
+    const r = manualShardsList[overCapShard];
+    statusEl.innerHTML = `<span class="inline-flex items-center text-rose-400 font-semibold"><i data-lucide="alert-circle" class="w-3.5 h-3.5 mr-1"></i>Shard #${overCapShard + 1} → @${esc(r.account)} exceeds the 2-session cap — free a slot or move it</span>`;
   } else if (emptyQuotaShard !== -1) {
     const r = manualShardsList[emptyQuotaShard];
     statusEl.innerHTML = `<span class="inline-flex items-center text-amber-400 font-semibold"><i data-lucide="alert-triangle" class="w-3.5 h-3.5 mr-1"></i>Shard #${emptyQuotaShard + 1} targets @${esc(r.account)} (0h ${quotaKind === 'tpu' ? 'TPU' : 'GPU'} left) — switch it to CPU or another account</span>`;

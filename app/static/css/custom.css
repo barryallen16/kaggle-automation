@@ -1,25 +1,28 @@
-/* Dark Modern Theme - Kaggle Automation Dashboard */
+/* Neo-Tokyo Night Theme - Kaggle Automation Dashboard
+   Crushed black, firebrick red + teal neon (Akira night palette).
+   Never synthwave: no magenta, no purple glow, no cyan wash. Neon stays
+   isolated and sparing - darkness does the heavy lifting. */
 /* Fonts served locally from /static/fonts (see fonts.css): Geist body, Geist Mono code, Geist Pixel display */
 
 :root {
-  --bg-primary: #0a0d14;
-  --bg-secondary: #101522;
-  --bg-card: #151b2d;
-  --bg-card-hover: #1b233a;
-  --border-color: #242f49;
-  --accent-cyan: #00f2fe;
-  --accent-blue: #4facfe;
+  --bg-primary: #060608;
+  --bg-secondary: #0e0e12;
+  --bg-card: #121217;
+  --bg-card-hover: #17171c;
+  --border-color: #282832;
+  --accent-cyan: #45c8c4;
+  --accent-blue: #6e8fd8;
   --accent-emerald: #10b981;
   --accent-amber: #f59e0b;
-  --accent-rose: #f43f5e;
-  --accent-purple: #8b5cf6;
+  --accent-rose: #c94838;
+  --accent-purple: #6770d8;
 }
 
 body {
   font-family: 'Geist Pixel Square', 'Geist', monospace;
   letter-spacing: 0.02em;
   background-color: var(--bg-primary);
-  color: #e2e8f0;
+  color: #e3e3e0;
 }
 
 code, pre, .terminal-font {
@@ -32,38 +35,38 @@ code, pre, .terminal-font {
   height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #0d121f;
+  background: #0c0c10;
 }
 ::-webkit-scrollbar-thumb {
-  background: #242f49;
+  background: #282832;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3b4d75;
+  background: #43434c;
 }
 
 /* Glassmorphism Card */
 .glass-panel {
-  background: rgba(21, 27, 45, 0.85);
+  background: rgba(14, 14, 19, 0.88);
   backdrop-filter: blur(12px);
   border: 1px solid var(--border-color);
-  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.55);
 }
 
 .glass-card {
-  background: #141a2c;
-  border: 1px solid #232c45;
+  background: #111116;
+  border: 1px solid #222228;
   transition: all 0.2s ease-in-out;
 }
 
 .glass-card:hover {
-  border-color: #3e4e7a;
-  box-shadow: 0 4px 20px rgba(0, 242, 254, 0.08);
+  border-color: #3a3a44;
+  box-shadow: 0 4px 20px rgba(69, 200, 196, 0.08);
 }
 
 /* Glowing text and borders (kept minimal - flat theme) */
 .glow-cyan {
-  box-shadow: 0 0 15px rgba(0, 242, 254, 0.3);
+  box-shadow: 0 0 15px rgba(69, 200, 196, 0.3);
 }
 
 .glow-emerald {
@@ -88,14 +91,14 @@ svg[data-pixel-icon], .pixel-icon-svg {
 
 /* Log Terminal */
 .terminal-window {
-  background-color: #060911;
-  border: 1px solid #1e293b;
-  color: #38bdf8;
+  background-color: #050507;
+  border: 1px solid #1e1e24;
+  color: #4cc9c4;
 }
 
 /* Tab Active State */
 .nav-tab.active {
-  background: rgba(0, 242, 254, 0.08);
+  background: rgba(69, 200, 196, 0.08);
   border-color: var(--accent-cyan);
   color: var(--accent-cyan);
 }

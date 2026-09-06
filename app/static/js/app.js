@@ -140,6 +140,21 @@ function quotaKindForAccelerator(accelerator) {
   return 'gpu';
 }
 
+// Concurrent GPU/TPU sessions burn one of 2 slots each (mirrors
+// WorkloadDistributor.MAX_GPU_SESSIONS_PER_ACCOUNT on the server).
+const MAX_GPU_SESSIONS = 2;
+
+function gpuSessionsBusy(acc) {
+  return (acc?.active_runs || []).filter(r => {
+    const a = String(r?.accelerator || 'none').toLowerCase();
+    return a !== 'none' && a !== 'default' && a !== 'cpu';
+  }).length;
+}
+
+function gpuSessionsFree(acc) {
+  return Math.max(0, MAX_GPU_SESSIONS - gpuSessionsBusy(acc));
+}
+
 // Sort accounts descending: highest GPU quota left first, then TPU quota left, then username
 function sortAccountsDescending(accounts) {
   return [...accounts].sort((a, b) => {
