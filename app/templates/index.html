@@ -313,7 +313,7 @@
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                 <div>
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Hardware Accelerator</label>
-                  <select id="runner-accelerator-select" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
+                  <select id="runner-accelerator-select" onchange="updateRunnerQuotaWarning()" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
                     <option value="none">Default / CPU</option>
                     <option value="nvidia-tesla-t4-x2" selected>⚡ T4 GPU x 2 (High Performance)</option>
                     <option value="nvidia-tesla-t4-highmem">⚡ T4 GPU High Memory</option>
@@ -324,6 +324,7 @@
                     <option value="tpu-v5e-8">🚀 TPU v5e-8</option>
                     <option value="tpu-v6e-8">🚀 TPU v6e-8</option>
                   </select>
+                  <p id="runner-quota-warn" class="hidden text-[11px] text-amber-300/80 mt-2"></p>
                 </div>
 
                 <!-- Internet and Options -->
@@ -414,7 +415,7 @@
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                 <div>
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Accelerator per Account</label>
-                  <select id="dist-accelerator" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
+                  <select id="dist-accelerator" onchange="renderDistributedAccountCheckboxes(); if (typeof distShardingMode !== 'undefined' && distShardingMode === 'manual') renderManualShards();" class="w-full bg-[#0d121f] border border-[#222d4a] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
                     <option value="none">Default / CPU</option>
                     <option value="nvidia-tesla-t4-x2" selected>⚡ T4 GPU x 2 (High Performance)</option>
                     <option value="nvidia-tesla-t4-highmem">⚡ T4 GPU High Memory</option>
