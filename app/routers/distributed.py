@@ -25,6 +25,17 @@ class ManualShardItem(BaseModel):
     custom_params: dict[str, Any] | None = None
 
 
+def _json_or_400(text: str | None, name: str):
+    """json.loads for form fields that accept JSON; None for blank/non-JSON input."""
+    text = (text or "").strip()
+    if not text or text[0] not in "[{":
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail=f"{name} must be valid JSON")
+
+
 class DistributedLaunchJSON(BaseModel):
     base_title: str
     code_content: str
@@ -159,22 +170,17 @@ async def upload_and_launch_distributed(
     sessions_per_account: str = Form("2"),  # "2" or JSON object {"user": 2}
 ):
     try:
-        # Parse accounts list
-        if accounts.strip().startswith("["):
-            try:
-                acc_list = json.loads(accounts)
-            except json.JSONDecodeError:
-                raise HTTPException(
-                    status_code=400,
-                    detail="accounts must be a valid JSON array or comma-separated string",
-                )
-            if not isinstance(acc_list, list):
-                raise HTTPException(
-                    status_code=400,
-                    detail="accounts JSON must be an array of usernames",
-                )
-        else:
+        # Accounts: JSON array or comma-separated string
+        acc_parsed = _json_or_400(accounts, "accounts")
+        if isinstance(acc_parsed, list):
+            acc_list = acc_parsed
+        elif acc_parsed is None:
             acc_list = [a.strip() for a in accounts.split(",") if a.strip()]
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="accounts JSON must be an array of usernames",
+            )
 
         if not acc_list:
             raise HTTPException(
@@ -186,37 +192,20 @@ async def upload_and_launch_distributed(
         filename = file.filename or "notebook.ipynb"
 
         parsed_env_vars = None
-        if env_vars and env_vars.strip():
-            try:
-                obj = json.loads(env_vars)
-                if isinstance(obj, dict):
-                    parsed_env_vars = {str(k): str(v) for k, v in obj.items()}
-                else:
-                    raise HTTPException(
-                        status_code=400, detail="env_vars must be a JSON object"
-                    )
-            except json.JSONDecodeError:
+        env_obj = _json_or_400(env_vars, "env_vars")
+        if env_obj is not None:
+            if not isinstance(env_obj, dict):
                 raise HTTPException(
-                    status_code=400, detail="env_vars must be valid JSON"
+                    status_code=400, detail="env_vars must be a JSON object"
                 )
+            parsed_env_vars = {str(k): str(v) for k, v in env_obj.items()}
 
         # Sessions: plain int or per-account JSON object
         sessions_raw = (sessions_per_account or "2").strip()
-        if sessions_raw.startswith("{"):
-            try:
-                sessions_obj = json.loads(sessions_raw)
-                if not isinstance(sessions_obj, dict):
-                    raise HTTPException(
-                        status_code=400,
-                        detail="sessions_per_account JSON must be an object",
-                    )
-            except json.JSONDecodeError:
-                raise HTTPException(
-                    status_code=400,
-                    detail="sessions_per_account must be an int or JSON object",
-                )
+        sessions_obj = _json_or_400(sessions_raw, "sessions_per_account")
+        if isinstance(sessions_obj, dict):
             sessions_val: int | dict[str, int] = sessions_obj
-        else:
+        elif sessions_obj is None:
             try:
                 sessions_val = int(sessions_raw)
             except ValueError:
@@ -224,6 +213,11 @@ async def upload_and_launch_distributed(
                     status_code=400,
                     detail="sessions_per_account must be an int or JSON object",
                 )
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="sessions_per_account JSON must be an object",
+            )
 
         if tracker.is_active("distribute"):
             raise HTTPException(

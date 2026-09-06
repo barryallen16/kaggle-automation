@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from config import LOGS_DIR
+from config import LOGS_DIR, is_gpu_accelerator
 from database import create_distributed_workload, update_workload_status, utcnow_iso
 
 from services.account_manager import AccountManager
@@ -76,14 +76,6 @@ class WorkloadDistributor:
     # ------------------------------------------------------------------
     # Availability / runner-plan helpers
     # ------------------------------------------------------------------
-    @staticmethod
-    def _is_gpu(accelerator: str | None) -> bool:
-        return bool(accelerator) and str(accelerator).lower() not in (
-            "none",
-            "default",
-            "cpu",
-        )
-
     @classmethod
     async def _busy_gpu_sessions(
         cls, accounts: list[str], launch_is_gpu: bool
@@ -113,7 +105,7 @@ class WorkloadDistributor:
             acc = r.get("account_username")
             if acc not in account_set:
                 continue
-            if not cls._is_gpu(r.get("accelerator")):
+            if not is_gpu_accelerator(r.get("accelerator")):
                 continue
             candidates.append(r)
 
@@ -189,7 +181,7 @@ class WorkloadDistributor:
         aren't capped by that limit at all. `chosen` comes from the per-account
         sessions map (which may itself be a uniform global value).
         """
-        gpu_launch = cls._is_gpu(accelerator)
+        gpu_launch = is_gpu_accelerator(accelerator)
         plan = []
         for a in accounts:
             chosen = sessions_map.get(a, 2)
@@ -234,7 +226,7 @@ class WorkloadDistributor:
             acc = r.get("account_username")
             if acc not in candidates:
                 continue
-            if not cls._is_gpu(r.get("accelerator")):
+            if not is_gpu_accelerator(r.get("accelerator")):
                 continue
             if r["id"] in seen_refs:
                 continue
@@ -357,7 +349,7 @@ class WorkloadDistributor:
         # 0. Actively reclaim GPU slots: find lingering dashboard-managed
         #    kernels (RUNNING/QUEUED long after their run "ended") and cancel
         #    them instead of failing with Kaggle's session-cap error.
-        if cls._is_gpu(accelerator):
+        if is_gpu_accelerator(accelerator):
             try:
                 reclaim = await cls.reclaim_slots(accounts)
                 if reclaim["cancelled"]:
@@ -370,7 +362,7 @@ class WorkloadDistributor:
                 logger.warning(f"Slot reclamation skipped: {e}")
 
         # 1. Live availability check
-        busy = await cls._busy_gpu_sessions(accounts, cls._is_gpu(accelerator))
+        busy = await cls._busy_gpu_sessions(accounts, is_gpu_accelerator(accelerator))
 
         workload_id = f"workload_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
@@ -415,7 +407,7 @@ class WorkloadDistributor:
                 )
 
             # Check per-account GPU slot capacity in manual mode
-            if cls._is_gpu(accelerator):
+            if is_gpu_accelerator(accelerator):
                 for acc in {s["account_username"] for s in shards_info}:
                     assigned = sum(
                         1 for s in shards_info if s["account_username"] == acc
@@ -494,7 +486,7 @@ class WorkloadDistributor:
         #    a stop-stub (which loses the version's output snapshot). Only when
         #    the quota is the binding constraint; user-pinned env vars win.
         runtime_budgets: dict[str, int | None] = {}
-        if cls._is_gpu(accelerator):
+        if is_gpu_accelerator(accelerator):
             new_sessions: dict[str, int] = {}
             for s in shards_info:
                 acc = s["account_username"]
@@ -575,12 +567,10 @@ class WorkloadDistributor:
             }
         )
 
-        # 4b. One-time log purge for this batch BEFORE any shard writes.
-        # Per-shard purge raced when 16-32 shards launched in parallel (each
-        # shard deleted logs just created by its peers). Do it once here.
+        # 4b. One-time log purge for this batch BEFORE any shard writes (shards
+        # pass purge_logs=False so they skip their own).
         try:
             LOGS_DIR.mkdir(parents=True, exist_ok=True)
-            os.environ["_WORKLOAD_PURGE_DONE"] = "1"
             KaggleService._purge_previous_logs()
             logger.info(f"Workload {workload_id}: purged logs once for {R} shards")
         except Exception as e:
@@ -629,6 +619,7 @@ class WorkloadDistributor:
                     workload_id=workload_id,
                     shard_index=idx,
                     total_shards=R,
+                    purge_logs=False,  # purged once per batch above
                 )
             return {
                 "shard_index": idx,
@@ -662,16 +653,13 @@ class WorkloadDistributor:
                 out.append(await launch_shard(s))
             return out
 
-        try:
-            grouped = await asyncio.gather(
-                *[
-                    launch_account_group(acc, group)
-                    for acc, group in by_account.items()
-                ],
-                return_exceptions=True,
-            )
-        finally:
-            os.environ.pop("_WORKLOAD_PURGE_DONE", None)
+        grouped = await asyncio.gather(
+            *[
+                launch_account_group(acc, group)
+                for acc, group in by_account.items()
+            ],
+            return_exceptions=True,
+        )
 
         processed_results = []
         for group_result in grouped:

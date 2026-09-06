@@ -26,24 +26,22 @@ def _sanitize_account(acc: dict[str, Any]) -> dict[str, Any]:
 
 
 def _account_quota_left(acc: dict[str, Any]) -> tuple:
+    def _left(section: dict, default_limit: float) -> float:
+        try:
+            limit = section.get("limit")
+            limit = default_limit if limit is None else float(limit)
+            used = float(section.get("used") or 0.0)
+            return max(0.0, limit - used)
+        except (ValueError, TypeError):
+            return 0.0
+
     last_q = acc.get("last_quota") or {}
     if not isinstance(last_q, dict):
         return (0.0, 0.0)
-    gpu = last_q.get("gpu") or {}
-    tpu = last_q.get("tpu") or {}
-    try:
-        gpu_limit = float(gpu.get("limit") if gpu.get("limit") is not None else 30.0)
-        gpu_used = float(gpu.get("used") if gpu.get("used") is not None else 0.0)
-        gpu_left = max(0.0, gpu_limit - gpu_used)
-    except (ValueError, TypeError):
-        gpu_left = 0.0
-    try:
-        tpu_limit = float(tpu.get("limit") if tpu.get("limit") is not None else 20.0)
-        tpu_used = float(tpu.get("used") if tpu.get("used") is not None else 0.0)
-        tpu_left = max(0.0, tpu_limit - tpu_used)
-    except (ValueError, TypeError):
-        tpu_left = 0.0
-    return (gpu_left, tpu_left)
+    return (
+        _left(last_q.get("gpu") or {}, 30.0),
+        _left(last_q.get("tpu") or {}, 20.0),
+    )
 
 
 @router.get("")
@@ -127,9 +125,6 @@ async def refresh_single(username: str):
 @router.get("/{username}/debug")
 async def debug_account(username: str):
     """Debug fallback usernames like kaggle_0694f485 - shows real Kaggle username via JWT and via CLI."""
-    import base64
-    import json as _json
-
     from database import get_account_by_username
     from services.account_manager import AccountManager
 
@@ -137,24 +132,7 @@ async def debug_account(username: str):
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     key = acc.get("api_key", "")
-    # Try JWT decode
-    jwt_username = None
-    try:
-        parts = key.strip().split(".")
-        if len(parts) == 3:
-            payload = parts[1] + "=" * ((4 - len(parts[1]) % 4) % 4)
-            decoded = base64.urlsafe_b64decode(payload)
-            claims = _json.loads(decoded)
-            for field in ["username", "user_name", "sub", "preferred_username"]:
-                if (
-                    field in claims
-                    and isinstance(claims[field], str)
-                    and not claims[field].isdigit()
-                ):
-                    jwt_username = claims[field]
-                    break
-    except Exception:
-        pass
+    jwt_username = AccountManager.extract_username_from_token(key)
     # Try CLI discovery (may be slow)
     cli_username = None
     cli_error = None

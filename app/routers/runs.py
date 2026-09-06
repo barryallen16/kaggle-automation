@@ -1,5 +1,6 @@
 from typing import Annotated, Any
 
+from config import is_gpu_accelerator
 from database import get_active_runs, get_all_runs, get_run_by_id, update_run_status
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
@@ -8,11 +9,6 @@ from services.kaggle_service import KaggleService
 from services.ops_tracker import tracker
 
 router = APIRouter(prefix="/api/runs", tags=["Runs"])
-
-
-def _is_gpu_accelerator(acc: Any) -> bool:
-    a = str(acc or "").lower()
-    return bool(a) and a not in ("none", "default", "cpu")
 
 
 async def _quota_capped_env(
@@ -25,13 +21,13 @@ async def _quota_capped_env(
     stop-stub would lose the version's output). User-pinned env vars win.
     concurrent = this kernel + currently-active GPU runs on the account.
     """
-    if not _is_gpu_accelerator(accelerator):
+    if not is_gpu_accelerator(accelerator):
         return env_vars
     active = [
         r
         for r in get_active_runs()
         if r.get("account_username") == account_username
-        and _is_gpu_accelerator(r.get("accelerator"))
+        and is_gpu_accelerator(r.get("accelerator"))
     ]
     budget = await AccountManager.gpu_runtime_budget_minutes(
         account_username, 1 + len(active)

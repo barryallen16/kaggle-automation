@@ -83,39 +83,33 @@ class KaggleService:
     # "Stop All" on a 32-shard workload used to fire ALL of them at once -> RAM
     # spike -> OOM-killed the server. All stops funnel through this global cap.
     STOP_CONCURRENCY_LIMIT = max(1, int(os.getenv("STOP_CONCURRENCY", "3")))
-    _push_semaphore: asyncio.Semaphore | None = None
-    _kernel_status_semaphore: asyncio.Semaphore | None = None
-    _stop_semaphore: asyncio.Semaphore | None = None
-    _push_primitive_loop_id: int | None = None
+    _semaphores: ClassVar[dict[str, tuple[int, asyncio.Semaphore]]] = {}
+
+    @classmethod
+    def _get_semaphore(cls, name: str, limit: int) -> asyncio.Semaphore:
+        # asyncio primitives bind to whichever loop first awaits them; each
+        # named semaphore is rebuilt when the running loop changed (tests /
+        # embedded runners). Previously all three shared one loop guard, so a
+        # loop change rebuilt only the first-used semaphore and left the other
+        # two bound to the dead loop.
+        loop_id = id(asyncio.get_running_loop())
+        cached = cls._semaphores.get(name)
+        if cached is None or cached[0] != loop_id:
+            cached = (loop_id, asyncio.Semaphore(limit))
+            cls._semaphores[name] = cached
+        return cached[1]
 
     @classmethod
     def _get_push_semaphore(cls) -> asyncio.Semaphore:
-        loop_id = id(asyncio.get_running_loop())
-        if cls._push_semaphore is None or cls._push_primitive_loop_id != loop_id:
-            cls._push_semaphore = asyncio.Semaphore(cls.PUSH_CONCURRENCY_LIMIT)
-            cls._push_primitive_loop_id = loop_id
-        return cls._push_semaphore
+        return cls._get_semaphore("push", cls.PUSH_CONCURRENCY_LIMIT)
 
     @classmethod
     def _get_kernel_status_semaphore(cls) -> asyncio.Semaphore:
-        loop_id = id(asyncio.get_running_loop())
-        if (
-            cls._kernel_status_semaphore is None
-            or cls._push_primitive_loop_id != loop_id
-        ):
-            cls._kernel_status_semaphore = asyncio.Semaphore(
-                cls.KERNEL_STATUS_CONCURRENCY_LIMIT
-            )
-            cls._push_primitive_loop_id = loop_id
-        return cls._kernel_status_semaphore
+        return cls._get_semaphore("status", cls.KERNEL_STATUS_CONCURRENCY_LIMIT)
 
     @classmethod
     def _get_stop_semaphore(cls) -> asyncio.Semaphore:
-        loop_id = id(asyncio.get_running_loop())
-        if cls._stop_semaphore is None or cls._push_primitive_loop_id != loop_id:
-            cls._stop_semaphore = asyncio.Semaphore(cls.STOP_CONCURRENCY_LIMIT)
-            cls._push_primitive_loop_id = loop_id
-        return cls._stop_semaphore
+        return cls._get_semaphore("stop", cls.STOP_CONCURRENCY_LIMIT)
 
     # Mapping from user-friendly accelerator names to Kaggle API machine_shape enum values.
     # Full list: https://github.com/Kaggle/kaggle-cli/blob/main/docs/kernels_metadata.md
@@ -304,6 +298,7 @@ class KaggleService:
         workload_id: str | None = None,
         shard_index: int | None = None,
         total_shards: int | None = None,
+        purge_logs: bool = True,
     ) -> dict[str, Any]:
         """Prepares metadata, writes code, and executes `kaggle kernels push`."""
         # Resolve stale/renamed account names up front: when the first push of
@@ -417,12 +412,10 @@ class KaggleService:
         if effective_timeout:
             cmd.extend(["-t", str(effective_timeout)])
 
-        # Log purge is now done once per distributed workload (WorkloadDistributor),
-        # not per shard. Per-shard purge raced when 16-32 shards launched in
-        # parallel and also deleted logs of shards that just started streaming.
-        # Keep purge for single-run pushes only when caller hasn't already purged.
-        # WorkloadDistributor sets _WORKLOAD_PURGE_DONE env flag per launch batch.
-        if not os.getenv("_WORKLOAD_PURGE_DONE"):
+        # Log purge is done once per distributed workload by WorkloadDistributor,
+        # not per shard: per-shard purge raced when 16-32 shards launched in
+        # parallel (each shard deleted logs just created by its peers).
+        if purge_logs:
             cls._purge_previous_logs()
 
         log_file_path = LOGS_DIR / f"{run_id}.log"
@@ -921,17 +914,12 @@ class KaggleService:
 
             # Reverse chronological: newest lastRunTime first
             def _time_key(k):
-                t = (
+                return (
                     k.get("lastRunTime")
                     or k.get("last_run_time")
                     or k.get("creationTime")
                     or ""
                 )
-                try:
-                    # Use string compare for ISO; fallback to 0
-                    return t or ""
-                except Exception:
-                    return ""
 
             try:
                 kernels.sort(key=_time_key, reverse=True)
@@ -1170,6 +1158,58 @@ class KaggleService:
         return await cls.download_latest_outputs(account_username, kernel_ref, run_id)
 
     @classmethod
+    async def _write_stop_stub(
+        cls, stop_dir: Path, kernel_ref: str, title: str, is_notebook: bool, message: str
+    ) -> None:
+        """Writes a 1-second exit stub + kernel-metadata.json into stop_dir.
+
+        Pushing this as a new version is how Kaggle stops a running worker.
+        Notebook stubs work for any kernel type; script stubs preserve a
+        script kernel's type so the push doesn't corrupt it.
+        """
+        stop_dir.mkdir(parents=True, exist_ok=True)
+        stub_filename = "cell.ipynb" if is_notebook else "main.py"
+        if is_notebook:
+            stub = {
+                "cells": [
+                    {
+                        "cell_type": "code",
+                        "execution_count": None,
+                        "metadata": {},
+                        "outputs": [],
+                        "source": [
+                            "import sys\n",
+                            f"print({message!r})\n",
+                            "sys.exit(0)\n",
+                        ],
+                    }
+                ],
+                "metadata": {"kernelspec": dict(cls.DEFAULT_KERNELSPEC)},
+                "nbformat": 4,
+                "nbformat_minor": 2,
+            }
+            await asyncio.to_thread(_write_json_file, stop_dir / stub_filename, stub)
+        else:
+            stop_code = f"import sys\nprint({message!r})\nsys.exit(0)\n"
+            await asyncio.to_thread(
+                _write_text_file, stop_dir / stub_filename, stop_code
+            )
+        metadata = {
+            "id": kernel_ref,
+            "title": (title or "")[:50],
+            "code_file": stub_filename,
+            "language": "python",
+            "kernel_type": "notebook" if is_notebook else "script",
+            "is_private": "true",
+            "enable_gpu": "false",
+            "enable_tpu": "false",
+            "enable_internet": "false",
+        }
+        await asyncio.to_thread(
+            _write_json_file, stop_dir / "kernel-metadata.json", metadata
+        )
+
+    @classmethod
     async def stop_external_kernel(
         cls, account_username: str, kernel_ref: str, title: str | None = None
     ) -> dict[str, Any]:
@@ -1180,48 +1220,16 @@ class KaggleService:
         owner, _, slug = kernel_ref.partition("/")
         if not owner or not slug:
             return {"success": False, "error": "Invalid kernel_ref"}
-        # Need title for metadata - use provided or slug
-        clean_title = (title or slug)[:50]
         # Use ext-run id for local log file (not DB)
         run_id = f"ext_stop_{owner}_{slug}_{uuid.uuid4().hex[:4]}"
         stop_dir = NOTEBOOKS_DIR / f"stop_{run_id}"
-        stop_dir.mkdir(parents=True, exist_ok=True)
         # Always use notebook stub (Kaggle accepts notebook for any kernel type)
-        stub_filename = "cell.ipynb"
-        stub_nb = {
-            "cells": [
-                {
-                    "cell_type": "code",
-                    "execution_count": None,
-                    "metadata": {},
-                    "outputs": [],
-                    "source": [
-                        "import sys\n",
-                        "print('Session explicitly stopped from Account Kernels Explorer.')\n",
-                        "sys.exit(0)\n",
-                    ],
-                }
-            ],
-            "metadata": {"kernelspec": dict(cls.DEFAULT_KERNELSPEC)},
-            "nbformat": 4,
-            "nbformat_minor": 2,
-        }
-        await asyncio.to_thread(
-            _write_json_file, stop_dir / stub_filename, stub_nb
-        )
-        metadata = {
-            "id": kernel_ref,
-            "title": clean_title,
-            "code_file": stub_filename,
-            "language": "python",
-            "kernel_type": "notebook",
-            "is_private": "true",
-            "enable_gpu": "false",
-            "enable_tpu": "false",
-            "enable_internet": "false",
-        }
-        await asyncio.to_thread(
-            _write_json_file, stop_dir / "kernel-metadata.json", metadata
+        await cls._write_stop_stub(
+            stop_dir,
+            kernel_ref,
+            title or slug,
+            True,
+            "Session explicitly stopped from Account Kernels Explorer.",
         )
         cli = get_kaggle_cli_path()
         cmd = [cli, "kernels", "push", "-p", str(stop_dir), "-t", "1"]
@@ -1342,51 +1350,13 @@ class KaggleService:
         # Push an immediate-exit stub as a new version to stop the Kaggle worker.
         # Preserve the original kernel type so we don't corrupt the notebook.
         stop_dir = NOTEBOOKS_DIR / f"stop_{run_id}"
-        stop_dir.mkdir(parents=True, exist_ok=True)
-
         is_notebook = (run["code_file"] or "").endswith(".ipynb")
-        stub_filename = "cell.ipynb" if is_notebook else "main.py"
-        if is_notebook:
-            stub_nb = {
-                "cells": [
-                    {
-                        "cell_type": "code",
-                        "execution_count": None,
-                        "metadata": {},
-                        "outputs": [],
-                        "source": [
-                            "import sys\n",
-                            "print('Session explicitly stopped by Kaggle Automation Dashboard.')\n",
-                            "sys.exit(0)\n",
-                        ],
-                    }
-                ],
-                "metadata": {"kernelspec": dict(cls.DEFAULT_KERNELSPEC)},
-                "nbformat": 4,
-                "nbformat_minor": 2,
-            }
-            await asyncio.to_thread(
-                _write_json_file, stop_dir / stub_filename, stub_nb
-            )
-        else:
-            stop_code = "import sys\nprint('Session explicitly stopped by Kaggle Automation Dashboard.')\nsys.exit(0)\n"
-            await asyncio.to_thread(
-                _write_text_file, stop_dir / stub_filename, stop_code
-            )
-
-        metadata = {
-            "id": kernel_ref,
-            "title": title,
-            "code_file": stub_filename,
-            "language": "python",
-            "kernel_type": "notebook" if is_notebook else "script",
-            "is_private": "true",
-            "enable_gpu": "false",
-            "enable_tpu": "false",
-            "enable_internet": "false",
-        }
-        await asyncio.to_thread(
-            _write_json_file, stop_dir / "kernel-metadata.json", metadata
+        await cls._write_stop_stub(
+            stop_dir,
+            kernel_ref,
+            title,
+            is_notebook,
+            "Session explicitly stopped by Kaggle Automation Dashboard.",
         )
 
         cli = get_kaggle_cli_path()

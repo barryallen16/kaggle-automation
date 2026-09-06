@@ -61,6 +61,11 @@ MAX_KAGGLE_SESSION_SECONDS = 12 * 3600  # 12 hours
 WARNING_BEFORE_EXPIRY_SECONDS = 3600   # 1 hour warning
 TRIAL_RUN_DEFAULT_TIMEOUT = 300        # 5 minutes
 
+def is_gpu_accelerator(accelerator: object) -> bool:
+    """True for anything that burns weekly GPU quota (not none/default/cpu)."""
+    a = str(accelerator or "").lower()
+    return bool(a) and a not in ("none", "default", "cpu")
+
 def get_kernel_env_defaults() -> dict:
     """Secrets to inject into every pushed kernel's environment.
 
@@ -69,7 +74,6 @@ def get_kernel_env_defaults() -> dict:
     A READ-scoped token suffices: kernels only download public artifacts.
     """
     try:
-        from dotenv import load_dotenv
         load_dotenv()  # picks up newly added keys; never overrides existing env
     except Exception:
         pass
