@@ -144,6 +144,18 @@ function quotaKindForAccelerator(accelerator) {
 // WorkloadDistributor.MAX_GPU_SESSIONS_PER_ACCOUNT on the server).
 const MAX_GPU_SESSIONS = 2;
 
+// ponytail: sums only the runs already fetched (capped at 500 by refreshGlobalData); move to /api/runs/stats if history outgrows it
+function totalGpuHours(runs, nowMs) {
+  const now = nowMs || Date.now();
+  return (runs || []).reduce((sum, r) => {
+    if (quotaKindForAccelerator(r && r.accelerator) !== 'gpu') return sum;
+    const start = new Date(r.start_time).getTime();
+    const end = r.end_time ? new Date(r.end_time).getTime() : now;
+    const h = (end - start) / 36e5;
+    return sum + (Number.isFinite(h) && h > 0 ? h : 0);
+  }, 0);
+}
+
 function gpuSessionsBusy(acc) {
   return (acc?.active_runs || []).filter(r => {
     const a = String(r?.accelerator || 'none').toLowerCase();
@@ -412,6 +424,13 @@ async function refreshGlobalData() {
       if (kar) kar.innerText = AppState.activeRuns.length;
       const ktr = document.getElementById('kpi-total-runs');
       if (ktr) ktr.innerText = runsRes.total ?? AppState.allRuns.length;
+      const gpuH = totalGpuHours(AppState.allRuns);
+      const kgh = document.getElementById('kpi-gpu-hours');
+      if (kgh) kgh.innerText = `${gpuH.toFixed(1)} GPU-hours`;
+      const ksw = document.getElementById('kpi-single-weeks');
+      if (ksw) ksw.innerText = `≈ ${(gpuH / 30).toFixed(1)} wks on 1 acct`;
+      const ksub = document.getElementById('kpi-runs-sub');
+      if (ksub) ksub.innerText = AppState.activeRuns.length ? `Logged in catalog · incl. ${AppState.activeRuns.length} active` : 'Logged in catalog';
       // Keep dropdowns that depend on runs in sync
       if (typeof updateTerminalRunDropdown === 'function' && AppState.activeTab === 'terminal') {
         try { updateTerminalRunDropdown(); } catch (_) {}
