@@ -722,6 +722,8 @@ class KaggleService:
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                         env=env,
+                        # 64KB default kills the follower on long tqdm bars.
+                        limit=8 * 1024 * 1024,
                     )
                     cls._active_stream_processes[run_id] = proc
                     drainer = asyncio.create_task(drain_stderr(proc.stderr))
