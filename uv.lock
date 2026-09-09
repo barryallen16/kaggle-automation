@@ -639,6 +639,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
+    { name = "httpx" },
     { name = "kaggle" },
     { name = "tqdm" },
 ]
@@ -652,6 +653,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", extras = ["standard"], specifier = ">=0.141.1" },
+    { name = "httpx", specifier = ">=0.28.1" },
     { name = "kaggle", specifier = ">=2.2.4" },
     { name = "tqdm", specifier = ">=4.70.0" },
 ]
