@@ -264,6 +264,13 @@ def get_all_runs(limit: int = 100) -> list[dict[str, Any]]:
     return runs
 
 
+def get_runs_count() -> int:
+    conn = get_db_connection()
+    row = conn.execute("SELECT COUNT(*) AS n FROM runs").fetchone()
+    conn.close()
+    return int(row["n"]) if row else 0
+
+
 def get_active_runs() -> list[dict[str, Any]]:
     conn = get_db_connection()
     rows = conn.execute(

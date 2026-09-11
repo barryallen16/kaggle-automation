@@ -1,7 +1,7 @@
 from typing import Annotated, Any
 
 from config import is_gpu_accelerator
-from database import get_active_runs, get_all_runs, get_run_by_id, update_run_status
+from database import get_active_runs, get_all_runs, get_run_by_id, get_runs_count, update_run_status
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from services.account_manager import AccountManager
@@ -53,7 +53,7 @@ class LaunchRunJSONRequest(BaseModel):
 async def list_runs(limit: int = 100):
     limit = max(1, min(limit, 500))
     runs = get_all_runs(limit=limit)
-    return {"success": True, "runs": runs}
+    return {"success": True, "runs": runs, "total": get_runs_count()}
 
 
 @router.get("/active")
