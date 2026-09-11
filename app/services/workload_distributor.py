@@ -25,6 +25,19 @@ STATUS_CHECK_CONCURRENCY = max(1, int(os.getenv("DISTRIBUTED_STATUS_CONCURRENCY"
 
 class WorkloadDistributor:
     @staticmethod
+    def _shard_title(base_title: str, shard_index: int, total_shards: int) -> str:
+        """Shard kernel title that always fits Kaggle's 50-char limit.
+
+        push_kernel truncates titles to 50 chars before slugifying, so a long
+        base title would cut off the distinguishing [Shard i/R] suffix and
+        every shard on an account would collide to the same kernel_ref (the
+        duplicate guard then rejects all but the first). Trimming the base to
+        fit the suffix keeps every shard addressable.
+        """
+        suffix = f" [Shard {shard_index + 1}/{total_shards}]"
+        return base_title[: max(0, 50 - len(suffix))] + suffix
+
+    @staticmethod
     def inject_shard_config_into_notebook(
         code_content: str,
         filename: str,
@@ -526,7 +539,7 @@ class WorkloadDistributor:
         active_refs = {r["kernel_ref"] for r in db_active_runs()}
         planned_conflicts = []
         for s in shards_info:
-            shard_title = f"{base_title} [Shard {s['shard_index'] + 1}/{R}]"
+            shard_title = cls._shard_title(base_title, s["shard_index"], R)
             ref = f"{s['account_username']}/{KaggleService.sanitize_slug(shard_title[:50])}"
             if ref in active_refs:
                 planned_conflicts.append(ref)
@@ -585,7 +598,7 @@ class WorkloadDistributor:
         async def launch_shard(shard: dict[str, Any]):
             idx = shard["shard_index"]
             account = shard["account_username"]
-            shard_title = f"{base_title} [Shard {idx + 1}/{R}]"
+            shard_title = cls._shard_title(base_title, idx, R)
 
             injected_code = cls.inject_shard_config_into_notebook(
                 code_content=code_content,
