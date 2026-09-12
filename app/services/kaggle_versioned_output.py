@@ -55,6 +55,20 @@ class KaggleError(Exception):
     pass
 
 
+def _is_permission_error(exc: Exception) -> bool:
+    """True when Kaggle denied the call itself (not a wrong label spelling).
+
+    A 403 PERMISSION_DENIED / kernels.get repeats identically for every
+    versionLabel candidate, so retrying the other spellings only spams the
+    log. Plain `kaggle kernels output` (different endpoint) still works.
+    """
+    msg = str(exc or "")
+    if "403" not in msg:
+        return False
+    low = msg.lower()
+    return "permission" in low or "kernels.get" in low
+
+
 def _token() -> str:
     tok = (os.getenv("KAGGLE_API_TOKEN") or "").strip()
     if tok:
@@ -489,6 +503,9 @@ def fetch_version_output(owner: str, slug: str, version: int, out_dir: str):
                                  f"this version (log-only or empty)")
                 except KaggleError as e:
                     tried.append(label)
+                    if _is_permission_error(e):
+                        notes.append(f"label '{label}' failed: permission denied (kernels.get was denied for this token/kernel - skipping remaining labels, plain latest pull is the fallback): {e}")
+                        break
                     notes.append(f"label '{label}' failed: {e}")
 
         # If files saved and log was captured, persist log file

@@ -360,14 +360,19 @@ function renderKernelsFiles(data) {
   const local = data.local_files || [];
   const remote = data.remote_files || [];
   // Prefer local if exists, else show remote as hint
-  const rows = local.length ? local : remote.map(r => ({ name: r.name || r.fileName, size: r.size || '—', rel_path: r.name || r.fileName, isRemote: true }));
+  const rows = (local.length ? local : remote.map(r => {
+    const n = String(r.name || r.fileName || r.file_name || r.filename || '').trim();
+    if (!n) return null;
+    return { name: n, size: r.size || '—', rel_path: n, isRemote: true };
+  })).filter(Boolean).filter(f => String(f.name || f.fileName || f.rel_path || '').trim());
   if (!rows.length) {
     tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-slate-500">No output files yet. If it just finished, click Pull.</td></tr>`;
     return;
   }
   const fmt = (typeof formatBytes === 'function') ? formatBytes : (b => String(b));
   tbody.innerHTML = rows.map(f => {
-    const name = f.name || f.fileName || f.rel_path;
+    const name = String(f.name || f.fileName || f.rel_path || '').trim();
+    if (!name) return '';
     const size = f.size != null ? (typeof f.size === 'number' ? fmt(f.size) : esc(String(f.size))) : '—';
     const isRemote = !!f.isRemote;
     const dlUrl = `/api/kernels/files/download/${encodeURIComponent(name)}?account=${encodeURIComponent(kernelsState.selected.account)}&kernel_ref=${encodeURIComponent(kernelsState.selected.ref)}`;

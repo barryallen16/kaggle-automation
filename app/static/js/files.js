@@ -67,7 +67,9 @@ function renderFilesTable(data) {
   const seen = new Set();
 
   remoteFiles.forEach(rf => {
-    const name = rf.name || rf.fileName;
+    const raw = rf.name || rf.fileName || rf.file_name || rf.filename || '';
+    const name = String(raw || '').trim();
+    if (!name) return;
     seen.add(name);
     combined.push({
       name,
@@ -78,9 +80,11 @@ function renderFilesTable(data) {
   });
 
   localFiles.forEach(lf => {
-    if (!seen.has(lf.name)) {
+    const lname = String(lf.name || '').trim();
+    if (!lname) return;
+    if (!seen.has(lname)) {
       combined.push({
-        name: lf.name,
+        name: lname,
         relPath: lf.rel_path,
         size: formatBytes(lf.size),
         sizeBytes: lf.size,
@@ -104,7 +108,8 @@ function renderFilesTable(data) {
   }
 
   tbody.innerHTML = combined.map(f => {
-    const ext = f.name.split('.').pop().toUpperCase();
+    const safeName = String(f.name || '');
+    const ext = safeName.includes('.') ? safeName.split('.').pop().toUpperCase() : '—';
     const checked = isInCart(currentFilesRunId, f.name);
     return `
       <tr class="hover:bg-slate-800/30 transition">
