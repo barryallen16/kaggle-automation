@@ -90,6 +90,15 @@ The server binds to `127.0.0.1:8000` by default (safe). Override with `APP_HOST=
 ### 4. Open the Dashboard
 Navigate to [http://localhost:8000](http://localhost:8000) in your browser and sign in with your `APP_AUTH_TOKEN`.
 
+### 5. Running Tests & Linting
+```bash
+# Run all tests
+uv run pytest tests
+
+# Run linter
+uv run ruff check .
+```
+
 ---
 
 ## How Dispatch Works (Kaggle CLI 2.x)

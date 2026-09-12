@@ -1,7 +1,13 @@
 from typing import Annotated, Any
 
 from config import is_gpu_accelerator
-from database import get_active_runs, get_all_runs, get_run_by_id, get_runs_count, update_run_status
+from database import (
+    get_active_runs,
+    get_all_runs,
+    get_run_by_id,
+    get_runs_count,
+    update_run_status,
+)
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from services.account_manager import AccountManager
