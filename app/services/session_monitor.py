@@ -16,7 +16,6 @@ from config import (
 MONITOR_CONCURRENCY = max(1, int(os.getenv("MONITOR_CONCURRENCY", "3")))
 from database import (
     get_active_runs,
-    set_run_output_version,
     update_run_status,
     update_run_telegram_flag,
 )
@@ -197,26 +196,10 @@ class SessionMonitor:
                 status_message=status_resp.get("raw", ""),
                 end_time=now.isoformat(),
             )
-            # Auto-sync output artifacts the moment a run ends, so the Files
-            # tab shows the real files without a manual "Pull from Kaggle".
-            # Version-aware: pulls THIS run's exact version snapshot (which is
-            # what Kaggle finalizes on completion/error/cancel) and pins it on
-            # the run row so later manual pulls keep working after deletions.
-            try:
-                (
-                    _got_path,
-                    used_version,
-                    _diag,
-                ) = await KaggleService.download_latest_outputs(
-                    account_username,
-                    kernel_ref,
-                    run_id,
-                    prefer_version=run.get("output_version"),
-                )
-                if used_version and not run.get("output_version"):
-                    set_run_output_version(run_id, used_version)
-            except Exception as e:
-                logger.info(f"Auto-pull of outputs skipped for {run_id}: {e}")
+            # No auto-pull here: downloading every finished run's outputs in
+            # the background crashes the server when many shards finish
+            # together. Files stay on Kaggle - pull them manually per run
+            # with "Pull Output Files from Kaggle" when you need them.
             if run.get("telegram_notified_end") == 0:
                 event = "failed" if remote_status in ("error", "stopped", "canceled") else "complete"
                 await TelegramService.notify(event, run, str(status_resp.get("raw", "")))

@@ -124,7 +124,7 @@ function renderFilesTable(data) {
             <span class="truncate">${esc(f.name)}</span>
             ${!f.isLocal
               ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-sky-900/60 text-sky-300 border border-sky-800 flex-shrink-0" title="Listed on Kaggle - not downloaded yet">REMOTE</span>'
-              : '<span class="text-[9px] px-1.5 py-0.5 rounded bg-emerald-900/60 text-emerald-300 border border-emerald-800 flex-shrink-0" title="Stored on this server (auto-synced at completion or snapshotted at stop)">LOCAL</span>'}
+              : '<span class="text-[9px] px-1.5 py-0.5 rounded bg-emerald-900/60 text-emerald-300 border border-emerald-800 flex-shrink-0" title="Stored on this server (pulled manually with Pull Output Files, or snapshotted at stop)">LOCAL</span>'}
           </div>
         </td>
         <td class="px-6 py-3.5 text-xs text-slate-400 font-mono whitespace-nowrap">${f.size}</td>
