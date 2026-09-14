@@ -623,7 +623,13 @@ async function handleDistributedSubmit(e) {
     const data = await res.json();
 
     if (res.ok && data.success) {
-      showToast(`Workload successfully partitioned & launched across ${data.total_shards} accounts!`, 'success');
+      const pushed = data.shards_pushed ?? data.total_shards;
+      const total = data.total_shards ?? pushed;
+      if (data.status === 'partial' || pushed !== total) {
+        showToast(`Partial launch: ${pushed}/${total} shards dispatched — see Recent Workloads for failed shards.`, 'warning');
+      } else {
+        showToast(`Workload successfully partitioned & launched across ${total} shard${total !== 1 ? 's' : ''}!`, 'success');
+      }
       await refreshGlobalData();
       
       setTimeout(() => {

@@ -484,6 +484,42 @@ class TestMultiSessionDistributor(unittest.TestCase):
         names = [a["username"] for a in resp["accounts"]]
         self.assertEqual(names, ["acc_high", "acc_mid", "acc_low"])
 
+    def test_14_long_base_title_keeps_shards_distinct(self):
+        """A 43-char base + 2 sessions/account must still dispatch every shard.
+
+        Regression: shard titles were f"{base} [Shard i/R]" truncated to 50
+        chars by push_kernel, so the suffix was cut off, both shards on an
+        account collided to one kernel_ref and the duplicate guard rejected
+        every second shard (17 accounts -> 17 dispatched, catalog ending at
+        Shard 33/34). _shard_title now fits the suffix, keeping refs distinct.
+        """
+        db = _fresh()
+        WD, _ = self._dist()
+        base = "Distributed Llm extraction pipeline.kaggle"  # 42 chars
+        self.assertEqual(len(base), 42)
+        res = asyncio_run(
+            WD.distribute_and_launch(
+                base_title=base,
+                code_content=CODE,
+                filename="main.py",
+                accounts=["accA", "accB"],
+                total_items=10,
+                accelerator="nvidia-tesla-t4-x2",
+                sessions_per_account=2,
+            )
+        )
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["total_shards"], 4)
+        self.assertEqual(res["status"], "dispatched")
+        pushed = [s for s in res["shards"] if s.get("push_result", {}).get("success")]
+        self.assertEqual(len(pushed), 4)
+        refs = [r["kernel_ref"] for r in db.get_all_runs(limit=10)]
+        self.assertEqual(len(refs), 4)
+        self.assertEqual(len(set(refs)), 4)  # no intra-batch collisions
+        titles = [r["title"] for r in db.get_all_runs(limit=10)]
+        self.assertTrue(all(len(t) <= 50 for t in titles))
+        self.assertTrue(all("[Shard " in t for t in titles))  # suffix survived
+
 
 def asyncio_run(coro):
     import asyncio
