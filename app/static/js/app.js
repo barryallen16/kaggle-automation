@@ -145,14 +145,15 @@ function quotaKindForAccelerator(accelerator) {
 const MAX_GPU_SESSIONS = 2;
 
 // ponytail: sums only the runs already fetched (capped at 500 by refreshGlobalData); move to /api/runs/stats if history outgrows it
-function totalGpuHours(runs, nowMs) {
-  const now = nowMs || Date.now();
+// Finished runs only (end_time set on complete/error/stopped/canceled); actives excluded so the total never grows with wall-clock. Capped per-run at timeout_seconds (12h default, trial 300s) since Kaggle force-stops at the session cap.
+function totalGpuHours(runs) {
   return (runs || []).reduce((sum, r) => {
     if (quotaKindForAccelerator(r && r.accelerator) !== 'gpu') return sum;
-    const start = new Date(r.start_time).getTime();
-    const end = r.end_time ? new Date(r.end_time).getTime() : now;
-    const h = (end - start) / 36e5;
-    return sum + (Number.isFinite(h) && h > 0 ? h : 0);
+    if (!r || !r.end_time) return sum;
+    const h = (new Date(r.end_time).getTime() - new Date(r.start_time).getTime()) / 36e5;
+    if (!Number.isFinite(h) || h <= 0) return sum;
+    const cap = (Number(r.timeout_seconds) || 43200) / 3600;
+    return sum + Math.min(h, cap);
   }, 0);
 }
 
