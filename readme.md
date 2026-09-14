@@ -19,6 +19,8 @@ A centralized dashboard and FastAPI backend to orchestrate, monitor, and distrib
 - **Live Output Streaming**: Real-time streaming console over WebSockets with auto-scroll and full log downloads.
 - **Output Artifacts Explorer**: Browse generated files and download single files or full `.zip` archives (streamed from disk, never buffered in RAM) with 1 click.
 - **Run Catalog**: Full execution history with direct clickable Kaggle notebook URLs.
+- **Port-to-Kaggle Skill**: adapt any `.py`/`.ipynb` for single + distributed runs (`skills/port-to-kaggle`) — shard fallback, log buffering, working/scratch dirs, with warnings for GPU guard, title length and unsharded outputs.
+- **Dashboard KPIs**: `Total Runs` = row count of the run catalog; `GPU-hours` = finished GPU runs only (`complete`/`error`/`stopped`/`canceled`), each capped at its `timeout_seconds` (12 h default, trial 300 s); `wks on 1 acct` = GPU-hours ÷ 30 h single-account weekly quota.
 - **Authentication**: Optional shared-secret login (`APP_AUTH_TOKEN`) with HMAC-signed HttpOnly cookies — protects every route including WebSockets.
 - **Branding**: Geist Pixel display font as the site-wide default, Geist Mono terminal font and favicon pack served fully locally (no CDN font/icon dependencies). Icons are bundled pixel-art glyphs (Pixelarticons v2.4.1, MIT) rendered in mono via `currentColor` — raw SVGs live in `app/static/icons/pixel/`.
 - **Modern Flat Dark UI**: Responsive dashboard with flat slate styling — no gradients, no glow effects.
@@ -108,6 +110,17 @@ uv run ruff check .
 - **Notebooks are normalized before push**: missing `kernelspec` is injected (python3) and raw Python pasted as `.ipynb` is wrapped into a valid notebook cell automatically.
 - **Multi-session distribution**: the Distributed Runner defaults to **2 GPU sessions per account** (Kaggle's cap). It live-checks each account's active GPU sessions and silently reduces runners when slots are busy; the whole launch is validated atomically before anything is dispatched. A Recent Workloads panel shows progress with a Stop-All button per workload.
 - **Secrets**: keys in `.env` (`HF_TOKEN`, …) are injected into every kernel as an environment preamble before user code — a READ-scoped HF token is enough for faster public-artifact downloads.
+
+---
+
+## Porting a Script for Kaggle
+
+```bash
+python skills/port-to-kaggle/scripts/port_to_kaggle.py in.py --out out.py --title "My Job" --accelerator nvidia-tesla-t4-x2
+# report only: add --check
+```
+
+Auto-fixes: notebook normalization (kernelspec, raw-py wrap), standalone-safe shard fallback (`SHARD_ID`, `START_INDEX`, … — overridden by the distributor at push), line-buffered logs, `WORKING_DIR`/`SCRATCH_DIR` paths. Warns on missing GPU guard, `>50`-char titles, hardcoded secrets, datasets landing in `/kaggle/working`, unsharded `OUTPUT_FILE` and bare `pip install`. Secrets and `MAX_RUNTIME_MINUTES` are injected server-side at push. Reference port: `kaggle_batch_inference_task_a.py`. Installed globally as the `port-to-kaggle` skill (`~/.config/opencode/skills/`).
 
 ---
 
