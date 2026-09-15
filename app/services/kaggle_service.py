@@ -284,6 +284,34 @@ class KaggleService:
             logger.warning(f"Could not purge old logs: {e}")
 
     @classmethod
+    def _resolve_free_title(
+        cls,
+        account_username: str,
+        title: str,
+        active_refs: set[str] | None = None,
+        max_attempts: int = 10,
+    ) -> str | None:
+        """Finds a title whose kernel_ref is not actively running.
+
+        Kaggle keys notebooks by slugified title and allows 2 concurrent GPU
+        sessions per account - but only for DISTINCT kernels. Re-pushing the
+        same title while it runs would replace it (and stopping one row would
+        kill both), so derive "Title (2)", "Title (3)", ... instead of
+        hard-blocking the second session. Returns None when all taken.
+        """
+        if active_refs is None:
+            active_refs = {r["kernel_ref"] for r in get_active_runs()}
+        base = (title or "")[:50]
+        if f"{account_username}/{cls.sanitize_slug(base)}" not in active_refs:
+            return base
+        for n in range(2, max_attempts + 2):
+            suffix = f" ({n})"
+            cand = base[: max(0, 50 - len(suffix))] + suffix
+            if f"{account_username}/{cls.sanitize_slug(cand)}" not in active_refs:
+                return cand
+        return None
+
+    @classmethod
     async def push_kernel(
         cls,
         account_username: str,
@@ -314,27 +342,24 @@ class KaggleService:
         # Ensure title fits Kaggle's 50-character limit; derive the slug from
         # exactly what we send as the title. Kaggle keys kernels by the
         # slugified title - a mismatched metadata id makes every re-push 409.
-        clean_title = title[:50]
+        requested_title = title[:50]
+        clean_title = cls._resolve_free_title(account_username, title)
+        if clean_title is None:
+            return {
+                "success": False,
+                "status": "conflict",
+                "error": (
+                    f"'{requested_title}' and its numbered copies are all running "
+                    f"on this account. Stop one first, wait for it to finish, "
+                    "or use a different title."
+                ),
+                "conflict_run_id": None,
+                "run_id": None,
+            }
+        renamed = clean_title != requested_title
         slug = cls.sanitize_slug(clean_title)
         kernel_ref = f"{account_username}/{slug}"
         kaggle_url = f"https://www.kaggle.com/code/{kernel_ref}"
-
-        # Guard: Kaggle keys notebooks by title, so launching while another run
-        # of the SAME kernel is queued/running would silently replace it - and
-        # stopping one row would kill both. Block with an actionable error.
-        for r in get_active_runs():
-            if r["kernel_ref"] == kernel_ref:
-                return {
-                    "success": False,
-                    "status": "conflict",
-                    "error": (
-                        f"'{clean_title}' is already {r['status']} on this account "
-                        f"(run {r['id']}). Stop it first, wait for it to finish, "
-                        "or use a different title."
-                    ),
-                    "conflict_run_id": r["id"],
-                    "run_id": None,
-                }
 
         # Working folder for this run
         run_dir = NOTEBOOKS_DIR / run_id
@@ -539,7 +564,7 @@ class KaggleService:
                 "account_username": account_username,
                 "kernel_slug": slug if not url_match else real_slug,
                 "kernel_ref": kernel_ref,
-                "title": title,
+                "title": clean_title,
                 "code_file": str(code_path),
                 "accelerator": accelerator,
                 "enable_internet": 1 if enable_internet else 0,
@@ -581,6 +606,8 @@ class KaggleService:
                 "kaggle_url": kaggle_url,
                 "status": status,
                 "message": status_msg,
+                "title": clean_title,
+                "renamed": renamed,
             }
         except Exception as e:
             logger.error(f"Failed to push kernel {kernel_ref}: {e}")

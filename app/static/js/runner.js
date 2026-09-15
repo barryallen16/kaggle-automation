@@ -276,7 +276,7 @@ async function handleSingleRunSubmit(e) {
     const data = await res.json();
 
     if (res.ok && data.success) {
-      showToast('Kernel pushed and queued on Kaggle!', 'success');
+      showToast(data.renamed ? `Kernel pushed as "${data.title}" (requested title was running)!` : 'Kernel pushed and queued on Kaggle!', 'success');
       await refreshGlobalData();
       
       // Automatically switch to Live Terminal for this run
