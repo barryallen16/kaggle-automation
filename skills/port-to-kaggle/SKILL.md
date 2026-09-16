@@ -29,7 +29,7 @@ Same extension in → out. Safe to re-run (idempotent, tagged cells / marker che
 
 ## Not handled here (server does it at push)
 
-Secrets preamble, `MAX_RUNTIME_MINUTES` quota cap, slug conflict check, output-version pinning. See `app/services/kaggle_service.py`, `app/routers/runs.py`, `app/services/workload_distributor.py`.
+Secrets preamble (`HF_TOKEN`, `WANDB_*`), `MAX_RUNTIME_MINUTES` quota cap, title auto-rename (`Title (2)` when taken) + shard-title fit into 50 chars, slug conflict check, output-version pinning. See `app/services/kaggle_service.py`, `app/routers/runs.py`, `app/services/workload_distributor.py`.
 
 ## Reference port
 

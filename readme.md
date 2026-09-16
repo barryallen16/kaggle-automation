@@ -115,6 +115,13 @@ uv run ruff check .
 
 ## Porting a Script for Kaggle
 
+### Install via agent
+Copy/paste into your CLI prompt:
+```
+Install the port-to-kaggle skill from https://github.com/barryallen16/kaggle-automation/tree/main/skills/port-to-kaggle, refer to skills/port-to-kaggle/SKILL.md for usage.
+```
+Or check `skills/port-to-kaggle/SKILL.md` for manual usage.
+
 ```bash
 python skills/port-to-kaggle/scripts/port_to_kaggle.py in.py --out out.py --title "My Job" --accelerator nvidia-tesla-t4-x2
 # report only: add --check
