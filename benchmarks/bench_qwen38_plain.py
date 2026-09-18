@@ -92,8 +92,8 @@ PROMPTS = [
 ]
 
 
-def log(stage, msg):
-    print(f"[{stage}] {msg}", flush=True)
+def log(stage, msg, flush=True):
+    print(f"[{stage}] {msg}", flush=flush)
 
 
 def run_cmd(cmd, check=True, env=None):
@@ -122,6 +122,34 @@ def gpu_guard():
         if r.returncode != 0:
             sys.exit(1)
         return 1
+
+
+def server_env():
+    """Env the server binary needs: its own .so dir + CUDA libs on the path."""
+    env = os.environ.copy()
+    env["LD_LIBRARY_PATH"] = f"{CONFIG['BIN_DIR']}:/usr/local/cuda/lib64:" + env.get(
+        "LD_LIBRARY_PATH", ""
+    )
+    env["CUDA_VISIBLE_DEVICES"] = "0,1"
+    return env
+
+
+def _pick_candidate(cands, need=None):
+    """First candidate that executes under server_env; `need` must be in --help."""
+    env = server_env()
+    last_err = "no candidates"
+    for c in sorted(cands):
+        os.chmod(c, 0o755)
+        r = run_cmd([c, "--help"], check=False, env=env)
+        out = (r.stdout or "") + (r.stderr or "")
+        if not out.strip():
+            last_err = f"{c}: empty --help"
+            continue
+        if need and need not in out:
+            last_err = f"{c}: lacks {need!r}"
+            continue
+        return c
+    raise RuntimeError(f"no usable llama-server found ({last_err})")
 
 
 def ensure_assets():
@@ -163,8 +191,7 @@ def ensure_assets():
         cands = glob.glob(f"{CONFIG['BIN_DIR']}/**/llama-server", recursive=True)
         if not cands:
             raise FileNotFoundError("llama-server not found in archive")
-        server_bin = cands[0]
-        os.chmod(server_bin, 0o755)
+        server_bin = _pick_candidate(cands)
     log("SETUP", f"Using server binary at: {server_bin}", flush=True)
     return server_bin
 
@@ -174,11 +201,7 @@ def start_server(server_bin):
         ["pkill", "-9", "-f", "llama-server"], stderr=subprocess.DEVNULL, check=False
     )
     time.sleep(2)
-    env = os.environ.copy()
-    env["LD_LIBRARY_PATH"] = f"{CONFIG['BIN_DIR']}:/usr/local/cuda/lib64:" + env.get(
-        "LD_LIBRARY_PATH", ""
-    )
-    env["CUDA_VISIBLE_DEVICES"] = "0,1"
+    env = server_env()
     server_cmd = [
         server_bin,
         "-m",
@@ -258,7 +281,9 @@ def chat_once(content, max_tokens):
     )
     t0 = time.time()
     first_token = None
+    first_byte = None
     tokens = 0
+    sse_sample = []
     resp = urllib.request.urlopen(req, timeout=900)
     try:
         buf = b""
@@ -267,6 +292,8 @@ def chat_once(content, max_tokens):
             if not chunk:
                 break
             buf += chunk
+            if first_byte is None:
+                first_byte = time.time()
             while b"\n" in buf:
                 line, buf = buf.split(b"\n", 1)
                 line = line.strip()
@@ -275,6 +302,8 @@ def chat_once(content, max_tokens):
                 data = line[5:].strip()
                 if data == b"[DONE]":
                     continue
+                if len(sse_sample) < 3:
+                    sse_sample.append(data[:200].decode("utf-8", errors="ignore"))
                 try:
                     obj = json.loads(data)
                 except Exception:  # noqa: S112 — SSE keepalives/comments are not JSON
@@ -285,16 +314,27 @@ def chat_once(content, max_tokens):
                 choices = obj.get("choices") or []
                 if not choices:
                     continue
-                content_piece = (choices[0].get("delta") or {}).get("content")
+                first_choice = choices[0] or {}
+                content_piece = (first_choice.get("delta") or {}).get("content") or (
+                    first_choice.get("message") or {}
+                ).get("content")
                 if content_piece and first_token is None:
                     first_token = time.time()
     finally:
         resp.close()
     end = time.time()
-    ttft = (first_token - t0) if first_token else None
+    if first_token is None and sse_sample:
+        log(
+            "BENCH",
+            f"no delta.content seen; first SSE payloads: {sse_sample}",
+            flush=True,
+        )
+    ttft_src = first_token or first_byte
+    ttft = (ttft_src - t0) if ttft_src else None
     gen_time = (end - first_token) if first_token else (end - t0)
     return {
         "ttft_s": round(ttft, 2) if ttft else None,
+        "ttft_estimated": first_token is None,
         "tokens": tokens,
         "gen_s": round(gen_time, 2),
         "tps": round(tokens / gen_time, 2) if tokens and gen_time else 0.0,
@@ -305,7 +345,7 @@ def main():
     log("BENCH", f"variant={VARIANT} shard={SHARD_ID + 1}/{TOTAL_SHARDS}", flush=True)
     n_gpu = gpu_guard()
     server_bin = ensure_assets()
-    bv = run_cmd([server_bin, "--version"], check=False)
+    bv = run_cmd([server_bin, "--version"], check=False, env=server_env())
     bin_version = ((bv.stdout or "") + (bv.stderr or "")).strip().splitlines()
     bin_version = bin_version[0][:120] if bin_version else "unknown"
     proc = start_server(server_bin)

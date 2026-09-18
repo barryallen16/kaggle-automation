@@ -1,4 +1,5 @@
 # Kaggle Multi-Account Automation Platform
+<img width="1875" height="998" alt="image" src="https://github.com/user-attachments/assets/e1244a55-d421-4bd4-83a8-a053556fe120" />
 
 A centralized dashboard and FastAPI backend to orchestrate, monitor, and distribute workloads across multiple Kaggle accounts using the Kaggle CLI.
 
@@ -159,3 +160,19 @@ for item_id in range(START_INDEX, END_INDEX):
     # Your distributed processing logic here
     process(item_id)
 ```
+
+---
+
+## LLM serve benchmarks
+
+Two scripts in `benchmarks/` serve Qwen3.8-27B (Q4_K_XL, 128K context, q4_0 KV cache) through llama-server on 2x T4 and time the same three prompts: a warmup `hi` (8 tokens), an essay (256 tokens), and a code task (256 tokens). Token counts come from the server (`stream_options.include_usage`). Each run prints a JSON block and leaves a per-shard copy under `/kaggle/working`.
+
+The plain build is the default preset in the Single Run tab (`GET /api/presets`).
+
+| prompt | plain, v0.4.0, batch 512/256 | draft-dflash, v0.4.1, Q8_0 draft, batch 1024/512 |
+|---|---|---|
+| warmup, 8 tokens | 98.82s total (cold load) | 106.11s total (cold load) |
+| essay, 256 tokens | 11.56s to first token, 12.7s total, 20.16 t/s | 8.11s to first token, 19.26s total, 13.29 t/s |
+| code, 256 tokens | 21.99s total, 11.64 t/s | 18.31s total, 13.99 t/s |
+
+First-token times for the warmup runs and the plain code run were not measurable (those streams carried no content deltas); the draft code first token was estimated at 1.85s from first byte. The draft answers essay first tokens faster (8.11s vs 11.56s) but carries a second ~28GB download with no steady throughput gain, so plain stays the default.

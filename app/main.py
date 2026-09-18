@@ -15,7 +15,17 @@ from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
 
 # Import routers
-from routers import accounts, distributed, files, kernels, logs, ops, runs, settings
+from routers import (
+    accounts,
+    distributed,
+    files,
+    kernels,
+    logs,
+    ops,
+    presets,
+    runs,
+    settings,
+)
 from services.account_manager import AccountManager
 from services.session_monitor import SessionMonitor
 
@@ -79,6 +89,7 @@ app.include_router(files.router)
 app.include_router(settings.router)
 app.include_router(kernels.router)
 app.include_router(ops.router)
+app.include_router(presets.router)
 
 # Static files & Jinja templates
 static_dir = BASE_DIR / "app" / "static"

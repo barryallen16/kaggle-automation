@@ -176,6 +176,7 @@ function populateAccountSelects() {
 
 // Hook change listener on the runner select once DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
+  loadRunnerPresets();
   const runnerSelect = document.getElementById('runner-account-select');
   if (runnerSelect) {
     runnerSelect.addEventListener('change', (e) => {
@@ -187,6 +188,63 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 });
+
+async function loadRunnerPresets() {
+  const sel = document.getElementById('runner-preset-select');
+  if (!sel) return;
+  try {
+    const res = await fetch('/api/presets');
+    const data = await res.json();
+    if (!res.ok || !data.success) return;
+    for (const p of data.presets) {
+      if (!p.available) continue;
+      const opt = document.createElement('option');
+      opt.value = p.key;
+      opt.textContent = p.recommended ? p.label + ' (recommended)' : p.label;
+      sel.appendChild(opt);
+    }
+  } catch (err) {
+    console.error('Error loading presets:', err);
+  }
+}
+
+async function handlePresetChange() {
+  const sel = document.getElementById('runner-preset-select');
+  const key = sel ? sel.value : '';
+  if (!key) return;
+  const textarea = document.getElementById('runner-code-textarea');
+  if (textarea && textarea.value.trim()) {
+    if (!confirm('Replace the current code with the preset script?')) {
+      sel.value = '';
+      return;
+    }
+  }
+  try {
+    const res = await fetch('/api/presets/' + encodeURIComponent(key));
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      showToast('Failed to load preset', 'error');
+      return;
+    }
+    if (textarea) {
+      textarea.value = data.code;
+      uploadedFileContent = data.code;
+      uploadedFileName = data.filename;
+    }
+    const titleInput = document.getElementById('runner-title');
+    if (titleInput && !titleInput.value) titleInput.value = data.title;
+    const accSel = document.getElementById('runner-accelerator-select');
+    if (accSel && accSel.value !== data.accelerator) {
+      accSel.value = data.accelerator;
+      populateAccountSelects();
+    }
+    const label = document.getElementById('file-upload-label');
+    if (label) label.innerHTML = `Loaded preset: <strong class="text-cyan-400 font-mono">${data.filename}</strong>`;
+    showToast('Preset loaded: ' + data.filename, 'success');
+  } catch (err) {
+    showToast('Error loading preset: ' + err.message, 'error');
+  }
+}
 
 function handleFileInputChange(e) {
   const file = e.target.files[0];
