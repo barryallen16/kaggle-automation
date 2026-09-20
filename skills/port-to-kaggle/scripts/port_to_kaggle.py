@@ -216,7 +216,12 @@ except Exception:
 DIRS_HEADER = """\
 import os as _ka_os2
 WORKING_DIR = "/kaggle/working" if _ka_os2.path.exists("/kaggle/working") else _ka_os2.getcwd()
-SCRATCH_DIR = "/kaggle/tmp" if _ka_os2.path.exists("/kaggle/tmp") else _ka_os2.getcwd()
+if _ka_os2.path.isdir("/kaggle"):
+    try:
+        _ka_os2.makedirs("/kaggle/tmp", exist_ok=True)
+    except OSError:
+        pass
+SCRATCH_DIR = "/kaggle/tmp" if _ka_os2.path.isdir("/kaggle/tmp") else WORKING_DIR
 """
 
 

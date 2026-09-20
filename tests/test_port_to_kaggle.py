@@ -95,6 +95,22 @@ class TestPortToKaggle(unittest.TestCase):
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
+    def test_scratch_dir_creates_tmp_before_fallback(self):
+        # Regression: on Kaggle /kaggle/tmp does not exist, and the old
+        # `else getcwd()` fallback dumped multi-GB downloads into
+        # /kaggle/working (published outputs), stalling finalization.
+        src = "print('hello')\n"
+        r, tmp, out, _rep = run_port(src)
+        try:
+            self.assertEqual(r.returncode, 0, r.stderr)
+            with open(out, encoding="utf-8") as f:
+                out_src = f.read()
+            self.assertIn('makedirs("/kaggle/tmp"', out_src)
+            self.assertIn("isdir", out_src)
+            self.assertIn("else WORKING_DIR", out_src)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

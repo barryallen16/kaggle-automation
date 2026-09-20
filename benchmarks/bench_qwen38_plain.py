@@ -21,7 +21,12 @@ import os as _ka_os2
 WORKING_DIR = (
     "/kaggle/working" if _ka_os2.path.exists("/kaggle/working") else _ka_os2.getcwd()
 )
-SCRATCH_DIR = "/kaggle/tmp" if _ka_os2.path.exists("/kaggle/tmp") else _ka_os2.getcwd()
+if _ka_os2.path.isdir("/kaggle"):
+    try:
+        _ka_os2.makedirs("/kaggle/tmp", exist_ok=True)
+    except OSError:
+        pass
+SCRATCH_DIR = "/kaggle/tmp" if _ka_os2.path.isdir("/kaggle/tmp") else WORKING_DIR
 
 import os as _ka_os
 
@@ -80,13 +85,18 @@ CONFIG = {
 PROMPTS = [
     {"name": "warmup", "content": "hi", "max_tokens": 8},
     {
-        "name": "essay",
-        "content": "Write a 5-paragraph essay on the history and future of quantum computing, including its impact on cryptography and materials science.",
+        "name": "code-synth",
+        "content": "Write a Python function that implements LRU cache with O(1) get and put, with type hints and a short usage example.",
         "max_tokens": 256,
     },
     {
-        "name": "code",
-        "content": "Write a Python function that implements LRU cache with O(1) get and put, with type hints and a short usage example.",
+        "name": "code-fix",
+        "content": "Fix the bug in this Python function so it returns the correct Fibonacci numbers. Return only the corrected function:\n\ndef fib(n):\n    a, b = 0, 1\n    for _ in range(n):\n        print(a)\n        a, b = b, a - b\n    return a",
+        "max_tokens": 256,
+    },
+    {
+        "name": "code-complete",
+        "content": 'Complete this Python function. Return only the completed function:\n\ndef merge_sorted(left, right):\n    """Merge two sorted lists into one sorted list."""\n    out, i, j = [], 0, 0\n',
         "max_tokens": 256,
     },
 ]
@@ -332,12 +342,15 @@ def chat_once(content, max_tokens):
     ttft_src = first_token or first_byte
     ttft = (ttft_src - t0) if ttft_src else None
     gen_time = (end - first_token) if first_token else (end - t0)
+    if gen_time <= 0:
+        # single trailing chunk: first token arrived with the last byte
+        gen_time = end - t0
     return {
         "ttft_s": round(ttft, 2) if ttft else None,
         "ttft_estimated": first_token is None,
         "tokens": tokens,
         "gen_s": round(gen_time, 2),
-        "tps": round(tokens / gen_time, 2) if tokens and gen_time else 0.0,
+        "tps": round(tokens / gen_time, 2) if tokens and gen_time > 0 else 0.0,
     }
 
 
@@ -360,6 +373,8 @@ def main():
             r = chat_once(p["content"], p["max_tokens"])
             r["prompt"] = p["name"]
             r["max_tokens"] = p["max_tokens"]
+            r["acceptance_rate"] = None
+            r["acceptance_raw"] = ""
             results.append(r)
             log(
                 "BENCH",

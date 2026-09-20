@@ -21,7 +21,7 @@ Same extension in → out. Safe to re-run (idempotent, tagged cells / marker che
 1. Notebook normalized via `KaggleService.ensure_executable_notebook` (kernelspec, raw-py wrap).
 2. Shard-fallback header (`SHARD_ID`, `TOTAL_SHARDS`, `START_INDEX`, `END_INDEX`, env-coerced to int) — standalone-safe, overridden by the distributor's real header at push time.
 3. Line-buffered stdout/stderr.
-4. `WORKING_DIR` (`/kaggle/working` else cwd) + `SCRATCH_DIR` (`/kaggle/tmp` else cwd).
+4. `WORKING_DIR` (`/kaggle/working` else cwd) + `SCRATCH_DIR` (creates `/kaggle/tmp` on Kaggle, else working dir — never bare cwd, so large downloads don't land in published outputs).
 
 ## What it warns about (you fix)
 

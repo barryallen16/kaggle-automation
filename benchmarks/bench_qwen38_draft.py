@@ -22,7 +22,12 @@ import os as _ka_os2
 WORKING_DIR = (
     "/kaggle/working" if _ka_os2.path.exists("/kaggle/working") else _ka_os2.getcwd()
 )
-SCRATCH_DIR = "/kaggle/tmp" if _ka_os2.path.exists("/kaggle/tmp") else _ka_os2.getcwd()
+if _ka_os2.path.isdir("/kaggle"):
+    try:
+        _ka_os2.makedirs("/kaggle/tmp", exist_ok=True)
+    except OSError:
+        pass
+SCRATCH_DIR = "/kaggle/tmp" if _ka_os2.path.isdir("/kaggle/tmp") else WORKING_DIR
 
 import os as _ka_os
 
@@ -57,6 +62,7 @@ SHARD_PARAMS = {}
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -85,13 +91,18 @@ CONFIG = {
 PROMPTS = [
     {"name": "warmup", "content": "hi", "max_tokens": 8},
     {
-        "name": "essay",
-        "content": "Write a 5-paragraph essay on the history and future of quantum computing, including its impact on cryptography and materials science.",
+        "name": "code-synth",
+        "content": "Write a Python function that implements LRU cache with O(1) get and put, with type hints and a short usage example.",
         "max_tokens": 256,
     },
     {
-        "name": "code",
-        "content": "Write a Python function that implements LRU cache with O(1) get and put, with type hints and a short usage example.",
+        "name": "code-fix",
+        "content": "Fix the bug in this Python function so it returns the correct Fibonacci numbers. Return only the corrected function:\n\ndef fib(n):\n    a, b = 0, 1\n    for _ in range(n):\n        print(a)\n        a, b = b, a - b\n    return a",
+        "max_tokens": 256,
+    },
+    {
+        "name": "code-complete",
+        "content": 'Complete this Python function. Return only the completed function:\n\ndef merge_sorted(left, right):\n    """Merge two sorted lists into one sorted list."""\n    out, i, j = [], 0, 0\n',
         "max_tokens": 256,
     },
 ]
@@ -108,6 +119,48 @@ def run_cmd(cmd, check=True, env=None):
             f"Command failed ({r.returncode}): {' '.join(cmd)}\n{(r.stdout or '') + (r.stderr or '')}"
         )
     return r
+
+
+def log_mark():
+    """Byte offset of the server-log end (stats are read per prompt)."""
+    try:
+        return os.path.getsize(CONFIG["LOG_SERVER"])
+    except OSError:
+        return 0
+
+
+def read_log_since(offset):
+    try:
+        with open(CONFIG["LOG_SERVER"], encoding="utf-8", errors="ignore") as f:
+            f.seek(offset)
+            return f.read()
+    except OSError:
+        return ""
+
+
+def parse_acceptance(text):
+    """Acceptance rate from a server-log slice.
+
+    Count form (n_accept / n_draft) first, percent form second, latest
+    match wins. Returns (rate 0..1 | None, raw line or excerpt).
+    """
+    rate, raw = None, ""
+    for m in re.finditer(r"n_accept\D+(\d+)\D+n_draft\D+(\d+)", text):
+        acc, total = int(m.group(1)), int(m.group(2))
+        if total > 0:
+            rate, raw = round(acc / total, 4), m.group(0).strip()[:200]
+    for m in re.finditer(r"acceptance\D{0,10}([\d.]+)\s*%?", text, re.IGNORECASE):
+        try:
+            val = float(m.group(1))
+        except ValueError:
+            continue
+        if val > 1:
+            val /= 100.0
+        rate, raw = round(val, 4), m.group(0).strip()[:200]
+    if rate is None:
+        tail = text.strip().splitlines()[-3:]
+        raw = "\n".join(line[:200] for line in tail)
+    return rate, raw
 
 
 def gpu_guard():
@@ -351,12 +404,15 @@ def chat_once(content, max_tokens):
     ttft_src = first_token or first_byte
     ttft = (ttft_src - t0) if ttft_src else None
     gen_time = (end - first_token) if first_token else (end - t0)
+    if gen_time <= 0:
+        # single trailing chunk: first token arrived with the last byte
+        gen_time = end - t0
     return {
         "ttft_s": round(ttft, 2) if ttft else None,
         "ttft_estimated": first_token is None,
         "tokens": tokens,
         "gen_s": round(gen_time, 2),
-        "tps": round(tokens / gen_time, 2) if tokens and gen_time else 0.0,
+        "tps": round(tokens / gen_time, 2) if tokens and gen_time > 0 else 0.0,
     }
 
 
@@ -376,15 +432,24 @@ def main():
                 f"prompt={p['name']} max_tokens={p['max_tokens']}...",
                 flush=True,
             )
+            mark = log_mark()
             r = chat_once(p["content"], p["max_tokens"])
             r["prompt"] = p["name"]
             r["max_tokens"] = p["max_tokens"]
+            acc, raw = parse_acceptance(read_log_since(mark))
+            r["acceptance_rate"] = acc
+            r["acceptance_raw"] = raw
             results.append(r)
             log(
                 "BENCH",
-                f"{p['name']}: ttft={r['ttft_s']}s tokens={r['tokens']} t/s={r['tps']}",
+                f"{p['name']}: ttft={r['ttft_s']}s tokens={r['tokens']} t/s={r['tps']} acc={acc}",
                 flush=True,
             )
+        rates = [
+            r["acceptance_rate"]
+            for r in results
+            if r.get("acceptance_rate") is not None
+        ]
         summary = {
             "variant": VARIANT,
             "binary": "v0.4.1",
@@ -394,6 +459,7 @@ def main():
             "batch": "1024/512",
             "speculative": True,
             "draft_quant": "Q8_0",
+            "acceptance_mean": round(sum(rates) / len(rates), 4) if rates else None,
             "results": results,
         }
         print("=" * 60, flush=True)
@@ -402,7 +468,7 @@ def main():
         )
         for r in results:
             print(
-                f"  {r['prompt']}: ttft={r['ttft_s']}s tokens={r['tokens']} time={r['gen_s']}s t/s={r['tps']}",
+                f"  {r['prompt']}: ttft={r['ttft_s']}s tokens={r['tokens']} time={r['gen_s']}s t/s={r['tps']} acc={r.get('acceptance_rate')}",
                 flush=True,
             )
         print("=" * 60, flush=True)

@@ -39,6 +39,12 @@ VERSIONED_OUTPUT_HELPER = Path(__file__).resolve().parent / "kaggle_versioned_ou
 VERSIONED_FETCH_TIMEOUT_SECONDS = int(
     os.getenv("VERSIONED_FETCH_TIMEOUT_SECONDS", "600")
 )
+# Plain `kernels output` pull has no server-side bound: a kernel that
+# published gigabytes (models downloaded into /kaggle/working instead of
+# scratch) stalls the stop pipeline's pre-stop snapshot forever, wedging
+# the Stop button. Timeout here is non-fatal - the caller logs and
+# continues to the stop-stub push.
+OUTPUT_PULL_TIMEOUT_SECONDS = int(os.getenv("OUTPUT_PULL_TIMEOUT_SECONDS", "300"))
 
 
 def _write_json_file(path: Path, payload: object) -> None:
@@ -1341,7 +1347,18 @@ class KaggleService:
             stderr=asyncio.subprocess.PIPE,
             env=env,
         )
-        _stdout, stderr = await proc.communicate()
+        try:
+            _stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=OUTPUT_PULL_TIMEOUT_SECONDS
+            )
+        except TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            raise RuntimeError(
+                f"kaggle kernels output timed out after {OUTPUT_PULL_TIMEOUT_SECONDS}s"
+            )
         if proc.returncode != 0:
             err_tail = stderr.decode("utf-8", errors="ignore").strip()[-500:]
             raise RuntimeError(

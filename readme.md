@@ -165,9 +165,11 @@ for item_id in range(START_INDEX, END_INDEX):
 
 ## LLM serve benchmarks
 
-Two scripts in `benchmarks/` serve Qwen3.8-27B (Q4_K_XL, 128K context, q4_0 KV cache) through llama-server on 2x T4 and time the same three prompts: a warmup `hi` (8 tokens), an essay (256 tokens), and a code task (256 tokens). Token counts come from the server (`stream_options.include_usage`). Each run prints a JSON block and leaves a per-shard copy under `/kaggle/working`.
+Two scripts in `benchmarks/` serve Qwen3.8-27B (Q4_K_XL, 128K context, q4_0 KV cache) through llama-server on 2x T4 and time fixed prompts. Token counts come from the server (`stream_options.include_usage`). Each run prints a JSON block and leaves a per-shard copy under `/kaggle/working`.
 
 The plain build is the default preset in the Single Run tab (`GET /api/presets`).
+
+Round one used a warmup `hi` (8 tokens), an essay (256 tokens), and a generic code task (256 tokens):
 
 | prompt | plain, v0.4.0, batch 512/256 | draft-dflash, v0.4.1, Q8_0 draft, batch 1024/512 |
 |---|---|---|
@@ -175,4 +177,13 @@ The plain build is the default preset in the Single Run tab (`GET /api/presets`)
 | essay, 256 tokens | 11.56s to first token, 12.7s total, 20.16 t/s | 8.11s to first token, 19.26s total, 13.29 t/s |
 | code, 256 tokens | 21.99s total, 11.64 t/s | 18.31s total, 13.99 t/s |
 
-First-token times for the warmup runs and the plain code run were not measurable (those streams carried no content deltas); the draft code first token was estimated at 1.85s from first byte. The draft answers essay first tokens faster (8.11s vs 11.56s) but carries a second ~28GB download with no steady throughput gain, so plain stays the default.
+Round two ran code only (synthesis, bug fix, completion, 256 tokens each) and captured the server's acceptance rate on the draft build:
+
+| prompt | plain, v0.4.0 | draft-dflash, v0.4.1, acceptance |
+|---|---|---|
+| warmup, 8 tokens | 103.77s total (cold load) | 106.11s total (cold load), 0.7143 |
+| code-synth, 256 tokens | 1.75s to first token (est), 23.93s total, 10.7 t/s | 29.82s total, 8.58 t/s, 0.4424 |
+| code-fix, 256 tokens | 2.37s to first token (est), 21.67s total, 11.81 t/s | 22.0s total, 11.64 t/s, 0.4641 |
+| code-complete, 256 tokens | t/s invalid, see note | 17.41s total, 14.7 t/s, 0.6059 |
+
+Draft acceptance mean over the round is 0.5567, and throughput tracks it task by task. First-token times stayed estimated because this model streams reasoning traces before content. The plain code-complete t/s (1211898.22) is a divide-by-zero artifact from the old build when all content lands in one trailing chunk; the harness now falls back to total time instead. The draft answers essay first tokens faster (8.11s vs 11.56s) but carries a second ~28GB download with no steady throughput gain, so plain stays the default.
