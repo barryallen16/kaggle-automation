@@ -47,6 +47,11 @@ TELEGRAM_CHAT_ID=123456789
 
 #hf read token for faster model, datasets downloads.
 HF_TOKEN=hf_read_token
+
+# zrok share token for the serve-script presets (injected into kernels at
+# push, like HF_TOKEN). Get one at https://zrok.io. Empty = serve scripts
+# refuse to start; benchmarks don't need it.
+ZROK_TOKEN=your_zrok_token
 ```
 
 ### 2. Build the image
@@ -81,6 +86,11 @@ TELEGRAM_CHAT_ID=123456789
 
 #hf read token for faster model, datasets downloads.
 HF_TOKEN=hf_read_token
+
+# zrok share token for the serve-script presets (injected into kernels at
+# push, like HF_TOKEN). Get one at https://zrok.io. Empty = serve scripts
+# refuse to start; benchmarks don't need it.
+ZROK_TOKEN=your_zrok_token
 ```
 *(Accounts and Telegram credentials can also be managed directly from the UI — UI values override `.env`.)*
 
@@ -165,7 +175,7 @@ for item_id in range(START_INDEX, END_INDEX):
 
 ## LLM serve benchmarks
 
-Two scripts in `benchmarks/` serve Qwen3.8-27B (Q4_K_XL, 128K context, q4_0 KV cache) through llama-server on 2x T4 and time fixed prompts. Token counts come from the server (`stream_options.include_usage`). Each run prints a JSON block and leaves a per-shard copy under `/kaggle/working`.
+Two scripts in `benchmarks/` serve Qwen3.8-27B (Q4_K_XL, 128K context, q4_0 KV cache) through llama-server on 2x T4 and time fixed prompts. Token counts come from the server (`stream_options.include_usage`). Each run prints a JSON block and leaves a per-shard copy under `/kaggle/working`. The matching `serve_qwen3_8_*.py` scripts run the same servers plus a zrok public share instead of timing; they need `ZROK_TOKEN` in the server `.env` (injected into the kernel at push, never stored in the file).
 
 The plain build is the default preset in the Single Run tab (`GET /api/presets`).
 
@@ -181,9 +191,9 @@ Round two ran code only (synthesis, bug fix, completion, 256 tokens each) and ca
 
 | prompt | plain, v0.4.0 | draft-dflash, v0.4.1, acceptance |
 |---|---|---|
-| warmup, 8 tokens | 103.77s total (cold load) | 106.11s total (cold load), 0.7143 |
-| code-synth, 256 tokens | 1.75s to first token (est), 23.93s total, 10.7 t/s | 29.82s total, 8.58 t/s, 0.4424 |
-| code-fix, 256 tokens | 2.37s to first token (est), 21.67s total, 11.81 t/s | 22.0s total, 11.64 t/s, 0.4641 |
-| code-complete, 256 tokens | t/s invalid, see note | 17.41s total, 14.7 t/s, 0.6059 |
+| warmup, 8 tokens | 99.52s total (cold load) | 106.11s total (cold load), 0.7143 |
+| code-synth, 256 tokens | 1.7s to first token (est), 23.72s total, 10.79 t/s | 29.82s total, 8.58 t/s, 0.4424 |
+| code-fix, 256 tokens | 2.36s to first token (est), 21.78s total, 11.76 t/s | 22.0s total, 11.64 t/s, 0.4641 |
+| code-complete, 256 tokens | 21.95s to first token, 21.95s total, 11.66 t/s | 17.41s total, 14.7 t/s, 0.6059 |
 
-Draft acceptance mean over the round is 0.5567, and throughput tracks it task by task. First-token times stayed estimated because this model streams reasoning traces before content. The plain code-complete t/s (1211898.22) is a divide-by-zero artifact from the old build when all content lands in one trailing chunk; the harness now falls back to total time instead. The draft answers essay first tokens faster (8.11s vs 11.56s) but carries a second ~28GB download with no steady throughput gain, so plain stays the default.
+Draft acceptance mean over the round is 0.5567, and throughput tracks it task by task. First-token times stayed estimated because this model streams reasoning traces before content. The plain code-complete delivery arrived in one trailing chunk, so its rate equals total time (256 / 21.95); the harness falls back to total time in that case instead of dividing by a sliver. The draft answers essay first tokens faster (8.11s vs 11.56s) but carries a second ~28GB download with no steady throughput gain, so plain stays the default.

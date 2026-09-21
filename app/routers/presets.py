@@ -7,32 +7,32 @@ PRESETS_DIR = BASE_DIR / "benchmarks"
 
 # Fixed map (keys, not paths) so a crafted URL can never escape PRESETS_DIR.
 PRESETS = {
-    "bench-qwen38-plain": {
-        "file": "bench_qwen38_plain.py",
-        "title": "bench-qwen38-plain",
-        "accelerator": "nvidia-tesla-t4-x2",
-        "label": "Benchmark: Qwen3.8-27B serve (plain, T4 x2)",
-        "recommended": True,
-    },
-    "bench-qwen38-draft": {
-        "file": "bench_qwen38_draft.py",
-        "title": "bench-qwen38-draft",
-        "accelerator": "nvidia-tesla-t4-x2",
-        "label": "Benchmark: Qwen3.8-27B serve (speculative draft, T4 x2)",
-        "recommended": False,
-    },
     "serve-qwen38-plain": {
         "file": "serve_qwen3_8_plain.py",
         "title": "serve-qwen38-plain",
         "accelerator": "nvidia-tesla-t4-x2",
         "label": "Serve, stays up: Qwen3.8-27B (plain, T4 x2)",
-        "recommended": False,
+        "recommended": True,
     },
     "serve-qwen38-draft": {
         "file": "serve_qwen3_8_draft.py",
         "title": "serve-qwen38-draft",
         "accelerator": "nvidia-tesla-t4-x2",
         "label": "Serve, stays up: Qwen3.8-27B (draft, T4 x2)",
+        "recommended": False,
+    },
+    "bench-qwen38-plain": {
+        "file": "bench_qwen38_plain.py",
+        "title": "bench-qwen38-plain",
+        "accelerator": "nvidia-tesla-t4-x2",
+        "label": "Benchmark: Qwen3.8-27B serve (plain, T4 x2)",
+        "recommended": False,
+    },
+    "bench-qwen38-draft": {
+        "file": "bench_qwen38_draft.py",
+        "title": "bench-qwen38-draft",
+        "accelerator": "nvidia-tesla-t4-x2",
+        "label": "Benchmark: Qwen3.8-27B serve (speculative draft, T4 x2)",
         "recommended": False,
     },
 }

@@ -30,13 +30,19 @@ class TestPresetListing(unittest.TestCase):
         data = call(presets.list_presets())
         self.assertTrue(data["success"])
         by_key = {p["key"]: p for p in data["presets"]}
-        self.assertIn("bench-qwen38-plain", by_key)
-        self.assertTrue(by_key["bench-qwen38-plain"]["recommended"])
-        self.assertTrue(by_key["bench-qwen38-plain"]["available"])
-        self.assertEqual(by_key["bench-qwen38-plain"]["title"], "bench-qwen38-plain")
+        self.assertIn("serve-qwen38-plain", by_key)
+        self.assertTrue(by_key["serve-qwen38-plain"]["recommended"])
+        self.assertTrue(by_key["serve-qwen38-plain"]["available"])
+        self.assertEqual(by_key["serve-qwen38-plain"]["title"], "serve-qwen38-plain")
         self.assertEqual(
-            by_key["bench-qwen38-plain"]["accelerator"], "nvidia-tesla-t4-x2"
+            by_key["serve-qwen38-plain"]["accelerator"], "nvidia-tesla-t4-x2"
         )
+        # serve scripts come before benchmarks; benchmarks are not recommended
+        keys = [p["key"] for p in data["presets"]]
+        self.assertLess(
+            keys.index("serve-qwen38-plain"), keys.index("bench-qwen38-plain")
+        )
+        self.assertFalse(by_key["bench-qwen38-plain"]["recommended"])
 
     def test_preset_content_matches_file(self):
         presets, _ = _presets()
@@ -48,15 +54,16 @@ class TestPresetListing(unittest.TestCase):
         self.assertEqual(data["code"], on_disk)
         self.assertIn("VARIANT", data["code"])
 
-    def test_serve_presets_listed_not_recommended(self):
+    def test_serve_plain_recommended_draft_not(self):
         presets, _ = _presets()
         data = call(presets.list_presets())
         by_key = {p["key"]: p for p in data["presets"]}
         for key in ("serve-qwen38-plain", "serve-qwen38-draft"):
             self.assertIn(key, by_key)
-            self.assertFalse(by_key[key]["recommended"])
             self.assertTrue(by_key[key]["available"])
             self.assertIn("stays up", by_key[key]["label"])
+        self.assertTrue(by_key["serve-qwen38-plain"]["recommended"])
+        self.assertFalse(by_key["serve-qwen38-draft"]["recommended"])
 
     def test_serve_plain_content_matches_file(self):
         presets, _ = _presets()

@@ -250,6 +250,11 @@ function handleFileInputChange(e) {
   const file = e.target.files[0];
   if (!file) return;
 
+  // A hand-picked file replaces any preset: reset the dropdown to blank so
+  // the form never implies preset content is loaded.
+  const presetSel = document.getElementById('runner-preset-select');
+  if (presetSel) presetSel.value = '';
+
   uploadedFileName = file.name;
   const label = document.getElementById('file-upload-label');
   if (label) label.innerHTML = `Loaded: <strong class="text-cyan-400 font-mono">${file.name}</strong> (${(file.size / 1024).toFixed(1)} KB)`;

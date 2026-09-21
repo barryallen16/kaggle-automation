@@ -404,8 +404,10 @@ def chat_once(content, max_tokens):
     ttft_src = first_token or first_byte
     ttft = (ttft_src - t0) if ttft_src else None
     gen_time = (end - first_token) if first_token else (end - t0)
-    if gen_time <= 0:
-        # single trailing chunk: first token arrived with the last byte
+    if gen_time < 1.0:
+        # First token inseparable from stream end (single trailing chunk):
+        # fall back to total time. 1s is far below any real 256-token
+        # generation here and far above clock-sliver noise.
         gen_time = end - t0
     return {
         "ttft_s": round(ttft, 2) if ttft else None,
