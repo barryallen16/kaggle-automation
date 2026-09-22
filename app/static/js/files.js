@@ -152,17 +152,7 @@ function renderFilesTable(data) {
 }
 
 function setFilesBtnLoading(btn, loading, text) {
-  if (!btn) return;
-  if (loading) {
-    btn.dataset.origHtml = btn.innerHTML;
-    btn.disabled = true;
-    btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>${text || 'Loading...'}</span>`;
-    try { refreshIcons(); } catch (_) {}
-  } else {
-    btn.disabled = false;
-    if (btn.dataset.origHtml) btn.innerHTML = btn.dataset.origHtml;
-    try { refreshIcons(); } catch (_) {}
-  }
+  setButtonBusy(btn, loading, text);
 }
 async function pullRemoteFiles() {
   if (!currentFilesRunId) {

@@ -67,6 +67,9 @@ MAX_KAGGLE_SESSION_SECONDS = 12 * 3600  # 12 hours
 WARNING_BEFORE_EXPIRY_SECONDS = 3600  # 1 hour warning
 TRIAL_RUN_DEFAULT_TIMEOUT = 300  # 5 minutes
 
+# Kaggle's batch GPU session cap per account (single source; JS mirrors it).
+KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT = 2
+
 
 def is_gpu_accelerator(accelerator: object) -> bool:
     """True for anything that burns weekly GPU quota (not none/default/cpu)."""

@@ -40,6 +40,9 @@ if not CONFIG["ZROK_TOKEN"]:
         "ZROK_TOKEN is not set — export it (dashboard injects it at push) before launching"
     )
 
+# ponytail: single-file Kaggle push artifact — keep standalone. Set SPEC_USE_DRAFT=0 for plain behavior.
+USE_SPEC = os.environ.get("SPEC_USE_DRAFT", "1") != "0"
+
 
 def log(stage: str, msg: str):
     print(f"[{stage}] {msg}")
@@ -95,7 +98,7 @@ else:
     log("DOWNLOAD", "Model binary already present. Skipping download.")
 # Add under Section 2 (ASSET DOWNLOADS)
 
-if not os.path.exists(CONFIG["DRAFT_MODEL_PATH"]):
+if USE_SPEC and not os.path.exists(CONFIG["DRAFT_MODEL_PATH"]):
     log("DOWNLOAD", f"Downloading draft model to {CONFIG['DRAFT_MODEL_PATH']}...")
     run_cmd(
         [
@@ -150,15 +153,20 @@ env["LD_LIBRARY_PATH"] = f"{CONFIG['BIN_DIR']}:/usr/local/cuda/lib64:" + env.get
 env["CUDA_VISIBLE_DEVICES"] = "0,1"
 
 server_cmd = [
-    server_bin,  # must show `draft-dflash` in `llama-server --help | grep spec`, else rebuild below
+    server_bin,
     "-m",
     CONFIG["MODEL_PATH"],
-    "-md",
-    CONFIG["DRAFT_MODEL_PATH"],
-    "--spec-type",
-    "draft-dflash",
-    "--spec-draft-n-max",
-    "8",  # README block=8
+]
+if USE_SPEC:
+    server_cmd += [
+        "-md",
+        CONFIG["DRAFT_MODEL_PATH"],
+        "--spec-type",
+        "draft-dflash",
+        "--spec-draft-n-max",
+        "8",
+    ]
+server_cmd += [
     "--host",
     "0.0.0.0",
     "--port",
@@ -176,9 +184,9 @@ server_cmd = [
     "--cache-type-v",
     "q4_0",
     "-b",
-    "1024",
+    "1024" if USE_SPEC else "512",
     "-ub",
-    "512",
+    "512" if USE_SPEC else "256",
     "-t",
     "4",
     "--parallel",

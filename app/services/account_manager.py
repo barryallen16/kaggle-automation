@@ -12,12 +12,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar
 
-from config import ACCOUNTS_DIR, KAGGLE_APIKEYS_RAW, get_kaggle_cli_path
+from config import (
+    ACCOUNTS_DIR,
+    KAGGLE_APIKEYS_RAW,
+    get_kaggle_cli_path,
+    is_gpu_accelerator,
+)
 from database import (
     delete_account as db_delete_account,
 )
 from database import (
     get_account_by_username,
+    get_active_runs,
     get_all_accounts,
     save_account,
 )
@@ -29,6 +35,7 @@ def _write_text_file(path: Path, text: str) -> None:
     """Writes a small token/config file (sync helper - see to_thread callers)."""
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
+
 
 # ---------------------------------------------------------------------------
 # Quota-aware runtime caps (self-finishing kernels)
@@ -669,6 +676,21 @@ class AccountManager:
         return cls.compute_gpu_runtime_budget_minutes(
             gpu.get("used"), gpu.get("limit"), concurrent_sessions
         )
+
+    @staticmethod
+    def active_gpu_runs(username: str) -> list[dict]:
+        """DB-recorded active GPU runs for one account (single source).
+
+        DB-only count, no live CLI check: use for quota-budget math at launch.
+        The distributor's live availability check reaps finished kernels first
+        and must stay separate.
+        """
+        return [
+            r
+            for r in get_active_runs()
+            if r.get("account_username") == username
+            and is_gpu_accelerator(r.get("accelerator"))
+        ]
 
     @classmethod
     def remove_account(cls, username: str):

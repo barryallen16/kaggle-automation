@@ -141,7 +141,7 @@ function quotaKindForAccelerator(accelerator) {
 }
 
 // Concurrent GPU/TPU sessions burn one of 2 slots each (mirrors
-// WorkloadDistributor.MAX_GPU_SESSIONS_PER_ACCOUNT on the server).
+// config.KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT on the server).
 const MAX_GPU_SESSIONS = 2;
 
 // ponytail: sums only the runs already fetched (capped at 500 by refreshGlobalData); move to /api/runs/stats if history outgrows it
@@ -166,6 +166,27 @@ function gpuSessionsBusy(acc) {
 
 function gpuSessionsFree(acc) {
   return Math.max(0, MAX_GPU_SESSIONS - gpuSessionsBusy(acc));
+}
+
+// Single quota seam: one adapter for remaining quota, kind, busy/free.
+// Callers use QuotaAdapter instead of copy-pasting isGpuAcc guards.
+function busySessions(acc) {
+  return gpuSessionsBusy(acc);
+}
+
+const QuotaAdapter = {
+  MAX_SESSIONS: MAX_GPU_SESSIONS,
+  remaining: getAccountRemainingQuota,
+  kindFor: quotaKindForAccelerator,
+  busy: busySessions,
+  free: gpuSessionsFree,
+};
+
+// Username -> { busy }: single copy of the distributed preview guard.
+function busyForAccount(username) {
+  const info = (AppState.accounts || []).find(a => a.username === username);
+  if (!info) return { busy: 0 };
+  return { busy: gpuSessionsBusy(info) };
 }
 
 // Sort accounts descending: highest GPU quota left first, then TPU quota left, then username

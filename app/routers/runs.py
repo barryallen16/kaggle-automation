@@ -29,12 +29,7 @@ async def _quota_capped_env(
     """
     if not is_gpu_accelerator(accelerator):
         return env_vars
-    active = [
-        r
-        for r in get_active_runs()
-        if r.get("account_username") == account_username
-        and is_gpu_accelerator(r.get("accelerator"))
-    ]
+    active = AccountManager.active_gpu_runs(account_username)
     budget = await AccountManager.gpu_runtime_budget_minutes(
         account_username, 1 + len(active)
     )

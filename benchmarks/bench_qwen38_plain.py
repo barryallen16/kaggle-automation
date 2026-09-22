@@ -6,6 +6,9 @@ model, NO draft model (the original downloaded a draft but never passed
 
 Run (Single Run tab): T4 GPU x2, internet ON, full run (downloads ~16GB).
 Paste back the ===BENCHMARK_JSON_START=== block.
+
+ponytail: frozen single-file push snapshot — bench_qwen38_draft.py with
+BENCH_SPEC=0 is canonical for local runs; keep this file standalone.
 """
 
 import sys as _ka_sys

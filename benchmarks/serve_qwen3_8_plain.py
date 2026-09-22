@@ -2,6 +2,8 @@
 # Same flow as serve_qwen3_8_draft.py, minus the draft model. Binary v0.4.0
 # served 256-token prompts at 20.2 t/s (essay) in benchmarks. ZROK_TOKEN comes
 # from the environment (dashboard injects it at push) and is never baked in.
+# ponytail: frozen single-file push snapshot — serve_qwen3_8_draft.py with
+# SPEC_USE_DRAFT=0 is canonical for local runs; keep this file standalone.
 
 import glob
 import json

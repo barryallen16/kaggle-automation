@@ -68,7 +68,8 @@ import sys
 import time
 import urllib.request
 
-VARIANT = "draft"
+VARIANT = os.environ.get("BENCH_VARIANT", "draft")
+USE_SPEC = os.environ.get("BENCH_SPEC", "1") != "0"
 CONFIG = {
     "MODEL_URL": os.environ.get("MODEL_URL")
     or "https://huggingface.co/unsloth/Qwen3.8-27B-GGUF/resolve/main/Qwen3.8-27B-UD-Q4_K_XL.gguf",
@@ -221,6 +222,8 @@ def ensure_assets():
         ("model", "MODEL_URL", "MODEL_PATH"),
         ("draft", "DRAFT_MODEL_URL", "DRAFT_MODEL_PATH"),
     ):
+        if label == "draft" and not USE_SPEC:
+            continue
         if not os.path.exists(CONFIG[path_key]):
             log("DOWNLOAD", f"Downloading {label} to {CONFIG[path_key]}...", flush=True)
             run_cmd(
@@ -243,7 +246,11 @@ def ensure_assets():
             log("DOWNLOAD", f"{label} present, skipping.", flush=True)
     server_bin = os.path.join(CONFIG["BIN_DIR"], "llama-server")
     if not os.path.exists(server_bin):
-        log("DOWNLOAD", "Fetching CUDA prebuilt binary (v0.4.1)...", flush=True)
+        log(
+            "DOWNLOAD",
+            f"Fetching CUDA prebuilt binary ({'v0.4.1' if USE_SPEC else 'v0.4.0'})...",
+            flush=True,
+        )
         tar_path = os.path.join(SCRATCH_DIR, "llama.tar.gz")
         run_cmd(["wget", "-q", CONFIG["BINARY_URL"], "-O", tar_path])
         run_cmd(
@@ -253,7 +260,7 @@ def ensure_assets():
         cands = glob.glob(f"{CONFIG['BIN_DIR']}/**/llama-server", recursive=True)
         if not cands:
             raise FileNotFoundError("llama-server not found in archive")
-        server_bin = _pick_candidate(cands, need="draft-dflash")
+        server_bin = _pick_candidate(cands, need="draft-dflash" if USE_SPEC else None)
     log("SETUP", f"Using server binary at: {server_bin}", flush=True)
     return server_bin
 
@@ -268,12 +275,17 @@ def start_server(server_bin):
         server_bin,
         "-m",
         CONFIG["MODEL_PATH"],
-        "-md",
-        CONFIG["DRAFT_MODEL_PATH"],
-        "--spec-type",
-        "draft-dflash",
-        "--spec-draft-n-max",
-        "8",
+    ]
+    if USE_SPEC:
+        server_cmd += [
+            "-md",
+            CONFIG["DRAFT_MODEL_PATH"],
+            "--spec-type",
+            "draft-dflash",
+            "--spec-draft-n-max",
+            "8",
+        ]
+    server_cmd += [
         "--host",
         "0.0.0.0",
         "--port",
@@ -291,9 +303,9 @@ def start_server(server_bin):
         "--cache-type-v",
         "q4_0",
         "-b",
-        "1024",
+        "1024" if USE_SPEC else "512",
         "-ub",
-        "512",
+        "512" if USE_SPEC else "256",
         "-t",
         "4",
         "--parallel",
@@ -454,19 +466,20 @@ def main():
         ]
         summary = {
             "variant": VARIANT,
-            "binary": "v0.4.1",
+            "binary": "v0.4.1" if USE_SPEC else "v0.4.0",
             "binary_version": bin_version,
             "n_gpu": n_gpu,
             "context": CONFIG["CONTEXT_SIZE"],
-            "batch": "1024/512",
-            "speculative": True,
-            "draft_quant": "Q8_0",
+            "batch": "1024/512" if USE_SPEC else "512/256",
+            "speculative": USE_SPEC,
+            "draft_quant": "Q8_0" if USE_SPEC else None,
             "acceptance_mean": round(sum(rates) / len(rates), 4) if rates else None,
             "results": results,
         }
         print("=" * 60, flush=True)
         print(
-            "VARIANT: draft | binary v0.4.1 | speculative draft-dflash ON", flush=True
+            f"VARIANT: {VARIANT} | binary {'v0.4.1' if USE_SPEC else 'v0.4.0'} | speculative {'draft-dflash ON' if USE_SPEC else 'OFF'}",
+            flush=True,
         )
         for r in results:
             print(

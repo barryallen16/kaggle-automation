@@ -103,17 +103,17 @@ function updateRunnerQuotaWarning() {
   if (!hint) return;
   const accName = document.getElementById('runner-account-select')?.value;
   const accelerator = document.getElementById('runner-accelerator-select')?.value;
-  const kind = typeof quotaKindForAccelerator === 'function' ? quotaKindForAccelerator(accelerator) : 'gpu';
+  const kind = QuotaAdapter.kindFor(accelerator);
   const acc = (AppState.accounts || []).find(a => a.username === accName);
   if (!acc || !kind) {
     hint.classList.add('hidden');
     hint.textContent = '';
     return;
   }
-  const q = typeof getAccountRemainingQuota === 'function' ? getAccountRemainingQuota(acc) : { gpuLeft: 1, tpuLeft: 1 };
-  const free = typeof gpuSessionsFree === 'function' ? gpuSessionsFree(acc) : 1;
+  const q = QuotaAdapter.remaining(acc);
+  const free = QuotaAdapter.free(acc);
   if (kind && free < 1) {
-    const cap = typeof MAX_GPU_SESSIONS === 'number' ? MAX_GPU_SESSIONS : 2;
+    const cap = QuotaAdapter.MAX_SESSIONS;
     hint.textContent = `⚠ @${acc.username} has no free sessions (${cap}/${cap} busy) — stop a run or pick another account.`;
     hint.classList.remove('hidden');
     return;
@@ -140,16 +140,11 @@ function populateAccountSelects() {
   // they read as CPU-only options instead of looking broken. Accounts with no
   // free session slot for the chosen accelerator are disabled outright (a
   // launch there cannot land) - except CPU, which needs no slot.
-  const runnerKind = typeof quotaKindForAccelerator === 'function'
-    ? quotaKindForAccelerator(document.getElementById('runner-accelerator-select')?.value)
-    : 'gpu';
+  const runnerKind = QuotaAdapter.kindFor(document.getElementById('runner-accelerator-select')?.value);
   const optionsHtml = '<option value="">-- Select Target Account --</option>' +
     AppState.accounts.map(a => {
-      const q = typeof getAccountRemainingQuota === 'function' ? getAccountRemainingQuota(a) : {
-        gpuLeft: Math.max(0, (a.last_quota?.gpu?.limit || 30) - (a.last_quota?.gpu?.used || 0)),
-        tpuLeft: Math.max(0, (a.last_quota?.tpu?.limit || 20) - (a.last_quota?.tpu?.used || 0))
-      };
-      const free = typeof gpuSessionsFree === 'function' ? gpuSessionsFree(a) : 1;
+      const q = QuotaAdapter.remaining(a);
+      const free = QuotaAdapter.free(a);
       const capped = !!runnerKind && free < 1;
       const flags = [
         q.gpuLeft <= 0 ? 'GPU empty' : '',
