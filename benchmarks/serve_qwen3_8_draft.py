@@ -419,3 +419,31 @@ while time.time() < deadline:
     time.sleep(1)
 
 log("ZROK", f"public_url={public_url or 'NOT FOUND — see /tmp/zrok_share.log'}")
+
+# ==============================================================================
+# 4. KEEP-ALIVE LOOP WITH HEALTH CHECKS
+# ==============================================================================
+log("MAIN", f"Pipeline live at: {public_url}")
+log("MAIN", "Entering persistent background loop...")
+
+try:
+    ping_counter = 0
+    while True:
+        # Check process vitality
+        if server_proc.poll() is not None:
+            raise RuntimeError("llama-server process died.")
+        if share_proc.poll() is not None:
+            raise RuntimeError("zrok share process died.")
+
+        # Log a heart-beat every 5 minutes (30 * 10s)
+        ping_counter += 1
+        if ping_counter >= 30:
+            log("HEALTH", "Server & Zrok share are actively running.")
+            ping_counter = 0
+
+        time.sleep(10)
+except Exception as e:
+    log("MAIN", f"Fatal loop error: {e}")
+    # Cleanup background processes before exiting
+    server_proc.kill()
+    share_proc.kill()

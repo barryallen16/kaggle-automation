@@ -423,7 +423,7 @@ async function refreshGlobalData() {
       if (kpi) kpi.innerText = AppState.accounts.length;
       // Keep all account selectors in sync (runner, distributed, kernels)
       if (typeof populateAccountSelects === 'function') {
-        try { populateAccountSelects(); } catch (_) {}
+        try { populateAccountSelects(); } catch (e) { console.error('populateAccountSelects failed', e); }
       }
       if (typeof populateKernelsAccountSelect === 'function') {
         try { populateKernelsAccountSelect(); } catch (_) {}

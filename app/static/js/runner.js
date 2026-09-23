@@ -103,22 +103,28 @@ function updateRunnerQuotaWarning() {
   if (!hint) return;
   const accName = document.getElementById('runner-account-select')?.value;
   const accelerator = document.getElementById('runner-accelerator-select')?.value;
-  const kind = QuotaAdapter.kindFor(accelerator);
+  const kind = (typeof QuotaAdapter !== 'undefined' && QuotaAdapter.kindFor)
+    ? QuotaAdapter.kindFor(accelerator)
+    : (typeof quotaKindForAccelerator === 'function' ? quotaKindForAccelerator(accelerator) : null);
   const acc = (AppState.accounts || []).find(a => a.username === accName);
   if (!acc || !kind) {
     hint.classList.add('hidden');
     hint.textContent = '';
     return;
   }
-  const q = QuotaAdapter.remaining(acc);
-  const free = QuotaAdapter.free(acc);
+  const remaining = (typeof QuotaAdapter !== 'undefined' && QuotaAdapter.remaining)
+    ? QuotaAdapter.remaining(acc)
+    : (typeof getAccountRemainingQuota === 'function' ? getAccountRemainingQuota(acc) : { gpuLeft: 1, tpuLeft: 1 });
+  const free = (typeof QuotaAdapter !== 'undefined' && QuotaAdapter.free)
+    ? QuotaAdapter.free(acc)
+    : (typeof gpuSessionsFree === 'function' ? gpuSessionsFree(acc) : 1);
+  const cap = (typeof QuotaAdapter !== 'undefined' && QuotaAdapter.MAX_SESSIONS) || MAX_GPU_SESSIONS || 2;
   if (kind && free < 1) {
-    const cap = QuotaAdapter.MAX_SESSIONS;
     hint.textContent = `⚠ @${acc.username} has no free sessions (${cap}/${cap} busy) — stop a run or pick another account.`;
     hint.classList.remove('hidden');
     return;
   }
-  const left = kind === 'tpu' ? q.tpuLeft : q.gpuLeft;
+  const left = kind === 'tpu' ? remaining.tpuLeft : remaining.gpuLeft;
   if (left > 0) {
     hint.classList.add('hidden');
     hint.textContent = '';
@@ -135,16 +141,34 @@ function populateAccountSelects() {
 
   // Preserve previously chosen account or recall saved preference
   const prevValue = runnerSelect.value || AppState.selectedRunnerAccount || localStorage.getItem('kaggle_last_runner_account');
+  const accounts = AppState.accounts || [];
+
+  if (!accounts.length) {
+    runnerSelect.innerHTML = '<option value="" disabled selected>No accounts — add one on the Dashboard</option>';
+    updateRunnerAccountQuotaCard();
+    return;
+  }
 
   // Build options with username and quota left; flag quota-empty accounts so
   // they read as CPU-only options instead of looking broken. Accounts with no
   // free session slot for the chosen accelerator are disabled outright (a
   // launch there cannot land) - except CPU, which needs no slot.
-  const runnerKind = QuotaAdapter.kindFor(document.getElementById('runner-accelerator-select')?.value);
+  const accSel = document.getElementById('runner-accelerator-select');
+  const kindFor = (typeof QuotaAdapter !== 'undefined' && QuotaAdapter.kindFor)
+    ? QuotaAdapter.kindFor
+    : (typeof quotaKindForAccelerator === 'function' ? quotaKindForAccelerator : () => 'gpu');
+  const remaining = (typeof QuotaAdapter !== 'undefined' && QuotaAdapter.remaining)
+    ? QuotaAdapter.remaining
+    : (typeof getAccountRemainingQuota === 'function' ? getAccountRemainingQuota : () => ({ gpuLeft: 0, tpuLeft: 0 }));
+  const freeSlots = (typeof QuotaAdapter !== 'undefined' && QuotaAdapter.free)
+    ? QuotaAdapter.free
+    : (typeof gpuSessionsFree === 'function' ? gpuSessionsFree : () => 1);
+
+  const runnerKind = kindFor(accSel?.value);
   const optionsHtml = '<option value="">-- Select Target Account --</option>' +
-    AppState.accounts.map(a => {
-      const q = QuotaAdapter.remaining(a);
-      const free = QuotaAdapter.free(a);
+    accounts.map(a => {
+      const q = remaining(a);
+      const free = freeSlots(a);
       const capped = !!runnerKind && free < 1;
       const flags = [
         q.gpuLeft <= 0 ? 'GPU empty' : '',
@@ -157,12 +181,12 @@ function populateAccountSelects() {
   runnerSelect.innerHTML = optionsHtml;
 
   // Restore preserved value, or fallback to the healthiest account (first in sorted list)
-  if (prevValue && AppState.accounts.some(a => a.username === prevValue)) {
+  if (prevValue && accounts.some(a => a.username === prevValue)) {
     runnerSelect.value = prevValue;
     AppState.selectedRunnerAccount = prevValue;
-  } else if (AppState.accounts.length > 0) {
-    runnerSelect.value = AppState.accounts[0].username;
-    AppState.selectedRunnerAccount = AppState.accounts[0].username;
+  } else if (accounts.length > 0) {
+    runnerSelect.value = accounts[0].username;
+    AppState.selectedRunnerAccount = accounts[0].username;
   }
 
   // Update the live quota card
