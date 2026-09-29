@@ -76,10 +76,34 @@ def _append_text_file(path: Path, text: str) -> None:
         f.write(text)
 
 
+def _classify_push_failure(combined: str) -> str:
+    """Classifies a kaggle push result: 'session_cap', 'conflict', or '' if final.
+
+    Scans stdout+stderr because the CLI prints "Kernel push error: ..." on stdout.
+    session_cap is checked first: a capped push is a long-lived account-level
+    state (both slot holders run for hours), while 409 clears in seconds.
+    """
+    low = combined.lower()
+    if "maximum batch gpu session count" in low:
+        return "session_cap"
+    if "409" in combined or "conflict" in low:
+        return "conflict"
+    return ""
+
+
 class KaggleService:
     # Seconds to wait before each attempt to fetch the cancelled version's
     # output after a stop push (Kaggle finalizes the version asynchronously).
     STOP_CAPTURE_RETRY_DELAYS = (6, 12, 20)
+    # Backoff for a push rejected with "maximum batch gpu session count".
+    # Short on purpose: a cap is a stop-teardown race, not a queue. Long
+    # ladders (this was 20..300s = 18min) just held the HTTP request open
+    # with zero feedback while the 12h kernels holding the slots never
+    # finished. Callers pre-flight free slots now (see runs.launch_json).
+    SESSION_CAP_RETRY_DELAYS = (15, 30, 60)
+    # Seconds before each 409 retry; 409s clear as soon as the kernel leaves
+    # its transition state, so they get a much shorter window than a cap.
+    CONFLICT_RETRY_DELAYS = (5, 10, 20, 40)
     # Active log stream processes / subscribers live in kaggle_logs (same
     # objects aliased here so stop_kernel and existing callers keep working).
     _active_stream_processes: ClassVar[dict[str, asyncio.subprocess.Process]] = (
@@ -348,19 +372,12 @@ class KaggleService:
 
         env = AccountManager.get_account_env(account_username)
 
-        # Retry logic for 409 Conflict errors (Kaggle rate-limits when a kernel
-        # is still starting/running on the same account) and transient batch-GPU
-        # session caps. The two need VERY different windows:
-        #   - session cap: a second same-account GPU session usually has to wait
-        #     out the first session's Kaggle queue (often minutes), and a stop
-        #     teardown (CANCEL_ACKNOWLEDGED) can hold the slot for many minutes.
-        #     Keep retrying ~18 minutes so 2 sessions/account actually land.
-        #   - 409 conflict: clears in seconds once the kernel finishes its
-        #     transition - retry briefly, never burn the long window on it.
-        MAX_RETRIES = 4
-        RETRY_BASE_DELAY = 5  # seconds
-        SESSION_CAP_RETRY_DELAYS = [20, 30, 45, 60, 90, 120, 180, 240, 300]
-        total_attempts = max(MAX_RETRIES, len(SESSION_CAP_RETRY_DELAYS) + 1)
+        # Retry logic for 409 Conflict (kernel still transitioning) and transient
+        # batch-GPU session caps. Both ladders live on the class so stop_kernel
+        # shares them; see SESSION_CAP_RETRY_DELAYS for why the cap window is short.
+        cap_delays = cls.SESSION_CAP_RETRY_DELAYS
+        conflict_delays = cls.CONFLICT_RETRY_DELAYS
+        total_attempts = max(len(cap_delays), len(conflict_delays)) + 1
 
         out_str = ""
         err_str = ""
@@ -375,38 +392,30 @@ class KaggleService:
                         stderr=asyncio.subprocess.PIPE,
                         env=env,
                     )
-                    stdout, stderr = await proc.communicate()
+                    # Bounded like stop_external_kernel: a hung CLI subprocess
+                    # would otherwise wedge the request with no timeout at all.
+                    stdout, stderr = await asyncio.wait_for(
+                        proc.communicate(), timeout=120
+                    )
                 out_str = stdout.decode("utf-8", errors="ignore")
                 err_str = stderr.decode("utf-8", errors="ignore")
 
-                # Retryable push failures: 409 Conflict (kernel transitioning)
-                # and the transient batch-GPU-session cap while old sessions reap.
-                # The CLI prints "Kernel push error: ..." on STDOUT - scan BOTH streams.
                 combined_out = out_str + "\n" + err_str
                 low = combined_out.lower()
-                session_cap_hit = "maximum batch gpu session count" in low
-                is_409 = "409" in combined_out or "conflict" in low
                 is_push_err = proc.returncode != 0 or "kernel push error" in low
-                retryable = is_push_err and (is_409 or session_cap_hit)
-                if retryable:
-                    if session_cap_hit:
-                        delay = SESSION_CAP_RETRY_DELAYS[
-                            min(attempt, len(SESSION_CAP_RETRY_DELAYS) - 1)
-                        ]
-                        retry_limit = total_attempts  # long window: let the first session's queue settle
-                    else:
-                        delay = RETRY_BASE_DELAY * (2**attempt)
-                        retry_limit = (
-                            MAX_RETRIES  # 409s clear fast - don't burn 25 min on them
-                        )
+                reason = _classify_push_failure(combined_out)
+                if is_push_err and reason:
+                    delays = cap_delays if reason == "session_cap" else conflict_delays
+                    retry_limit = len(delays) + 1
                     if attempt >= retry_limit - 1:
                         break
-                    reason = "session cap" if session_cap_hit else "409 conflict"
+                    delay = delays[min(attempt, len(delays) - 1)]
+                    label = "session cap" if reason == "session_cap" else "409 conflict"
                     logger.warning(
-                        f"Kaggle push attempt {attempt + 1}/{retry_limit} hit {reason}, backing off {delay}s..."
+                        f"Kaggle push attempt {attempt + 1}/{retry_limit} hit {label}, backing off {delay}s..."
                     )
                     retry_line = (
-                        f"[RETRY] attempt {attempt + 1} failed ({reason}), "
+                        f"[RETRY] attempt {attempt + 1} failed ({label}), "
                         f"backing off {delay}s...\n"
                     )
                     await asyncio.to_thread(
@@ -924,10 +933,16 @@ class KaggleService:
         cmd = [cli, "kernels", "push", "-p", str(stop_dir), "-t", "1"]
         env = AccountManager.get_account_env(account_username)
 
-        # Retry on 409 Conflict (kernel may still be transitioning)
+        # Retry on 409 Conflict (kernel still transitioning) and on the batch-GPU
+        # session cap. The cap matters most here: a stop is how a user frees a
+        # slot, so failing it on the cap deadlocks the account (the stop-stub is
+        # itself a push, and the run stays 'running' in the DB so the slot looks
+        # permanently busy). Both use the same ladders as push_kernel.
         push_ok = False
         last_err = ""
-        for attempt in range(3):
+        stop_delays = cls.CONFLICT_RETRY_DELAYS
+        cap_delays = cls.SESSION_CAP_RETRY_DELAYS
+        for attempt in range(max(len(stop_delays), len(cap_delays)) + 1):
             try:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -935,7 +950,7 @@ class KaggleService:
                     stderr=asyncio.subprocess.PIPE,
                     env=env,
                 )
-                stdout, stderr = await proc.communicate()
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
                 out_str = stdout.decode("utf-8", errors="ignore")
                 err_str = stderr.decode("utf-8", errors="ignore")
                 combined = (out_str + "\n" + err_str).strip()
@@ -944,13 +959,15 @@ class KaggleService:
                 if proc.returncode == 0 and not is_push_err:
                     push_ok = True
                     break
-                if (
-                    "409" in combined or "conflict" in combined.lower()
-                ) and attempt < 2:
+                reason = _classify_push_failure(combined)
+                delays = cap_delays if reason == "session_cap" else stop_delays
+                if reason and attempt < len(delays):
+                    delay = delays[attempt]
+                    label = "session cap" if reason == "session_cap" else "409 Conflict"
                     logger.warning(
-                        f"Stop push 409 Conflict, retry {attempt + 1}/3 in 5s..."
+                        f"Stop push hit {label}, retry {attempt + 1}/{len(delays)} in {delay}s..."
                     )
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(delay)
                     continue
                 break
             except Exception as e:

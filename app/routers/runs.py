@@ -1,6 +1,6 @@
 from typing import Annotated, Any
 
-from config import is_gpu_accelerator
+from config import KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT, is_gpu_accelerator
 from database import (
     get_active_runs,
     get_all_runs,
@@ -10,6 +10,7 @@ from database import (
 )
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
+from services import availability
 from services.account_manager import AccountManager
 from services.kaggle_service import KaggleService
 from services.ops_tracker import tracker
@@ -36,6 +37,43 @@ async def _quota_capped_env(
     if not budget or (env_vars and "MAX_RUNTIME_MINUTES" in env_vars):
         return env_vars
     return {**(env_vars or {}), "MAX_RUNTIME_MINUTES": str(budget)}
+
+
+async def _session_cap_rejection(
+    account_username: str, accelerator: str
+) -> dict[str, Any] | None:
+    """Rejects a single launch when the account has no free GPU slot.
+
+    The distributed path already checks this (WorkloadDistributor builds a runner
+    plan from live slot counts) but the single-launch button did not, so it pushed
+    blind into a full account and only learned from the push rejection. That
+    error is not worth waiting out: the kernels holding the slots run for hours
+    (12h session cap), so the push retry loop just held the request open for
+    minutes with no feedback and then failed. Reusing the same helpers as the
+    distributor also means a kernel that already died gets reaped here, so a
+    stale DB row stops blocking the account.
+
+    Returns the rejection payload, or None to proceed. CPU launches are uncapped.
+    """
+    if not is_gpu_accelerator(accelerator):
+        return None
+    # Must match push_kernel's own resolution or a placeholder account name
+    # (kaggle_xxxx) counts zero busy and lets the push through.
+    acc = AccountManager.resolve_effective_username(account_username)
+    busy = await availability.live_busy_sessions([acc], True)
+    if availability.free_slots(1, busy.get(acc, 0), True) <= 0:
+        return {
+            "success": False,
+            "status": "session_cap",
+            "error": (
+                f"'{acc}' has no free GPU session "
+                f"({KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT}/{KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT} in use). "
+                "Stop a running kernel on that account or pick another one."
+            ),
+            "conflict_run_id": None,
+            "run_id": None,
+        }
+    return None
 
 
 class LaunchRunJSONRequest(BaseModel):
@@ -75,6 +113,11 @@ async def get_run_details(run_id: str):
 async def launch_run_json(payload: LaunchRunJSONRequest):
     tracker.begin("launch_run")
     try:
+        capped = await _session_cap_rejection(
+            payload.account_username, payload.accelerator
+        )
+        if capped:
+            return capped
         env_vars = await _quota_capped_env(
             payload.account_username, payload.accelerator, payload.env_vars
         )
