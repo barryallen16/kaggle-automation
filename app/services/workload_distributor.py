@@ -173,7 +173,9 @@ class WorkloadDistributor:
             async with sem:
                 resp = await KaggleService.get_kernel_status(acc, row["kernel_ref"])
             st = resp.get("status", "unknown")
-            if st in ("complete", "error", "stopped", "cancelacknowledged"):
+            # 'cancelling' is NOT "gone": Kaggle still holds the session slot,
+            # so reclaiming it as done is what let blocked accounts report free.
+            if st in ("complete", "error", "stopped", "canceled"):
                 return ("gone", {"ref": row["kernel_ref"], "status": st})
             run_row = get_run_by_id(row["id"])
             if not run_row:

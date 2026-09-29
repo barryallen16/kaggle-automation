@@ -179,9 +179,7 @@ async def kernel_files(account: str = Query(...), kernel_ref: str = Query(...)):
 async def kernel_logs(
     account: str = Query(...),
     kernel_ref: str = Query(...),
-    version: int | None = Query(
-        None, description="Specific version to fetch log for"
-    ),
+    version: int | None = Query(None, description="Specific version to fetch log for"),
 ):
     """Fetches execution logs for any kernel_ref, optionally for a specific version."""
     _require_account(account)
@@ -298,6 +296,20 @@ async def kernel_stop(payload: StopRequest):
     # Check live status first - don't push stub if already terminal
     status_resp = await KaggleService.get_kernel_status(account, ref)
     st = (status_resp.get("status") or "unknown").lower()
+    # A kernel stuck in 'cancelling' is not really stopped: Kaggle still counts
+    # its session against the batch GPU cap, and pushing another stub will not
+    # release it. Say that instead of pretending the kernel is already terminal.
+    if st == "cancelling":
+        return {
+            "success": False,
+            "error": (
+                f"Kernel {ref} is stuck tearing down (CANCEL_ACKNOWLEDGED). "
+                "It still holds a GPU session slot and a stop stub will not free "
+                "it - delete the kernel instead: "
+                f"kaggle kernels delete -y '{ref}'"
+            ),
+            "status": st,
+        }
     if st in ("complete", "error", "stopped"):
         return {
             "success": False,

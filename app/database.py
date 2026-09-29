@@ -281,6 +281,23 @@ def get_active_runs() -> list[dict[str, Any]]:
     return runs
 
 
+def get_session_holding_runs() -> list[dict[str, Any]]:
+    """Runs whose kernel may still occupy a Kaggle session slot.
+
+    get_active_runs() only returns queued/running, so a kernel stuck in
+    'cancelling' (CANCEL_ACKNOWLEDGED) is invisible to it - yet Kaggle keeps
+    counting that session against the batch GPU cap. Every stuck session must
+    stay queryable or accounts read as free and pushes fail on the cap.
+    """
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT * FROM runs WHERE status = 'cancelling' ORDER BY start_time DESC"
+    ).fetchall()
+    runs = [dict(r) for r in rows]
+    conn.close()
+    return runs
+
+
 def get_run_by_id(run_id: str) -> dict[str, Any] | None:
     conn = get_db_connection()
     row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()

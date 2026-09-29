@@ -6,6 +6,7 @@ from database import (
     get_all_runs,
     get_run_by_id,
     get_runs_count,
+    get_session_holding_runs,
     update_run_status,
 )
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -53,6 +54,12 @@ async def _session_cap_rejection(
     distributor also means a kernel that already died gets reaped here, so a
     stale DB row stops blocking the account.
 
+    When the account is blocked by sessions stuck in 'cancelling' (Kaggle's
+    CANCEL_ACKNOWLEDGED - the teardown finished as far as the run lifecycle is
+    concerned but the session slot is still held), the message names them and
+    gives the exact command to release them. Without that, "no free session"
+    sends you hunting for running kernels that do not exist.
+
     Returns the rejection payload, or None to proceed. CPU launches are uncapped.
     """
     if not is_gpu_accelerator(accelerator):
@@ -65,15 +72,34 @@ async def _session_cap_rejection(
         return {
             "success": False,
             "status": "session_cap",
-            "error": (
-                f"'{acc}' has no free GPU session "
-                f"({KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT}/{KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT} in use). "
-                "Stop a running kernel on that account or pick another one."
-            ),
+            "error": _cap_error_message(acc, busy.get(acc, 0)),
             "conflict_run_id": None,
             "run_id": None,
         }
     return None
+
+
+def _cap_error_message(account: str, busy_count: int) -> str:
+    """Names the stuck kernels holding an account's GPU sessions, if any."""
+    cap = KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT
+    base = f"'{account}' has no free GPU session ({busy_count} in use, limit {cap})."
+    stuck = [
+        r for r in get_session_holding_runs() if r.get("account_username") == account
+    ]
+    if not stuck:
+        return base + " Stop a running kernel on that account or pick another one."
+    refs = "\n".join(f"  - {r['kernel_ref']}" for r in stuck[:10])
+    more = f"\n  ...and {len(stuck) - 10} more" if len(stuck) > 10 else ""
+    return (
+        f"{base} {len(stuck)} of them are stuck tearing down (CANCEL_ACKNOWLEDGED) - "
+        f"the run is finished but Kaggle still counts the session, and it will not "
+        f"clear on its own:\n{refs}{more}\n"
+        f"Release them with:\n"
+        f"  for r in "
+        + " ".join(f"'{r['kernel_ref'].split('/', 1)[-1]}'" for r in stuck[:10])
+        + "; do "
+        f"kaggle kernels delete -y '{account}/$r'; done"
+    )
 
 
 class LaunchRunJSONRequest(BaseModel):

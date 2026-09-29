@@ -15,6 +15,7 @@ from config import get_kaggle_cli_path
 from database import utcnow_iso
 
 from services.account_manager import AccountManager
+from services.kaggle_kernel_identity import TERMINAL_KERNEL_STATUSES
 from services.kaggle_status import get_kernel_status
 
 logger = logging.getLogger("kaggle_logs")
@@ -109,10 +110,12 @@ async def start_background_log_stream(
                     except Exception:
                         pass
 
-            # Terminal kernel state? Nothing more will ever arrive.
+            # Terminal kernel state? Nothing more will ever arrive. A kernel
+            # stuck in 'cancelling' will never log again either, so end the
+            # follower rather than hold a subprocess (and its slot) forever.
             status_resp = await get_kernel_status(account_username, kernel_ref)
             status = status_resp.get("status", "unknown")
-            if status in ("complete", "error", "stopped"):
+            if status in TERMINAL_KERNEL_STATUSES:
                 append_and_broadcast(
                     f"\n--- Stream ended: kernel {status} [{utcnow_iso()}] ---\n"
                 )

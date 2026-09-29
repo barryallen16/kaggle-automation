@@ -97,7 +97,12 @@ async def live_busy_sessions(
     calls so 16 accounts with 30+ active runs don't spawn 30 CLI processes
     at once (the same OOM that kills pushes).
     """
-    from database import get_active_runs, update_run_status, utcnow_iso
+    from database import (
+        get_active_runs,
+        get_session_holding_runs,
+        update_run_status,
+        utcnow_iso,
+    )
 
     from services.kaggle_service import KaggleService
 
@@ -107,9 +112,13 @@ async def live_busy_sessions(
 
     account_set = set(accounts)
 
-    # Collect candidates first (sync DB scan)
+    # Collect candidates first (sync DB scan). Two sources, because a kernel
+    # stuck in cancel_acknowledged holds its Kaggle session slot even though
+    # the run is finished: get_active_runs() only returns queued/running, so
+    # without the second query a torn-down account reads as completely free
+    # and every push fails with "Maximum batch GPU session count reached".
     candidates = []
-    for r in get_active_runs():
+    for r in get_active_runs() + get_session_holding_runs():
         acc = r.get("account_username")
         if acc not in account_set:
             continue
@@ -132,10 +141,12 @@ async def live_busy_sessions(
     results = await asyncio.gather(*[check_one(r) for r in candidates])
 
     for row, st in results:
-        if st in ("complete", "error", "stopped", "cancelacknowledged"):
+        # 'cancelling' is non-terminal for SLOTS: Kaggle still counts the
+        # session, so it must not be reaped here or the account looks free.
+        if st in ("complete", "error", "stopped", "canceled"):
             update_run_status(
                 row["id"],
-                "stopped" if "cancel" in st else st,
+                st,
                 "auto-reaped by availability check",
                 utcnow_iso(),
             )

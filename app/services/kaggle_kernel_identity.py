@@ -164,16 +164,27 @@ def ensure_executable_notebook(code_content: str) -> str:
 
 
 def normalize_kernel_status(raw: str) -> str:
-    """Maps every observed CLI/SDK spelling onto our five statuses.
+    """Maps every observed CLI/SDK spelling onto our statuses.
 
     Newer CLIs emit enum names like 'kernelworkerstatus.cancel_acknowledged'
     which previously leaked into the DB verbatim and defeated terminal-state
     detection (runs looked neither complete nor stopped forever).
+
+    'cancel_acknowledged' gets its OWN status, not 'stopped'. A cancelled
+    kernel in that state is still holding a Kaggle session slot: the cap is
+    per concurrent session, and treating the teardown as terminal is what let
+    an account sit at 7 stuck sessions while the dashboard reported it idle
+    and every push failed with "Maximum batch GPU session count of 2 reached".
+    The teardown often never completes on its own, so this state is
+    non-terminal for slot purposes but still treated as finished for
+    log-streaming and run-lifecycle purposes (see TERMINAL_KERNEL_STATUSES).
     """
     s = (raw or "").strip().lower()
     if not s:
         return "unknown"
-    if "cancel" in s:  # canceled / cancelled / cancel_acknowledged
+    if "cancel_acknowledged" in s or "cancel-acknowledged" in s:
+        return "cancelling"  # session slot still held by Kaggle
+    if "cancel" in s:  # canceled / cancelled - fully released
         return "stopped"
     if "complete" in s:
         return "complete"
@@ -184,3 +195,10 @@ def normalize_kernel_status(raw: str) -> str:
     if "queued" in s:
         return "queued"
     return "unknown"
+
+
+# Statuses after which a run is finished for lifecycle/log purposes. NOTE
+# 'cancelling' is deliberately in here (so a stuck kernel does not hold a
+# `kaggle logs -f` subprocess forever) even though it still occupies a GPU
+# session slot - slot counting is a separate question, see availability.py.
+TERMINAL_KERNEL_STATUSES = ("complete", "error", "stopped", "canceled", "cancelling")

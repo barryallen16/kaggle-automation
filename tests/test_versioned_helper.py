@@ -43,11 +43,22 @@ class TestStatusNormalization(unittest.TestCase):
         self.assertEqual(n("QUEUED"), "queued")
         self.assertEqual(n("complete"), "complete")
         self.assertEqual(n('acc/slug has status "error"'), "error")
-        # The live-server leak: raw enum names must become 'stopped'
-        self.assertEqual(n("kernelworkerstatus.cancel_acknowledged"), "stopped")
-        self.assertEqual(n("CANCEL_ACKNOWLEDGED"), "stopped")
         self.assertEqual(n("canceled"), "stopped")
         self.assertEqual(n(""), "unknown")
+
+    def test_cancel_acknowledged_does_not_leak_but_is_not_stopped(self):
+        """Raw enum names must never reach the DB - but this one maps to its
+        own status, NOT 'stopped'.
+
+        CANCEL_ACKNOWLEDGED is a teardown state: the run is finished but Kaggle
+        still counts the session against the batch GPU cap. Mapping it to
+        'stopped' is what let a blocked account report zero running kernels
+        while holding seven sessions. See tests/test_stuck_session_slots.py.
+        """
+        n = _svc()._normalize_kernel_status
+        self.assertEqual(n("kernelworkerstatus.cancel_acknowledged"), "cancelling")
+        self.assertEqual(n("CANCEL_ACKNOWLEDGED"), "cancelling")
+        self.assertNotEqual(n("CANCEL_ACKNOWLEDGED"), "stopped")
 
 
 class TestVersionedHelper(unittest.TestCase):

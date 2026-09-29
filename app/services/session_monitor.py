@@ -21,6 +21,7 @@ from database import (
 )
 
 from services.account_manager import AccountManager
+from services.kaggle_kernel_identity import TERMINAL_KERNEL_STATUSES
 from services.kaggle_service import KaggleService
 from services.telegram_service import TelegramService
 
@@ -149,7 +150,8 @@ class SessionMonitor:
         # 3. 11h warning only (12h cutoff deleted as redundant; full runs only, never trials)
         if (
             not is_trial
-            and elapsed_seconds >= (MAX_KAGGLE_SESSION_SECONDS - WARNING_BEFORE_EXPIRY_SECONDS)
+            and elapsed_seconds
+            >= (MAX_KAGGLE_SESSION_SECONDS - WARNING_BEFORE_EXPIRY_SECONDS)
             and run.get("telegram_notified_11h") == 0
         ):
             await TelegramService.notify("11h", run)
@@ -159,7 +161,7 @@ class SessionMonitor:
         #    "running" even after the account's weekly GPU quota is fully
         #    spent (nothing progresses, no completion ever arrives). A run
         #    must end on script completion, the 12h limit - or quota gone.
-        terminal = ("complete", "error", "stopped", "canceled")
+        terminal = ("complete", "error", "stopped", "canceled", "cancelling")
         if (
             remote_status not in terminal
             and is_gpu_accelerator(run.get("accelerator"))
@@ -187,12 +189,24 @@ class SessionMonitor:
             return
 
         # 6. Handle completion, error, or stop
-        if remote_status in ["complete", "error", "stopped", "canceled"]:
+        if remote_status in TERMINAL_KERNEL_STATUSES:
+            # 'cancelling' is recorded AS ITSELF, not collapsed to "stopped":
+            # the run is finished, but Kaggle still holds its session slot and
+            # get_session_holding_runs() must keep finding it so the account
+            # stops reading as free. Collapsing it here is what let seven
+            # stuck sessions hide behind an "idle" dashboard.
+            db_status = (
+                "cancelling"
+                if remote_status == "cancelling"
+                else (
+                    "stopped"
+                    if remote_status in ("stopped", "canceled")
+                    else remote_status
+                )
+            )
             update_run_status(
                 run_id=run_id,
-                status="stopped"
-                if remote_status in ("stopped", "canceled")
-                else remote_status,
+                status=db_status,
                 status_message=status_resp.get("raw", ""),
                 end_time=now.isoformat(),
             )
@@ -201,8 +215,14 @@ class SessionMonitor:
             # together. Files stay on Kaggle - pull them manually per run
             # with "Pull Output Files from Kaggle" when you need them.
             if run.get("telegram_notified_end") == 0:
-                event = "failed" if remote_status in ("error", "stopped", "canceled") else "complete"
-                await TelegramService.notify(event, run, str(status_resp.get("raw", "")))
+                event = (
+                    "failed"
+                    if remote_status in ("error", "stopped", "canceled", "cancelling")
+                    else "complete"
+                )
+                await TelegramService.notify(
+                    event, run, str(status_resp.get("raw", ""))
+                )
                 update_run_telegram_flag(run_id, "telegram_notified_end", 1)
         elif remote_status != "unknown" and remote_status != run["status"]:
             update_run_status(run_id=run_id, status=remote_status)
