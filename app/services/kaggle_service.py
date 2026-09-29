@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 from config import (
+    KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT,
     LOGS_DIR,
     NOTEBOOKS_DIR,
     get_kaggle_cli_path,
@@ -96,13 +97,17 @@ class KaggleService:
     # output after a stop push (Kaggle finalizes the version asynchronously).
     STOP_CAPTURE_RETRY_DELAYS = (6, 12, 20)
     # Backoff for a push rejected with "maximum batch gpu session count".
-    # Short on purpose: a cap is a stop-teardown race, not a queue. Long
-    # ladders (this was 20..300s = 18min) just held the HTTP request open
-    # with zero feedback while the 12h kernels holding the slots never
-    # finished. Callers pre-flight free slots now (see runs.launch_json).
-    SESSION_CAP_RETRY_DELAYS = (15, 30, 60)
+    # Exactly ONE short retry, and it exists only to ride out a stop teardown
+    # (CANCEL_ACKNOWLEDGED holds a slot for a minute or two after a stop
+    # succeeds). Beyond that, waiting is pointless: the kernels holding the
+    # slots run for hours, and the pre-flight cannot see sessions this
+    # dashboard didn't launch - so a cap is a real, terminal answer, not a
+    # queue. This ladder was 20..300s (~18min, 10 attempts) and then
+    # 15/30/60 (~105s); both just hung the button on a failure that was
+    # never going to succeed.
+    SESSION_CAP_RETRY_DELAYS = (20,)
     # Seconds before each 409 retry; 409s clear as soon as the kernel leaves
-    # its transition state, so they get a much shorter window than a cap.
+    # its transition state, so a cap is far more terminal than a 409.
     CONFLICT_RETRY_DELAYS = (5, 10, 20, 40)
     # Active log stream processes / subscribers live in kaggle_logs (same
     # objects aliased here so stop_kernel and existing callers keep working).
@@ -438,6 +443,25 @@ class KaggleService:
             is_error = proc.returncode != 0 or "Kernel push error" in out_str
             status = "error" if is_error else "queued"
             status_msg = err_str if is_error else out_str.strip()
+
+            # A cap rejection is terminal, and the raw CLI text isn't actionable:
+            # it names a limit the user cannot act on without knowing that this
+            # dashboard only sees kernels it launched. Say so explicitly - the
+            # common real case is a session started on kaggle.com that no run
+            # row here knows about, which is exactly when the pre-flight in
+            # runs.launch_json reported the account as free.
+            if is_error and (
+                _classify_push_failure(out_str + "\n" + err_str) == "session_cap"
+            ):
+                status = "session_cap"
+                status_msg = (
+                    f"Kaggle refused the push: '{account_username}' is at its "
+                    f"batch GPU session limit "
+                    f"({KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT} concurrent). "
+                    "This dashboard only tracks kernels it launched, so an account "
+                    "that looks idle here can still be capped by a session running "
+                    "on Kaggle. Cancel one at kaggle.com/code, then push again."
+                )
 
             # Parse real Kaggle URL, username, and slug from push output if available
             url_match = re.search(
