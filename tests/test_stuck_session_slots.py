@@ -195,6 +195,76 @@ class TestCancellingOccupiesASlot(unittest.TestCase):
         self.assertEqual(busy.get("acct"), 0, "a completed kernel frees its slot")
 
 
+class TestCancellingSurvivesRestart(unittest.TestCase):
+    """init_db() must not rewrite 'cancelling' back to 'stopped'.
+
+    The startup repair migration rewrites every status matching '%cancel%' to
+    'stopped', and 'cancelling' matches it. That silently emptied
+    get_session_holding_runs() on every boot, so a capped account read as idle
+    again - the exact wedge the 'cancelling' status exists to prevent.
+    """
+
+    def test_init_db_keeps_cancelling_rows(self):
+        _cfg, db = _fresh()
+        db.create_run_record(_rec("run_stuck_boot", "cancelling"))
+        self.assertEqual(
+            [r["status"] for r in db.get_session_holding_runs()], ["cancelling"]
+        )
+
+        db.init_db()  # what main.py lifespan does on every startup
+
+        self.assertEqual(
+            [r["status"] for r in db.get_session_holding_runs()],
+            ["cancelling"],
+            "init_db() collapsed a stuck session to 'stopped' - the account "
+            "reads as free again",
+        )
+        self.assertEqual(db.get_run_by_id("run_stuck_boot")["status"], "cancelling")
+
+    def test_init_db_still_repairs_leaked_cli_spellings(self):
+        """The migration's original job is untouched: raw CLI cancel spellings
+        written before normalization still get collapsed to 'stopped'."""
+        _cfg, db = _fresh()
+        for run_id, status in (
+            ("run_leaked1", "cancel_acknowledged"),
+            ("run_leaked2", "KernelWorkerStatus.CANCELLED"),
+            ("run_leaked3", "canceled"),
+        ):
+            db.create_run_record(_rec(run_id, status))
+
+        db.init_db()
+
+        for run_id in ("run_leaked1", "run_leaked2", "run_leaked3"):
+            self.assertEqual(db.get_run_by_id(run_id)["status"], "stopped", run_id)
+
+
+class TestAccountsEndpointSeesStuckSessions(unittest.TestCase):
+    """/api/accounts feeds the browser's session-slot math (gpuSessionsBusy).
+
+    With 'cancelling' rows filtered out, an account holding two stuck sessions
+    rendered as idle and the launch button stayed enabled.
+    """
+
+    def test_active_runs_include_session_holding_rows(self):
+        import asyncio
+        import importlib
+
+        _cfg, db = _fresh()
+        db.save_account("1", "acct", "key1", {"gpu": {"limit": 30, "used": 0}})
+        db.create_run_record(_rec("run_live", "running", ref="acct/live"))
+        db.create_run_record(_rec("run_stuck", "cancelling", ref="acct/stuck"))
+
+        from routers import accounts as accounts_router
+
+        importlib.reload(accounts_router)
+        resp = asyncio.run(accounts_router.list_accounts())
+
+        acc = next(a for a in resp["accounts"] if a["username"] == "acct")
+        ids = {r["id"] for r in acc["active_runs"]}
+        self.assertIn("run_live", ids)
+        self.assertIn("run_stuck", ids, "a stuck session must occupy a slot in the UI")
+
+
 class TestCapMessageNamesStuckKernels(unittest.TestCase):
     """The rejection must name the stuck kernels, not send you hunting."""
 

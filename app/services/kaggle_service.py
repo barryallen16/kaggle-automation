@@ -590,11 +590,10 @@ class KaggleService:
         account_username: str,
         args: list[str],
         timeout: int = VERSIONED_FETCH_TIMEOUT_SECONDS,
-        ok_codes: tuple = (0,),
     ) -> str | None:
         """Runs the versioned-output module in-process (see kaggle_outputs)."""
         return await kaggle_outputs.run_versioned_helper(
-            account_username, args, timeout=timeout, ok_codes=ok_codes
+            account_username, args, timeout=timeout
         )
 
     @classmethod

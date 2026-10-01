@@ -142,7 +142,13 @@ async function loadKernelsForAccount() {
 
 function isTerminalStatus(st) {
   st = (st || '').toLowerCase();
-  return st === 'complete' || st === 'error' || st === 'stopped' || st === 'failed' || st === 'cancelled' || st === 'cancelacknowledged' || st === 'cancel_acknowledged';
+  // 'cancelling' is our normalized CANCEL_ACKNOWLEDGED - terminal for the run,
+  // but the kernel still holds a GPU session slot, so the Stop button must not
+  // invite another (useless) stop. The raw spellings still arrive unnormalized
+  // via kernelsState rows from ListKernels, so keep them too.
+  return st === 'complete' || st === 'error' || st === 'stopped' || st === 'failed'
+    || st === 'cancelled' || st === 'cancelling'
+    || st === 'cancelacknowledged' || st === 'cancel_acknowledged';
 }
 function updateStopButtonState(account, ref, status) {
   const terminal = isTerminalStatus(status);
@@ -280,7 +286,8 @@ async function fetchKernelStatus(account, kernelRef, cellId) {
     else if (st === 'complete') cls = 'bg-emerald-950 text-emerald-300 border-emerald-800';
     else if (st === 'error') cls = 'bg-rose-950 text-rose-300 border-rose-800';
     else if (st === 'stopped') cls = 'bg-slate-800 text-slate-400 border-slate-700';
-    el.innerHTML = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${cls}">${esc(st.toUpperCase())}</span>`;
+    else if (st === 'cancelling') cls = 'bg-amber-950 text-amber-300 border-amber-800';
+    el.innerHTML = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${cls}" title="${st === 'cancelling' ? 'Stuck tearing down - still holds a GPU session slot until the kernel is deleted' : esc(st)}">${esc(st.toUpperCase())}</span>`;
     // Grey out stop if already terminal
     updateStopButtonState(account, kernelRef, st);
   } catch (err) {

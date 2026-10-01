@@ -1,6 +1,6 @@
 from typing import Any
 
-from database import get_active_runs, get_all_accounts
+from database import get_active_runs, get_all_accounts, get_session_holding_runs
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from services.account_manager import AccountManager
@@ -47,7 +47,10 @@ def _account_quota_left(acc: dict[str, Any]) -> tuple:
 @router.get("")
 async def list_accounts():
     accounts = get_all_accounts()
-    active_runs = get_active_runs()
+    # Include session-holding ('cancelling') runs too. The browser's session-slot
+    # math (gpuSessionsBusy) counts acc.active_runs, so omitting stuck kernels
+    # here made a capped account render as idle while every push was rejected.
+    active_runs = get_active_runs() + get_session_holding_runs()
 
     # Map active runs to accounts
     active_by_user = {}

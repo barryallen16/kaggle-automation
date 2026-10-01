@@ -13,6 +13,7 @@ import io
 import json
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,27 @@ VERSIONED_FETCH_TIMEOUT_SECONDS = int(
 # the Stop button. Timeout here is non-fatal - the caller logs and
 # continues to the stop-stub push.
 OUTPUT_PULL_TIMEOUT_SECONDS = int(os.getenv("OUTPUT_PULL_TIMEOUT_SECONDS", "300"))
+
+# Versioned calls are blocking httpx runs. asyncio.to_thread borrows the loop's
+# DEFAULT executor, which every other to_thread in the app also needs (Launch
+# writes its notebook + metadata there before the push is even attempted, log
+# followers append through it, quota refreshes do). A handful of slow versioned
+# fetches on that shared pool - the stop pipeline alone can run three for
+# 600s each - starves them and the Launch button just hangs. wait_for cannot
+# cancel the worker thread either, so the leak is contained here instead:
+# a dedicated pool with a hard worker cap bounds it no matter what times out.
+VERSIONED_CONCURRENCY = max(1, int(os.getenv("VERSIONED_CONCURRENCY", "3")))
+_versioned_pool: ThreadPoolExecutor | None = None
+
+
+def _versioned_executor() -> ThreadPoolExecutor:
+    global _versioned_pool
+    if _versioned_pool is None:
+        _versioned_pool = ThreadPoolExecutor(
+            max_workers=VERSIONED_CONCURRENCY,
+            thread_name_prefix="kaggle-versioned",
+        )
+    return _versioned_pool
 
 
 async def list_output_files(
@@ -98,7 +120,6 @@ async def run_versioned_helper(
     account_username: str,
     args: list[str],
     timeout: int = VERSIONED_FETCH_TIMEOUT_SECONDS,
-    ok_codes: tuple = (0,),
 ) -> str | None:
     """Runs the versioned-output module in-process under the account's credentials.
 
@@ -111,6 +132,17 @@ async def run_versioned_helper(
     env = AccountManager.get_account_env(account_username)
     token = (env.get("KAGGLE_API_TOKEN") or "").strip()
     if not token:
+        # get_account_env only exports KAGGLE_API_TOKEN for raw access tokens;
+        # a pasted kaggle.json blob cannot authenticate the Bearer-only HTTP
+        # routes. Say so instead of returning an empty result with no trace -
+        # otherwise every versioned feature (kernel list, versions, per-version
+        # log, cancelled-output recovery) reads as "the kernel has no data".
+        logger.warning(
+            "Versioned output call skipped for @%s: no KAGGLE_API_TOKEN "
+            "(kaggle.json credentials cannot authenticate these routes). "
+            "Falling back to the plain latest pull.",
+            account_username,
+        )
         return None
 
     def _call() -> str:
@@ -156,7 +188,10 @@ async def run_versioned_helper(
         raise ValueError(f"unknown versioned-output verb: {args}")
 
     try:
-        return await asyncio.wait_for(asyncio.to_thread(_call), timeout=timeout)
+        loop = asyncio.get_running_loop()
+        return await asyncio.wait_for(
+            loop.run_in_executor(_versioned_executor(), _call), timeout=timeout
+        )
     except TimeoutError:
         logger.warning(
             "Versioned-output call timed out for @%s (%s)",
@@ -290,11 +325,9 @@ async def download_outputs_of_version(
         return None
     target_dir = OUTPUTS_DIR / str(run_id)
     target_dir.mkdir(parents=True, exist_ok=True)
-    # rc 0 = files saved; rc 3 = version finalized but published nothing
     out = await run_versioned_helper(
         account_username,
         ["fetch", owner, slug, str(version), str(target_dir)],
-        ok_codes=(0, 3),
     )
     if not out:
         return None

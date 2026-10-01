@@ -92,8 +92,14 @@ async def list_files(run_id: str):
 
 def _stopped_probe_flag(run: dict) -> bool:
     """Legacy stopped runs have no pinned version: the cancelled run sits
-    exactly one version behind the stop-stub that is now 'current'."""
-    return run.get("status") == "stopped" and not run.get("output_version")
+    exactly one version behind the stop-stub that is now 'current'.
+
+    'cancelling' (CANCEL_ACKNOWLEDGED) counts too - the session monitor records
+    it as itself, and those runs never get an output_version pin either.
+    """
+    return run.get("status") in ("stopped", "cancelling") and not run.get(
+        "output_version"
+    )
 
 
 @router.post("/{run_id}/files/pull")

@@ -168,6 +168,20 @@ function gpuSessionsFree(acc) {
   return Math.max(0, MAX_GPU_SESSIONS - gpuSessionsBusy(acc));
 }
 
+// Runs stuck in CANCEL_ACKNOWLEDGED. /api/accounts puts them in active_runs so
+// gpuSessionsBusy() counts their slot (that is the point), but they are NOT
+// running - labelling them "Running" sends you hunting for a live kernel.
+function isStuckSessionRun(r) {
+  return (r && r.status) === 'cancelling';
+}
+function splitActiveRuns(acc) {
+  const runs = (acc && acc.active_runs) || [];
+  return {
+    live: runs.filter(r => !isStuckSessionRun(r)),
+    stuck: runs.filter(isStuckSessionRun)
+  };
+}
+
 // Single quota seam: one adapter for remaining quota, kind, busy/free.
 // Callers use QuotaAdapter instead of copy-pasting isGpuAcc guards.
 function busySessions(acc) {
@@ -223,7 +237,7 @@ function showToast(message, type = 'info') {
   toast.className = `pointer-events-auto flex items-center space-x-3 px-4 py-3 rounded-xl border shadow-xl backdrop-blur-md transition-all duration-300 translate-x-5 opacity-0 ${bgColors[type] || bgColors.info}`;
   toast.innerHTML = `
     <i data-lucide="${icons[type] || 'info'}" class="w-4 h-4 flex-shrink-0"></i>
-    <span class="text-xs font-semibold"></span>
+    <span class="text-xs font-semibold whitespace-pre-line break-words"></span>
   `;
   // Set user-controlled text safely (never via innerHTML)
   toast.querySelector('span').textContent = message;

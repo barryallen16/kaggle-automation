@@ -74,9 +74,16 @@ def init_db():
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
 
     _ensure_column("runs", "output_version INTEGER")
-    # Repair rows written before enum-style CLI statuses were normalized
+    # Repair rows written before enum-style CLI statuses were normalized: any
+    # leaked CLI/SDK cancel spelling (canceled/cancelled/cancel_acknowledged/...)
+    # collapsed to 'stopped'. EXCLUDE 'cancelling' - it matches '%cancel%' but is
+    # our OWN normalized status for CANCEL_ACKNOWLEDGED, which still holds a
+    # Kaggle session slot (see get_session_holding_runs). Rewriting it to
+    # 'stopped' here made stuck sessions vanish on every server restart, so
+    # capped accounts read as idle again.
     cursor.execute(
-        "UPDATE runs SET status = 'stopped' WHERE lower(status) LIKE '%cancel%'"
+        "UPDATE runs SET status = 'stopped' "
+        "WHERE lower(status) LIKE '%cancel%' AND lower(status) <> 'cancelling'"
     )
 
     # Distributed workloads table

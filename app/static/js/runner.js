@@ -32,7 +32,7 @@ function updateRunnerAccountQuotaCard() {
   const quota = acc.last_quota || {};
   const gpu = quota.gpu || { used: 0, limit: 30, percent: 0, unit: 'hours' };
   const tpu = quota.tpu || { used: 0, limit: 20, percent: 0, unit: 'hours' };
-  const activeRuns = acc.active_runs || [];
+  const { live: liveRuns, stuck: stuckRuns } = splitActiveRuns(acc);
 
   const gpuPercent = Math.min(100, Math.max(0, gpu.percent || 0));
   const tpuPercent = Math.min(100, Math.max(0, tpu.percent || 0));
@@ -41,11 +41,15 @@ function updateRunnerAccountQuotaCard() {
   const gpuRemaining = gpuRemainingNum.toFixed(1);
   const tpuRemaining = tpuRemainingNum.toFixed(1);
 
-  const activeStatus = activeRuns.length > 0
+  const activeStatus = liveRuns.length > 0
     ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-800/60">
-        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 pulsing-dot"></span>${activeRuns.length} Running Session${activeRuns.length > 1 ? 's' : ''}
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 pulsing-dot"></span>${liveRuns.length} Running Session${liveRuns.length > 1 ? 's' : ''}
        </span>`
     : `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-800 text-slate-400">Idle</span>`;
+
+  const stuckStatus = stuckRuns.length > 0
+    ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-950/80 text-amber-300 border border-amber-800/60" title="Stuck tearing down (CANCEL_ACKNOWLEDGED) - the run finished but Kaggle still counts its GPU session slot. Delete the kernel to release it."><i data-lucide="alert-triangle" class="w-3 h-3"></i>${stuckRuns.length} Stuck</span>`
+    : '';
 
   container.innerHTML = `
     <div class="p-3 rounded-xl bg-[#08080B] border border-[#26262E] space-y-2.5">
@@ -55,6 +59,7 @@ function updateRunnerAccountQuotaCard() {
           <span class="text-[10px] text-slate-500 font-mono">(${esc(acc.api_key_masked)})</span>
         </div>
         <div>${activeStatus}</div>
+        ${stuckStatus ? `<div>${stuckStatus}</div>` : ''}
       </div>
 
       <div class="grid grid-cols-2 gap-2.5 pt-0.5">
@@ -118,10 +123,17 @@ function updateRunnerQuotaWarning() {
   const free = (typeof QuotaAdapter !== 'undefined' && QuotaAdapter.free)
     ? QuotaAdapter.free(acc)
     : (typeof gpuSessionsFree === 'function' ? gpuSessionsFree(acc) : 1);
-  const cap = (typeof QuotaAdapter !== 'undefined' && QuotaAdapter.MAX_SESSIONS) || MAX_GPU_SESSIONS || 2;
-  if (kind && free < 1) {
-    hint.textContent = `⚠ @${acc.username} has no free sessions (${cap}/${cap} busy) — stop a run or pick another account.`;
+  const cap = (typeof QuotaAdapter !== 'undefined' && QuotaAdapter.MAX_SESSIONS) || 2;
+
+  // Warning icon is a pixel icon (no emoji); the message itself stays text.
+  const warn = (msg) => {
+    hint.innerHTML = `<i data-lucide="alert-triangle" class="w-3 h-3 inline align-[-1px]"></i><span class="align-middle">${esc(msg)}</span>`;
     hint.classList.remove('hidden');
+    refreshIcons();
+  };
+
+  if (kind && free < 1) {
+    warn(`@${acc.username} has no free sessions (${cap}/${cap} busy) — stop a run or pick another account.`);
     return;
   }
   const left = kind === 'tpu' ? remaining.tpuLeft : remaining.gpuLeft;
@@ -131,8 +143,7 @@ function updateRunnerQuotaWarning() {
     return;
   }
   const pool = kind === 'tpu' ? 'TPU' : 'GPU';
-  hint.textContent = `⚠ @${acc.username} has 0h ${pool} quota left — a ${pool} run will stall and may be force-stopped with its output lost. Switch to CPU or pick another account.`;
-  hint.classList.remove('hidden');
+  warn(`@${acc.username} has 0h ${pool} quota left — a ${pool} run will stall and may be force-stopped with its output lost. Switch to CPU or pick another account.`);
 }
 
 function populateAccountSelects() {
@@ -325,7 +336,7 @@ async function handleSingleRunSubmit(e) {
   let code = document.getElementById('runner-code-textarea').value;
   if (!code.trim()) {
     // Default mock script if user left it blank
-    code = `import time\nimport sys\n\nprint("🚀 Kaggle Session Started Successfully!")\nprint(f"Python Version: {sys.version}")\nfor i in range(10):\n    print(f"Step {i+1}/10: Processing batch data...")\n    time.sleep(2)\n\nprint("✅ Execution Complete!")\n`;
+    code = `import time\nimport sys\n\nprint("[KAGGLE] Session started successfully.")\nprint(f"Python Version: {sys.version}")\nfor i in range(10):\n    print(f"Step {i+1}/10: Processing batch data...")\n    time.sleep(2)\n\nprint("[KAGGLE] Execution complete.")\n`;
     uploadedFileName = "main.py";
   }
 

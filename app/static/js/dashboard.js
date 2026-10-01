@@ -30,6 +30,7 @@ function renderDashboard() {
     const gpu = quota.gpu || { used: 0, limit: 30, percent: 0, unit: 'hours' };
     const tpu = quota.tpu || { used: 0, limit: 20, percent: 0, unit: 'hours' };
     const activeRuns = acc.active_runs || [];
+    const { live: liveRuns, stuck: stuckRuns } = splitActiveRuns(acc);
 
     const gpuPercent = Math.min(100, Math.max(0, gpu.percent || 0));
     const tpuPercent = Math.min(100, Math.max(0, tpu.percent || 0));
@@ -37,17 +38,21 @@ function renderDashboard() {
     const gpuRemaining = Math.max(0, (gpu.limit - gpu.used)).toFixed(1);
     const tpuRemaining = Math.max(0, (tpu.limit - tpu.used)).toFixed(1);
 
-    const activeBadge = activeRuns.length > 0
+    const activeBadge = liveRuns.length > 0
       ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-950/80 text-emerald-400 border border-emerald-800/60">
-          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 pulsing-dot"></span> ${activeRuns.length} Running
+          <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1.5 pulsing-dot"></span> ${liveRuns.length} Running
         </span>`
       : `<span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-800 text-slate-400">Idle</span>`;
+
+    const stuckBadge = stuckRuns.length > 0
+      ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-950/80 text-amber-300 border border-amber-800/60" title="CANCEL_ACKNOWLEDGED - the run finished but Kaggle still counts the GPU session slot. Delete the kernel to release it."><i data-lucide="alert-triangle" class="w-3 h-3"></i>${stuckRuns.length} Stuck</span>`
+      : '';
 
     const activeList = activeRuns.map(r => `
       <div class="mt-2 p-2 rounded-lg bg-[#060608] border border-[#1E1E24] flex items-center justify-between text-xs">
         <div class="truncate max-w-[200px]">
           <p class="font-bold text-white truncate">${esc(r.title)}</p>
-          <p class="text-[10px] text-slate-400 font-mono">${esc(r.accelerator)}</p>
+          <p class="text-[10px] text-slate-400 font-mono">${esc(r.accelerator)}${isStuckSessionRun(r) ? ' · stuck (holds slot)' : ''}</p>
         </div>
         ${stoppingRunButtonHtml(r.id, 'px-2 py-1 rounded text-[10px] font-bold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 transition inline-flex items-center space-x-1')}
       </div>
@@ -66,8 +71,9 @@ function renderDashboard() {
               <p class="text-[10px] text-slate-500 font-mono truncate">Key: ${esc(acc.api_key_masked)}</p>
             </div>
           </div>
-          <div class="flex items-center space-x-2 flex-shrink-0">
+          <div class="flex items-center gap-2 flex-shrink-0">
             ${activeBadge}
+            ${stuckBadge}
             <button onclick="deleteAccount('${esc(acc.username)}')" title="Delete Account" class="text-slate-600 hover:text-rose-400 transition p-1">
               <i data-lucide="trash" class="w-3.5 h-3.5"></i>
             </button>
