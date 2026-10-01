@@ -18,7 +18,16 @@ sys.path.insert(0, TEST_DIR)
 DATA_TMP = None
 
 
+_STUB_CLI = None
+
+
 def _make_stub_cli():
+    """Zero-exit stub CLI, written ONCE. Installed as get_kaggle_cli_path,
+    which the app calls from 12 places, so re-truncating the file on every call
+    raced concurrent pushes launching the same stub."""
+    global _STUB_CLI
+    if _STUB_CLI and os.path.exists(_STUB_CLI):
+        return _STUB_CLI
     if os.name == "nt":
         stub = os.path.join(DATA_TMP, "fake_kaggle.bat")
         with open(stub, "w") as f:
@@ -28,6 +37,7 @@ def _make_stub_cli():
         with open(stub, "w") as f:
             f.write("#!/bin/bash\nexit 0\n")
         os.chmod(stub, 0o755)
+    _STUB_CLI = stub
     return stub
 
 

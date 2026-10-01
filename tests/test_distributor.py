@@ -18,12 +18,25 @@ sys.path.insert(0, TEST_DIR)
 DATA_TMP = None
 
 
+_STUB_CLI = None
+
+
 def _make_stub_cli() -> str:
     """Writes a zero-exit stub CLI executable for the host OS.
 
     Windows cannot exec '#!/bin/bash' scripts via CreateProcess (WinError 193),
     so a .bat stub is used there; POSIX keeps the shell script.
+
+    Memoized on purpose. This is installed as get_kaggle_cli_path, which the
+    app calls from 12 places (every push, status probe, quota lookup), so it
+    used to re-truncate the SAME file on each call. Shards push concurrently,
+    so one push could launch the stub while another was rewriting it - the
+    process then failed to start and that shard silently came back
+    un-dispatched, making this file's counts intermittently "partial".
     """
+    global _STUB_CLI
+    if _STUB_CLI and os.path.exists(_STUB_CLI):
+        return _STUB_CLI
     if os.name == "nt":
         stub = os.path.join(DATA_TMP, "fake_kaggle.bat")
         with open(stub, "w") as f:
@@ -33,6 +46,7 @@ def _make_stub_cli() -> str:
         with open(stub, "w") as f:
             f.write("#!/bin/bash\nexit 0\n")
         os.chmod(stub, 0o755)
+    _STUB_CLI = stub
     return stub
 
 
@@ -336,6 +350,43 @@ class TestMultiSessionDistributor(unittest.TestCase):
         with self.assertRaises(HTTPException) as cm:
             asyncio_run(stop_workload("workload_does_not_exist"))
         self.assertEqual(cm.exception.status_code, 404)
+
+    def test_8b_all_shards_stuck_reports_409_and_names_them(self):
+        """A workload whose every shard went to 'cancelling' has nothing left
+        to stop, but a 404 "No active shards found" reads like a broken button.
+        It must say the shards are stuck and still hold session slots - a stop
+        stub cannot release one, only `kaggle kernels delete` does."""
+        db = _fresh()
+        from fastapi import HTTPException
+        from routers.distributed import stop_workload
+
+        db.create_distributed_workload(
+            {
+                "id": "wl_stuck",
+                "title": "Stuck",
+                "workload_type": "auto",
+                "total_units": 10,
+                "accounts_used": "[]",
+                "created_at": "2026-09-29T00:00:00+00:00",
+                "status": "running",
+            }
+        )
+        seed_run(
+            db,
+            "wl_run_stuck",
+            "accA",
+            status="cancelling",
+            kernel_ref="accA/stuck-one",
+            workload_id="wl_stuck",
+        )
+
+        with self.assertRaises(HTTPException) as cm:
+            asyncio_run(stop_workload("wl_stuck"))
+        self.assertEqual(cm.exception.status_code, 409)
+        detail = cm.exception.detail
+        self.assertIn("CANCEL_ACKNOWLEDGED", detail)
+        self.assertIn("accA/stuck-one", detail)
+        self.assertIn("kaggle kernels delete", detail)
 
     def test_9_per_account_sessions_map(self):
         """sessions_per_account as {accA:1, accB:2} expands 3 runners total."""
