@@ -3,6 +3,18 @@
 let terminalSocket = null;
 let currentTerminalRunId = null;
 
+// Stream status line: pixel icon + text. Replaces the old "● LIVE STREAM
+// CONNECTED" bullet so every state uses the same icon set as the rest of the
+// dashboard. `tone` picks the Tailwind text colour, `iconCls` extra icon classes
+// (e.g. animate-spin on the in-progress states).
+function setStreamStatus(text, icon, tone = 'text-slate-400', iconCls = '') {
+  const el = document.getElementById('terminal-stream-status');
+  if (!el) return;
+  el.className = `ml-2 font-mono text-[11px] ${tone}`;
+  el.innerHTML = `<i data-lucide="${icon}" class="w-3 h-3 inline align-[-1px] ${iconCls}"></i><span class="align-middle">${esc(text)}</span>`;
+  refreshIcons();
+}
+
 function updateTerminalRunDropdown() {
   const select = document.getElementById('terminal-run-select');
   if (!select) return;
@@ -28,7 +40,7 @@ function handleTerminalRunSelect(e) {
   } else {
     disconnectTerminalSocket();
     document.getElementById('terminal-body').innerText = "Select a notebook execution from the dropdown above to stream output in real-time or view logs.";
-    document.getElementById('terminal-stream-status').innerText = "Stream Disconnected";
+    setStreamStatus("Stream Disconnected", "x", "text-slate-400");
     document.getElementById('terminal-run-info').innerText = "No Active Session";
   }
 }
@@ -51,11 +63,7 @@ async function viewLogsForRun(runId) {
   updateTerminalRunDropdown();
   disconnectTerminalSocket();
 
-  const statusEl = document.getElementById('terminal-stream-status');
-  if (statusEl) {
-    statusEl.innerText = "Loading logs...";
-    statusEl.className = "ml-2 font-mono text-[11px] text-amber-400";
-  }
+  setStreamStatus("Loading logs...", "loader-2", "text-amber-400", "animate-spin");
 
   // 1. Load the stored log file over plain HTTP first - this ALWAYS works,
   //    even behind proxies that block or mangle WebSockets.
@@ -63,12 +71,13 @@ async function viewLogsForRun(runId) {
   if (currentTerminalRunId !== runId) return; // user switched runs meanwhile
 
   // 2. Only attach a live stream while the run can still produce output.
+  //    'cancelling' is finished for the run (nothing more will ever be logged),
+  //    so it correctly falls through to the stored-log state.
   const isActive = run && (run.status === 'queued' || run.status === 'running');
   if (isActive) {
     connectTerminalSocket(runId, true); // stored logs already on screen
-  } else if (statusEl) {
-    statusEl.innerText = "● Stored Log Output";
-    statusEl.className = "ml-2 font-mono text-[11px] text-slate-400";
+  } else {
+    setStreamStatus("Stored Log Output", "archive", "text-slate-400");
   }
 }
 
@@ -93,13 +102,9 @@ function connectTerminalSocket(runId, skipInitial = false) {
   disconnectTerminalSocket();
 
   const terminalBody = document.getElementById('terminal-body');
-  const statusEl = document.getElementById('terminal-stream-status');
   // Append a separator - never wipe logs already loaded over HTTP
   if (terminalBody) terminalBody.textContent += `\n--- Attaching live stream ---\n`;
-  if (statusEl) {
-    statusEl.innerText = "Connecting...";
-    statusEl.className = "ml-2 font-mono text-[11px] text-amber-400";
-  }
+  setStreamStatus("Connecting...", "loader-2", "text-amber-400", "animate-spin");
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const wsUrl = `${protocol}//${window.location.host}/ws/runs/${runId}/logs${skipInitial ? '?skip_initial=1' : ''}`;
@@ -107,8 +112,7 @@ function connectTerminalSocket(runId, skipInitial = false) {
   terminalSocket = new WebSocket(wsUrl);
 
   terminalSocket.onopen = () => {
-    statusEl.innerText = "● LIVE STREAM CONNECTED";
-    statusEl.className = "ml-2 font-mono text-[11px] text-emerald-400";
+    setStreamStatus("LIVE STREAM CONNECTED", "radio", "text-emerald-400");
   };
 
   terminalSocket.onmessage = (event) => {
@@ -126,8 +130,7 @@ function connectTerminalSocket(runId, skipInitial = false) {
   terminalSocket.onclose = () => {
     // Only report offline if we're still the active stream
     if (currentTerminalRunId === runId) {
-      statusEl.innerText = "Stream Offline / Finished";
-      statusEl.className = "ml-2 font-mono text-[11px] text-slate-500";
+      setStreamStatus("Stream Offline / Finished", "x", "text-slate-500");
     }
   };
 
@@ -135,8 +138,7 @@ function connectTerminalSocket(runId, skipInitial = false) {
     // Common cause: reverse proxy without WebSocket forwarding.
     // Stored logs are already on screen; remote fetch is the fallback.
     if (currentTerminalRunId === runId) {
-      statusEl.innerText = "Live stream unavailable - use Fetch Full Kaggle Log";
-      statusEl.className = "ml-2 font-mono text-[11px] text-rose-400";
+      setStreamStatus("Live stream unavailable - use Fetch Full Kaggle Log", "alert-triangle", "text-rose-400");
     }
   };
 }
