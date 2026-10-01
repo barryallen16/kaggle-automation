@@ -6,6 +6,7 @@ from database import (
     get_active_runs,
     get_all_runs,
     get_all_workloads,
+    get_session_holding_runs,
     update_workload_status,
 )
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -109,11 +110,37 @@ async def launch_distributed_json(payload: DistributedLaunchJSON):
 
 @router.post("/{workload_id}/stop")
 async def stop_workload(workload_id: str):
-    """Stops every active shard of a distributed workload in one call."""
-    targets = [r for r in get_active_runs() if r.get("workload_id") == workload_id]
+    """Stops every active shard of a distributed workload in one call.
+
+    Shards stuck in 'cancelling' (CANCEL_ACKNOWLEDGED) are finished for the run
+    but still hold a Kaggle session slot, and a stop stub cannot release one -
+    so they are NOT stop targets. When every shard ended up that way this used
+    to 404 with "No active shards found", which reads as a bug; name what is
+    actually holding the slots instead.
+    """
+    if not any(w["id"] == workload_id for w in get_all_workloads()):
+        raise HTTPException(status_code=404, detail=f"Workload {workload_id} not found")
+
+    all_runs = [
+        r
+        for r in get_active_runs() + get_session_holding_runs()
+        if r.get("workload_id") == workload_id
+    ]
+    targets = [r for r in all_runs if r.get("status") in ("queued", "running")]
+    stuck = [r for r in all_runs if r.get("status") == "cancelling"]
+
     if not targets:
+        note = ""
+        if stuck:
+            refs = ", ".join(sorted({r["kernel_ref"] for r in stuck})[:10])
+            note = (
+                f" {len(stuck)} shard(s) are stuck tearing down (CANCEL_ACKNOWLEDGED) "
+                f"and still hold GPU session slots - a stop stub will not free them. "
+                f"Release them with `kaggle kernels delete -y '<ref>'` ({refs})."
+            )
         raise HTTPException(
-            status_code=404, detail=f"No active shards found for workload {workload_id}"
+            status_code=409,
+            detail=(f"No active shards left to stop for workload {workload_id}.{note}"),
         )
 
     if tracker.is_active(workload_stop_key(workload_id)):
@@ -146,12 +173,17 @@ async def stop_workload(workload_id: str):
     elif stopped:
         update_workload_status(workload_id, "partial")
 
+    tail = (
+        f" {len(stuck)} shard(s) remain stuck tearing down and still hold session slots."
+        if stuck
+        else ""
+    )
     return {
         "success": bool(stopped),
         "workload_id": workload_id,
         "stopped": stopped,
         "failed": failed,
-        "message": f"Stopped {len(stopped)}/{len(targets)} shards.",
+        "message": f"Stopped {len(stopped)}/{len(targets)} shards.{tail}",
     }
 
 
