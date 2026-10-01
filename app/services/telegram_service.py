@@ -87,7 +87,7 @@ class TelegramService:
         return await cls._post(
             token.strip(),
             chat_id.strip(),
-            "🤖 <b>Kaggle Automation Bot Connected!</b>\n\n"
+            "<b>Kaggle Automation Bot Connected!</b>\n\n"
             "Errors-only mode: you get failures, quota-kills and the 11h warning."
             " Switch to Full in Settings for start/finish alerts.",
         )
@@ -110,17 +110,17 @@ class TelegramService:
         if event == "started":
             acc = str(run.get("accelerator", "Default")).lower()
             label = "T4 GPU x 2" if "t4-x2" in acc else ("TPU v3-8" if "v3-8" in acc else ("T4 GPU" if "t4" in acc else "CPU/Default"))
-            badge = "🧪 <b>[TRIAL]</b> " if run.get("is_trial") else "🚀 "
+            badge = "<b>[TRIAL]</b> " if run.get("is_trial") else ""
             return f"{badge}<b>Run Started</b> (<code>{esc(label)}</code>)\n\n{head}• {link}"
         if event == "11h":
             return (
-                "⚠️ <b>1h left (11/12h) — save outputs now</b>\n\n"
+                "<b>1h left (11/12h) — save outputs now</b>\n\n"
                 f"{head}• {link}"
             )
         if event == "failed":
             err = esc(str(detail or run.get("status_message") or "unknown")[:300])
-            return f"❌ <b>Run FAILED</b>\n\n{head}• <b>Error:</b> <code>{err}</code>\n• {link}"
-        return f"✅ <b>Run complete</b>\n\n{head}• {link}"
+            return f"<b>Run FAILED</b>\n\n{head}• <b>Error:</b> <code>{err}</code>\n• {link}"
+        return f"<b>Run complete</b>\n\n{head}• {link}"
 
     @classmethod
     async def notify(

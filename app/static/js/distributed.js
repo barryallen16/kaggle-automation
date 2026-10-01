@@ -153,7 +153,7 @@ function updateShardsPreview() {
 
   perAccount.forEach(p => {
     const reduced = p.slots < p.chosen;
-    const quotaTag = p.noQuota ? ` <span class="text-amber-400 font-bold">· ⚠ 0 ${(previewKind === 'tpu' ? 'TPU' : 'GPU')} left</span>` : '';
+    const quotaTag = p.noQuota ? ` <span class="text-amber-400 font-bold">· <i data-lucide="alert-triangle" class="w-3 h-3 inline align-[-1px]"></i> 0 ${(previewKind === 'tpu' ? 'TPU' : 'GPU')} left</span>` : '';
     html += `
       <div class="flex items-center justify-between text-[11px] px-1">
         <span>@${esc(p.acc)}: ${p.slots} runner${p.slots !== 1 ? 's' : ''} (${p.chosen}x requested)${quotaTag}</span>
@@ -170,7 +170,7 @@ function updateShardsPreview() {
       html += `
         <div class="flex items-center justify-between p-1.5 rounded bg-purple-950/40 border border-purple-900/40">
           <span><strong>Shard ${shardIdx + 1}/${R}</strong> (@${esc(p.acc)}):</span>
-          <span class="text-cyan-300 font-mono">[${currentStart.toLocaleString()} ➔ ${currentEnd.toLocaleString()}] (${currentChunk.toLocaleString()} items)</span>
+          <span class="text-cyan-300 font-mono">[${currentStart.toLocaleString()} -> ${currentEnd.toLocaleString()}] (${currentChunk.toLocaleString()} items)</span>
         </div>`;
       currentStart = currentEnd;
       shardIdx++;
@@ -178,6 +178,7 @@ function updateShardsPreview() {
   });
 
   preview.innerHTML = html;
+  refreshIcons();
 }
 
 let distShardingMode = 'auto'; // 'auto' | 'manual'
@@ -373,7 +374,7 @@ function renderManualShards() {
             <span class="absolute left-2.5 top-1.5 text-[10px] text-slate-500 uppercase font-mono pointer-events-none">Start</span>
             <input type="number" min="0" value="${row.startIndex}" oninput="updateManualRowRange(${row.id}, 'start', this.value)" class="w-full bg-[#08080B] border ${isInvalid ? 'border-amber-500' : 'border-[#26262E]'} rounded-lg pl-12 pr-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-purple-500">
           </div>
-          <span class="text-slate-500 text-xs flex-shrink-0 font-bold">➔</span>
+          <span class="text-slate-500 text-xs flex-shrink-0 font-bold font-mono">-&gt;</span>
           <div class="relative flex-1">
             <span class="absolute left-2.5 top-1.5 text-[10px] text-slate-500 uppercase font-mono pointer-events-none">End</span>
             <input type="number" min="0" value="${row.endIndex}" oninput="updateManualRowRange(${row.id}, 'end', this.value)" class="w-full bg-[#08080B] border ${isInvalid ? 'border-amber-500' : 'border-[#26262E]'} rounded-lg pl-10 pr-2.5 py-1.5 text-xs text-white font-mono focus:outline-none focus:border-purple-500">
@@ -515,7 +516,7 @@ async function handleDistributedSubmit(e) {
 
   let code = document.getElementById('dist-code-textarea').value;
   if (!code.trim()) {
-    code = `import time\nimport sys\n\n# Note: SHARD_ID, TOTAL_SHARDS, START_INDEX, END_INDEX are auto-injected above!\nprint(f"🚀 [WORKER] Running Shard {SHARD_ID+1} of {TOTAL_SHARDS}")\nprint(f"Range: [{START_INDEX} -> {END_INDEX}]")\n\n# Simulated heavy distributed computation\nfor idx in range(START_INDEX, min(START_INDEX + 50, END_INDEX)):\n    if idx % 10 == 0:\n        print(f"Processed item: {idx}")\n    time.sleep(0.1)\n\nprint("✅ Shard processing complete!")\n`;
+    code = `import time\nimport sys\n\n# Note: SHARD_ID, TOTAL_SHARDS, START_INDEX, END_INDEX are auto-injected above!\nprint(f"[WORKER] Running Shard {SHARD_ID+1} of {TOTAL_SHARDS}")\nprint(f"Range: [{START_INDEX} -> {END_INDEX}]")\n\n# Simulated heavy distributed computation\nfor idx in range(START_INDEX, min(START_INDEX + 50, END_INDEX)):\n    if idx % 10 == 0:\n        print(f"Processed item: {idx}")\n    time.sleep(0.1)\n\nprint("[KAGGLE] Shard processing complete.")\n`;
     distUploadedFileName = "distributed_worker.py";
   }
 

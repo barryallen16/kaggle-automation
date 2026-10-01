@@ -334,14 +334,14 @@
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Hardware Accelerator</label>
                   <select id="runner-accelerator-select" onchange="populateAccountSelects()" class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
                     <option value="none">Default / CPU</option>
-                    <option value="nvidia-tesla-t4-x2" selected>⚡ T4 GPU x 2 (High Performance)</option>
-                    <option value="nvidia-tesla-t4-highmem">⚡ T4 GPU High Memory</option>
-                    <option value="nvidia-a100">⚡ A100 GPU</option>
-                    <option value="nvidia-l4">⚡ L4 GPU</option>
-                    <option value="nvidia-h100">⚡ H100 GPU</option>
-                    <option value="v3-8">🚀 TPU VM v3-8</option>
-                    <option value="tpu-v5e-8">🚀 TPU v5e-8</option>
-                    <option value="tpu-v6e-8">🚀 TPU v6e-8</option>
+                    <option value="nvidia-tesla-t4-x2" selected>T4 GPU x 2 (High Performance)</option>
+                    <option value="nvidia-tesla-t4-highmem">T4 GPU High Memory</option>
+                    <option value="nvidia-a100">A100 GPU</option>
+                    <option value="nvidia-l4">L4 GPU</option>
+                    <option value="nvidia-h100">H100 GPU</option>
+                    <option value="v3-8">TPU VM v3-8</option>
+                    <option value="tpu-v5e-8">TPU v5e-8</option>
+                    <option value="tpu-v6e-8">TPU v6e-8</option>
                   </select>
                   <p id="runner-quota-warn" class="hidden text-[11px] text-amber-300/80 mt-2"></p>
                 </div>
@@ -444,14 +444,14 @@
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Accelerator per Account</label>
                   <select id="dist-accelerator" onchange="renderDistributedAccountCheckboxes(); if (typeof distShardingMode !== 'undefined' && distShardingMode === 'manual') renderManualShards();" class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
                     <option value="none">Default / CPU</option>
-                    <option value="nvidia-tesla-t4-x2" selected>⚡ T4 GPU x 2 (High Performance)</option>
-                    <option value="nvidia-tesla-t4-highmem">⚡ T4 GPU High Memory</option>
-                    <option value="nvidia-a100">⚡ A100 GPU</option>
-                    <option value="nvidia-l4">⚡ L4 GPU</option>
-                    <option value="nvidia-h100">⚡ H100 GPU</option>
-                    <option value="v3-8">🚀 TPU VM v3-8</option>
-                    <option value="tpu-v5e-8">🚀 TPU v5e-8</option>
-                    <option value="tpu-v6e-8">🚀 TPU v6e-8</option>
+                    <option value="nvidia-tesla-t4-x2" selected>T4 GPU x 2 (High Performance)</option>
+                    <option value="nvidia-tesla-t4-highmem">T4 GPU High Memory</option>
+                    <option value="nvidia-a100">A100 GPU</option>
+                    <option value="nvidia-l4">L4 GPU</option>
+                    <option value="nvidia-h100">H100 GPU</option>
+                    <option value="v3-8">TPU VM v3-8</option>
+                    <option value="tpu-v5e-8">TPU v5e-8</option>
+                    <option value="tpu-v6e-8">TPU v6e-8</option>
                   </select>
                 </div>
 
@@ -469,7 +469,7 @@
                   </label>
                 </div>
               </div>
-              <p id="dist-quota-hint" class="hidden text-[11px] text-amber-300/80 mt-2">⚠ 2 sessions halve wall-clock time but burn each account's weekly GPU quota 2× faster — total items/week stays the same.</p>
+              <p id="dist-quota-hint" class="hidden text-[11px] text-amber-300/80 mt-2"><i data-lucide="alert-triangle" class="w-3 h-3 inline align-[-1px]"></i><span class="align-middle">2 sessions halve wall-clock time but burn each account's weekly GPU quota 2× faster — total items/week stays the same.</span></p>
               <p class="text-[11px] text-slate-500 mt-1">Each account row above has its own GPU-session selector — tweak it there to override the global value for that account only.</p>
 
               <!-- Workload Partition Strategy Selector (UX Law 1: Hick's Law, UX Law 19: Tesler's Law) -->

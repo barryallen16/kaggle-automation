@@ -62,7 +62,7 @@ class WorkloadDistributor:
             f"END_INDEX = {end_index}\n"
             f"TOTAL_ITEMS = {total_items}\n"
             f"SHARD_PARAMS = {custom_json}\n\n"
-            f"print(f'🚀 [DISTRIBUTED RUN] Shard {{SHARD_ID + 1}}/{{TOTAL_SHARDS}}: processing range [{{START_INDEX}} -> {{END_INDEX}}] of {{TOTAL_ITEMS}} total')\n"
+            f"print(f'[DISTRIBUTED RUN] Shard {{SHARD_ID + 1}}/{{TOTAL_SHARDS}}: processing range [{{START_INDEX}} -> {{END_INDEX}}] of {{TOTAL_ITEMS}} total')\n"
             "# ==========================================\n"
         )
 

@@ -11,9 +11,10 @@ function updateTerminalRunDropdown() {
   let html = '<option value="">-- Select a run to view output logs --</option>';
   
   runs.forEach(r => {
-    const statusIcon = r.status === 'running' ? '🟢 ' : (r.status === 'complete' ? '✅ ' : (r.status === 'error' ? '❌ ' : '⏳ '));
+    // No emoji: a native <option> cannot hold markup, so the status word in the
+    // label is the only signal there.
     const selected = r.id === currentTerminalRunId ? 'selected' : '';
-    const label = `${statusIcon} [${r.account_username}] ${r.title} (${r.status})`;
+    const label = `[${r.account_username}] ${r.title} (${r.status})`;
     html += `<option value="${esc(r.id)}" ${selected}>${esc(label)}</option>`;
   });
 
