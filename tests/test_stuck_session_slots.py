@@ -271,12 +271,13 @@ class TestCapMessageNamesStuckKernels(unittest.TestCase):
     def test_message_lists_stuck_refs_and_delete_command(self):
         _cfg, db = _fresh()
         db.create_run_record(_rec("run_s1", "cancelling", ref="acct/one-stuck"))
+        import asyncio
         import importlib
 
         from routers import runs
 
         importlib.reload(runs)
-        msg = runs._cap_error_message("acct", 1)
+        msg = asyncio.run(runs._cap_error_message("acct", 1))
 
         self.assertIn("acct/one-stuck", msg)
         self.assertIn("CANCEL_ACKNOWLEDGED", msg)
@@ -284,12 +285,13 @@ class TestCapMessageNamesStuckKernels(unittest.TestCase):
 
     def test_message_without_stuck_runs_points_at_running_kernels(self):
         _cfg, _db = _fresh()
+        import asyncio
         import importlib
 
         from routers import runs
 
         importlib.reload(runs)
-        msg = runs._cap_error_message("acct", 2)
+        msg = asyncio.run(runs._cap_error_message("acct", 2))
         self.assertIn("no free GPU session", msg)
         self.assertIn("Stop a running kernel", msg)
         self.assertNotIn("kaggle kernels delete", msg)

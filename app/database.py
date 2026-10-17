@@ -305,6 +305,28 @@ def get_session_holding_runs() -> list[dict[str, Any]]:
     return runs
 
 
+def get_gpu_kernel_refs_for_account(account_username: str, limit: int = 12) -> list[str]:
+    """Distinct GPU kernel refs ever pushed on an account, newest first.
+
+    Deliberately NOT filtered to active rows: a kernel version stuck in
+    'running' on Kaggle keeps its session slot long after its own run row went
+    terminal, so the version probe has to see kernels whose runs are all
+    finished. Bounded to the most recent refs - this feeds an HTTP probe per
+    kernel, not a report the user reads.
+    """
+    from config import is_gpu_accelerator
+
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT kernel_ref, accelerator, MAX(start_time) AS last_start FROM runs "
+        "WHERE account_username = ? GROUP BY kernel_ref ORDER BY last_start DESC",
+        (account_username,),
+    ).fetchall()
+    conn.close()
+    refs = [r["kernel_ref"] for r in rows if is_gpu_accelerator(r["accelerator"])]
+    return refs[:limit]
+
+
 def get_run_by_id(run_id: str) -> dict[str, Any] | None:
     conn = get_db_connection()
     row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()

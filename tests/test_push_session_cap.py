@@ -246,5 +246,84 @@ class TestLaunchPreflightGate(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class TestPhantomVersionHoldsSlot(unittest.TestCase):
+    """A stale VERSION holding a slot is invisible to run-row slot math.
+
+    Live 2026-10-17: cassatamaddy had one active run, one free slot by every
+    count in this app, and Kaggle refused the push with "Maximum batch GPU
+    session count of 2 reached". Quota accrual proved two sessions were
+    burning: today's run plus a 3-day-old v1 still reporting RUNNING on the
+    same kernel. Run rows had long since marked that v1's kernel finished.
+    """
+
+    def test_cancel_acknowledged_is_not_a_holder(self):
+        """Day-old cancel_acknowledged versions hold nothing - counting them
+        would wedge an account forever, which is worse than the bug."""
+        from services import availability
+
+        self.assertNotIn(
+            "cancel_acknowledged", availability.SLOT_HOLDING_VERSION_STATUSES
+        )
+        for held in ("running", "queued", "starting", "pending"):
+            self.assertIn(held, availability.SLOT_HOLDING_VERSION_STATUSES)
+
+    def test_probe_reports_running_versions_only(self):
+        import database
+        import services.kaggle_outputs as ko
+        from services import availability
+
+        async def fake_versions(account, ref, max_versions=20):
+            return {
+                "versions": [
+                    {"version": 3, "label": "v3", "status": "running"},
+                    {"version": 2, "label": "v2", "status": "cancel_acknowledged"},
+                    {"version": 1, "label": "v1", "status": "running"},
+                    {"version": 0, "label": "v0", "status": "complete"},
+                ]
+            }
+
+        # Both are imported inside the function, so patch at the source module.
+        orig_refs = database.get_gpu_kernel_refs_for_account
+        orig_probe = ko.list_kernel_versions
+        database.get_gpu_kernel_refs_for_account = lambda a, limit=12: ["acct/ghost"]
+        ko.list_kernel_versions = fake_versions
+        try:
+            held = asyncio.run(availability.held_version_sessions("acct"))
+        finally:
+            database.get_gpu_kernel_refs_for_account = orig_refs
+            ko.list_kernel_versions = orig_probe
+
+        self.assertEqual([h["version"] for h in held], [3, 1])
+        self.assertTrue(all(h["kernel_ref"] == "acct/ghost" for h in held))
+
+    def test_cap_message_names_the_phantom_version(self):
+        runs = _runs()
+        held = [
+            {"kernel_ref": "acct/ghost", "version": 1, "label": "v1", "status": "running"}
+        ]
+
+        async def fake_held(account, max_versions=5):
+            return held
+
+        orig = runs.availability.held_version_sessions
+        runs.availability.held_version_sessions = fake_held
+        try:
+            msg = asyncio.run(runs._cap_error_message("acct", 2))
+        finally:
+            runs.availability.held_version_sessions = orig
+
+        self.assertIn("acct/ghost v1 (running)", msg)
+        self.assertIn("kaggle kernels delete", msg)
+
+    def test_no_held_versions_leaves_the_base_message_alone(self):
+        from services import availability
+
+        self.assertEqual(availability.format_held_sessions([]), "")
+        note = availability.format_held_sessions(
+            [{"kernel_ref": "a/b", "version": 4, "label": "v4", "status": "running"}]
+        )
+        self.assertIn("a/b v4 (running)", note)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,10 +1,11 @@
 """GPU slot availability (single source for the quota triangle).
 
 One seam answers "how many GPU slots are free and what runner plan follows":
-live slot counting, session-map normalization, and runner-plan expansion.
-WorkloadDistributor, the runs router (via AccountManager.active_gpu_runs for
-DB-only counts), and SessionMonitor (per-run lifecycle, separate seam) all
-route through here or explicitly document why they do not.
+live slot counting, session-map normalization, runner-plan expansion, and which
+kernel VERSIONS still hold a slot. WorkloadDistributor, the runs router (via
+AccountManager.active_gpu_runs for DB-only counts), and SessionMonitor
+(per-run lifecycle, separate seam) all route through here or explicitly
+document why they do not.
 """
 
 import asyncio
@@ -154,3 +155,78 @@ async def live_busy_sessions(
         busy[row["account_username"]].add(row["kernel_ref"])
 
     return {a: len(busy[a]) for a in accounts}
+
+
+# Kernel-version statuses that hold a batch GPU session slot. Kaggle counts
+# slots per VERSION, not per kernel, so a version left in 'running' keeps a
+# slot that no run row owns.
+# 'cancel_acknowledged' is deliberately NOT here: it is a teardown state that
+# releases on its own. Verified on cassatamaddy 2026-10-17 - six day-old
+# cancel_acknowledged versions on one kernel while the account held exactly two
+# sessions, one per RUNNING version. Counting them would wedge an account
+# permanently, which is the failure this whole seam exists to prevent.
+SLOT_HOLDING_VERSION_STATUSES = ("running", "queued", "starting", "pending")
+
+
+async def held_version_sessions(
+    account_username: str, max_versions: int = 5
+) -> list[dict[str, Any]]:
+    """Kernel versions on an account still burning a GPU session slot.
+
+    The gap this closes: run rows go terminal when a kernel finishes, but a
+    stale version can stay in 'running' on Kaggle's side forever (observed: a
+    3-day-old v1 holding a slot next to a live v3). Every slot-counting path
+    reads run rows, so that slot is invisible - the account reads as half
+    free, the push goes out, and Kaggle refuses it with "Maximum batch GPU
+    session count of 2 reached" and nothing on screen says why.
+
+    Probes every GPU kernel this dashboard ever pushed on the account (not
+    just active ones - the phantom's own run row is long finished). One
+    failure path only: never called on the happy path.
+    """
+    from database import get_gpu_kernel_refs_for_account
+
+    from services.kaggle_outputs import list_kernel_versions
+
+    held: list[dict[str, Any]] = []
+    for ref in get_gpu_kernel_refs_for_account(account_username):
+        try:
+            data = await list_kernel_versions(
+                account_username, ref, max_versions
+            )
+        except Exception as e:
+            logger.warning("version probe failed for %s: %s", ref, e)
+            continue
+        for v in data.get("versions") or []:
+            status = str(v.get("status") or "").lower()
+            if status in SLOT_HOLDING_VERSION_STATUSES:
+                held.append(
+                    {
+                        "kernel_ref": ref,
+                        "version": v.get("version"),
+                        "label": v.get("label"),
+                        "status": status,
+                    }
+                )
+    return held
+
+
+def format_held_sessions(held: list[dict[str, Any]]) -> str:
+    """Renders held_version_sessions output as an actionable message block.
+
+    Returns "" when nothing is holding a slot, so the caller's own message
+    stands unchanged.
+    """
+    if not held:
+        return ""
+    lines = "\n".join(
+        f"  - {h['kernel_ref']} v{h['version']} ({h['status']})" for h in held
+    )
+    return (
+        f"\nKaggle counts a session per kernel VERSION, so an old version holds a "
+        f"slot that no run here owns. {len(held)} version(s) still hold one:\n"
+        f"{lines}\n"
+        f"Cancel the ones you still need at "
+        f"https://www.kaggle.com/code/<slug> (Stop), or free the rest with:\n"
+        f"  kaggle kernels delete -y '{held[0]['kernel_ref']}'"
+    )

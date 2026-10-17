@@ -453,6 +453,19 @@ class KaggleService:
             if is_error and (
                 _classify_push_failure(out_str + "\n" + err_str) == "session_cap"
             ):
+                # Name the versions actually holding the slots. Every slot-math
+                # path reads run rows, so a stale version still 'running' on
+                # Kaggle's side is exactly the session no row owns - without
+                # this the user only learns "capped" and has to guess which
+                # kernel to go and stop.
+                from services.availability import (
+                    format_held_sessions,
+                    held_version_sessions,
+                )
+
+                held_note = format_held_sessions(
+                    await held_version_sessions(account_username)
+                )
                 status = "session_cap"
                 status_msg = (
                     f"Kaggle refused the push: '{account_username}' is at its "
@@ -461,6 +474,7 @@ class KaggleService:
                     "This dashboard only tracks kernels it launched, so an account "
                     "that looks idle here can still be capped by a session running "
                     "on Kaggle. Cancel one at kaggle.com/code, then push again."
+                    f"{held_note}"
                 )
 
             # Parse real Kaggle URL, username, and slug from push output if available

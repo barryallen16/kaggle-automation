@@ -72,22 +72,36 @@ async def _session_cap_rejection(
         return {
             "success": False,
             "status": "session_cap",
-            "error": _cap_error_message(acc, busy.get(acc, 0)),
+            "error": await _cap_error_message(acc, busy.get(acc, 0)),
             "conflict_run_id": None,
             "run_id": None,
         }
     return None
 
 
-def _cap_error_message(account: str, busy_count: int) -> str:
-    """Names the stuck kernels holding an account's GPU sessions, if any."""
+async def _cap_error_message(account: str, busy_count: int) -> str:
+    """Names what holds an account's GPU sessions: stuck runs, then versions.
+
+    Two different things hold a slot and only the first has a run row. A kernel
+    stuck tearing down ('cancelling') is a DB problem. A kernel VERSION left in
+    'running' after its run finished is invisible to every slot-counting path -
+    this is what made 'one session active' still read as capped, so the version
+    probe runs here and names them.
+    """
     cap = KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT
     base = f"'{account}' has no free GPU session ({busy_count} in use, limit {cap})."
+    held_note = availability.format_held_sessions(
+        await availability.held_version_sessions(account)
+    )
     stuck = [
         r for r in get_session_holding_runs() if r.get("account_username") == account
     ]
     if not stuck:
-        return base + " Stop a running kernel on that account or pick another one."
+        return (
+            base
+            + " Stop a running kernel on that account or pick another one."
+            + held_note
+        )
     refs = "\n".join(f"  - {r['kernel_ref']}" for r in stuck[:10])
     more = f"\n  ...and {len(stuck) - 10} more" if len(stuck) > 10 else ""
     return (
@@ -99,6 +113,7 @@ def _cap_error_message(account: str, busy_count: int) -> str:
         + " ".join(f"'{r['kernel_ref'].split('/', 1)[-1]}'" for r in stuck[:10])
         + "; do "
         f"kaggle kernels delete -y '{account}/$r'; done"
+        + held_note
     )
 
 
