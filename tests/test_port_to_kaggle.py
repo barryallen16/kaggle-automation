@@ -42,6 +42,12 @@ def run_port(src_text, in_name="in.py", extra=()):
     return r, tmp, out, report
 
 
+def run_script(*args):
+    return subprocess.run(
+        [sys.executable, SCRIPT, *args], capture_output=True, text=True, cwd=REPO, check=False
+    )
+
+
 class TestPortToKaggle(unittest.TestCase):
     def test_py_gets_fallback_buffering_dirs_and_compiles(self):
         src = "print('hello')\n"
@@ -108,6 +114,54 @@ class TestPortToKaggle(unittest.TestCase):
             self.assertIn('makedirs("/kaggle/tmp"', out_src)
             self.assertIn("isdir", out_src)
             self.assertIn("else WORKING_DIR", out_src)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+
+class TestAgentErgonomics(unittest.TestCase):
+    """AXI: version fast path, structured errors on stdout, next-step hints."""
+
+    def test_version_flags_print_bare_version(self):
+        for flag in ("--version", "-v", "-V"):
+            r = run_script(flag)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertRegex(r.stdout.strip(), r"^\d+\.\d+\.\d+$")
+
+    def test_unknown_flag_is_structured_error_on_stdout(self):
+        r = run_script("in.py", "--out", "out.py", "--stat", "closed")
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(r.stderr, "")
+        payload = json.loads(r.stdout)
+        self.assertIn("unrecognized arguments", payload["error"])
+        self.assertIn("--help", payload["help"])
+
+    def test_unreadable_input_is_structured_error_on_stdout(self):
+        r = run_script("does-not-exist.py", "--out", "out.py")
+        self.assertEqual(r.returncode, 2)
+        self.assertEqual(r.stderr, "")
+        payload = json.loads(r.stdout)
+        self.assertIn("cannot read input file", payload["error"])
+        self.assertIn("help", payload)
+
+    def test_report_is_json_and_carries_next_hints(self):
+        r, tmp, _out, rep = run_port("print('hello')\n")
+        try:
+            self.assertEqual(r.returncode, 0, r.stderr)
+            stdout_report = json.loads(r.stdout)
+            self.assertEqual(stdout_report["next"], rep["next"])
+            self.assertEqual(rep["warnings_count"], len(rep["warnings"]))
+            joined = "\n".join(rep["next"])
+            self.assertIn("/api/runs/upload-and-launch", joined)
+            self.assertIn("/api/distributed/upload-and-launch", joined)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_check_mode_hints_to_write_the_file(self):
+        r, tmp, out, rep = run_port("print('hello')\n", extra=["--check"])
+        try:
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertFalse(os.path.exists(out))
+            self.assertIn("re-run without --check", "\n".join(rep["next"]))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 

@@ -12,9 +12,13 @@ Takes a Python script or notebook and rewrites it so the dashboard can push it t
 ```bash
 python skills/port-to-kaggle/scripts/port_to_kaggle.py in.py --out out.py --title "My Job" --accelerator nvidia-tesla-t4-x2
 python skills/port-to-kaggle/scripts/port_to_kaggle.py in.ipynb --out out.ipynb --check   # report only
+python skills/port-to-kaggle/scripts/port_to_kaggle.py --version
 ```
 
 Same extension in → out. Safe to re-run (idempotent, tagged cells / marker checks).
+
+The JSON report ends with `next`: ready-to-run commands for the next step (re-check, push, sharded push).
+Errors print to stdout as `{"error": ..., "help": ...}` with exit code 2, so there is no traceback to parse.
 
 ## What it fixes (auto)
 
@@ -30,6 +34,24 @@ Same extension in → out. Safe to re-run (idempotent, tagged cells / marker che
 ## Not handled here (server does it at push)
 
 Secrets preamble (`HF_TOKEN`, `WANDB_*`), `MAX_RUNTIME_MINUTES` quota cap, title auto-rename (`Title (2)` when taken) + shard-title fit into 50 chars, slug conflict check, output-version pinning. See `app/services/kaggle_service.py`, `app/routers/runs.py`, `app/services/workload_distributor.py`.
+
+## Launch it
+
+The `next` commands in the report push the ported file straight to the server:
+
+```bash
+# single run
+curl -sS -X POST http://127.0.0.1:8000/api/runs/upload-and-launch \
+  -F file=@out.py -F account_username=<account> \
+  -F title="My Job" -F accelerator=nvidia-tesla-t4-x2
+
+# sharded across accounts
+curl -sS -X POST http://127.0.0.1:8000/api/distributed/upload-and-launch \
+  -F file=@out.py -F base_title="My Job" -F accounts=<account1,account2> \
+  -F total_items=10000000 -F accelerator=nvidia-tesla-t4-x2
+```
+
+Add `-H 'Cookie: kaggle_auto_session=<value>'` to both calls when the server runs with `APP_AUTH_TOKEN` set.
 
 ## Reference port
 

@@ -3,6 +3,11 @@
 Usage:
     python port_to_kaggle.py in.py --out out.py --title "My Job" --accelerator nvidia-tesla-t4-x2
     python port_to_kaggle.py in.ipynb --out out.ipynb --check   # report only
+    python port_to_kaggle.py --version
+
+Errors go to stdout as {"error": ..., "help": ...} with exit code 2, so an
+agent never has to parse a traceback. The report ends with "next": ready-to-run
+commands (re-check, push, sharded push).
 
 What it does (idempotent, safe to re-run):
   1. Normalizes notebooks via KaggleService.ensure_executable_notebook
@@ -27,6 +32,21 @@ import os
 import re
 import sys
 import uuid
+
+VERSION = "0.1.0"
+
+
+def _version_fast_path(argv: list[str]) -> int | None:
+    """Bare -v/-V/--version prints the version and exits 0 (AXI §10)."""
+    if len(argv) == 1 and argv[0] in ("-v", "-V", "--version"):
+        print(VERSION)
+        return 0
+    return None
+
+
+# Runs before the platform import below, so the version probe stays cheap.
+if __name__ == "__main__" and (rc := _version_fast_path(sys.argv[1:])) is not None:
+    raise SystemExit(rc)
 
 
 def _platform_candidates() -> list[str]:
@@ -323,8 +343,57 @@ def lint(src: str, title: str, accelerator: str) -> list[str]:
     return warnings
 
 
+def _error(message: str, help_text: str) -> int:
+    """Structured error on stdout as JSON (AXI §6) - never leak a traceback."""
+    print(json.dumps({"error": message, "help": help_text}))
+    return 2
+
+
+class _Parser(argparse.ArgumentParser):
+    """argparse that reports usage errors on stdout in the same JSON shape."""
+
+    def error(self, message: str) -> None:
+        print(json.dumps({
+            "error": message,
+            "help": f"{self.format_usage().strip()} - run `{self.prog} --help` for every flag",
+        }))
+        raise SystemExit(2)
+
+
+def _api_base() -> str:
+    return f"http://{os.environ.get('APP_HOST') or '127.0.0.1'}:{os.environ.get('APP_PORT') or '8000'}"
+
+
+def _next_hints(args, warnings: list[str], wrote: bool) -> list[str]:
+    """Actionable next steps as complete commands (AXI §9)."""
+    out = args.out
+    api = _api_base()
+    hints: list[str] = []
+    if warnings:
+        hints.append(
+            f"fix the {len(warnings)} warning(s) above in {out}, then re-check: "
+            f"python3 {sys.argv[0]} {args.input} --out {out} "
+            f"--title \"{args.title}\" --accelerator {args.accelerator} --check"
+        )
+    if not wrote:
+        hints.append(f"re-run without --check to write {out}")
+        return hints
+    hints.append(
+        f"push it: curl -sS -X POST {api}/api/runs/upload-and-launch "
+        f"-F file=@{out} -F account_username=<account> "
+        f"-F title=\"{args.title}\" -F accelerator={args.accelerator}"
+    )
+    hints.append(
+        f"sharded run: curl -sS -X POST {api}/api/distributed/upload-and-launch "
+        f"-F file=@{out} -F base_title=\"{args.title}\" "
+        f"-F accounts=<account1,account2> -F total_items=10000000 "
+        f"-F accelerator={args.accelerator}"
+    )
+    return hints
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Port a script/notebook to kaggle-automation.")
+    ap = _Parser(description="Port a script/notebook to kaggle-automation.")
     ap.add_argument("input", help=".py or .ipynb file to port")
     ap.add_argument("--out", required=True, help="output path (.py or .ipynb)")
     ap.add_argument("--title", default="Untitled Job", help="Kaggle notebook title (<=50 chars)")
@@ -332,38 +401,66 @@ def main() -> int:
     ap.add_argument("--mode", choices=["single", "distributed", "both"], default="both")
     ap.add_argument("--check", action="store_true", help="report only, write nothing")
     ap.add_argument("--report", default="", help="optional JSON report path")
+    ap.add_argument("-v", "-V", "--version", action="version", version=VERSION)
     args = ap.parse_args()
 
-    with open(args.input, encoding="utf-8") as f:
-        raw = f.read()
+    try:
+        with open(args.input, encoding="utf-8") as f:
+            raw = f.read()
+    except OSError as e:
+        return _error(
+            f"cannot read input file {args.input}: {e.strerror or e}",
+            "pass a readable .py or .ipynb file - run with --help for usage",
+        )
 
     is_nb = args.input.endswith(".ipynb") or args.out.endswith(".ipynb")
     if is_nb:
         try:
             out_text, fixes = port_notebook(raw, args.mode)
         except Exception as e:
-            print(f"ERROR: notebook parse failed: {e}", file=sys.stderr)
-            return 2
+            return _error(
+                f"notebook parse failed: {e}",
+                "pass a valid .ipynb (JSON notebook with a cells array) or a .py file",
+            )
         src_for_lint = _notebook_source(json.loads(out_text))
     else:
         out_text, fixes = port_py(raw, args.mode)
         src_for_lint = out_text
-    try:
-        compile(src_for_lint if not is_nb else out_text if out_text.strip().startswith("{") else src_for_lint, args.out, "exec")
-    except SyntaxError:
-        pass  # ipynb JSON is validated by json.loads above; py syntax checked below
     if not is_nb:
+        try:
+            compile(raw, args.input, "exec")
+        except SyntaxError as e:
+            return _error(
+                f"input has syntax error: {e}",
+                f"fix the syntax error in {args.input} and re-run",
+            )
         try:
             compile(out_text, args.out, "exec")
         except SyntaxError as e:
-            print(f"ERROR: ported output has syntax error: {e}", file=sys.stderr)
-            return 2
+            return _error(
+                f"ported output has syntax error: {e}",
+                f"{args.out} is not valid python - check for a `from __future__` import "
+                f"that the injected header pushed out of position",
+            )
 
     warnings = lint(src_for_lint, args.title, args.accelerator)
     if PLATFORM_MODE == "standalone":
         warnings = [
             "standalone mode: no platform checkout found (set KAGGLE_AUTOMATION_REPO if the server's mapping ever drifts)"
         ] + warnings
+
+    wrote = False
+    if not args.check:
+        try:
+            with open(args.out, "w", encoding="utf-8") as f:
+                f.write(out_text)
+            wrote = True
+        except OSError as e:
+            return _error(
+                f"cannot write output {args.out}: {e.strerror or e}",
+                "pass a writable --out path",
+            )
+
     report = {
         "input": args.input,
         "output": args.out,
@@ -375,15 +472,19 @@ def main() -> int:
         "platform_mode": PLATFORM_MODE,
         "fixes": fixes,
         "warnings": warnings,
+        "warnings_count": len(warnings),
+        "next": _next_hints(args, warnings, wrote),
     }
     if args.report:
-        with open(args.report, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2)
+        try:
+            with open(args.report, "w", encoding="utf-8") as f:
+                json.dump(report, f, indent=2)
+        except OSError as e:
+            return _error(
+                f"cannot write report {args.report}: {e.strerror or e}",
+                "pass a writable --report path",
+            )
     print(json.dumps(report, indent=2))
-    if args.check:
-        return 0
-    with open(args.out, "w", encoding="utf-8") as f:
-        f.write(out_text)
     return 0
 
 
