@@ -81,10 +81,13 @@ def get_kernel_env_defaults() -> dict:
     """Secrets to inject into every pushed kernel's environment.
 
     Read lazily (re-reading .env) so adding/updating keys takes effect on the
-    NEXT launch without a server restart. HF_TOKEN + WANDB_* + ZROK_* today -
-    extend here. A READ-scoped HF token suffices: kernels only download
-    public artifacts. ZROK_TOKEN powers the serve-script presets (public
-    share); kernels never log it, only use it for `zrok enable`.
+    NEXT launch without a server restart. HF_TOKEN + WANDB_* today - extend
+    here. A READ-scoped HF token suffices: kernels only download public
+    artifacts.
+
+    ZROK_* is deliberately NOT injected: the public-share serve scripts were
+    removed because tunneling a public endpoint out of a Kaggle kernel breaks
+    the Kaggle Acceptable Use Policy and gets accounts suspended.
     """
     try:
         load_dotenv()  # picks up newly added keys; never overrides existing env
@@ -100,10 +103,4 @@ def get_kernel_env_defaults() -> dict:
     wandb_project = (os.getenv("WANDB_PROJECT") or "").strip()
     if wandb_project:
         out["WANDB_PROJECT"] = wandb_project
-    zrok_token = (os.getenv("ZROK_TOKEN") or "").strip()
-    if zrok_token:
-        out["ZROK_TOKEN"] = zrok_token
-    zrok_name = (os.getenv("ZROK_NAME") or "").strip()
-    if zrok_name:
-        out["ZROK_NAME"] = zrok_name
     return out

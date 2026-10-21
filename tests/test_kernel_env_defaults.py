@@ -1,4 +1,4 @@
-"""ZROK_* keys flow into pushed kernels like HF_TOKEN (serve presets need them)."""
+"""Kernel env injection: HF_TOKEN/WANDB_* flow through, ZROK_* never does."""
 
 import importlib
 import os
@@ -18,24 +18,31 @@ def _config():
 
 
 class TestKernelEnvDefaults(unittest.TestCase):
-    def test_zrok_token_injected_when_set(self):
+    def test_hf_token_injected_when_set(self):
+        cfg = _config()
+        with mock.patch.dict(os.environ, {"HF_TOKEN": "hf_x"}, clear=False):
+            env = cfg.get_kernel_env_defaults()
+        self.assertEqual(env.get("HF_TOKEN"), "hf_x")
+
+    def test_zrok_keys_never_injected(self):
+        # The zrok public share was removed: publishing a public endpoint out
+        # of a Kaggle kernel breaks the Kaggle AUP and gets accounts
+        # suspended. Even if the env still holds a token, do not inject it.
         cfg = _config()
         with mock.patch.dict(
             os.environ, {"ZROK_TOKEN": "tok123", "ZROK_NAME": "llama"}, clear=False
         ):
             env = cfg.get_kernel_env_defaults()
-        self.assertEqual(env.get("ZROK_TOKEN"), "tok123")
-        self.assertEqual(env.get("ZROK_NAME"), "llama")
+        self.assertNotIn("ZROK_TOKEN", env)
+        self.assertNotIn("ZROK_NAME", env)
 
-    def test_zrok_keys_absent_when_unset(self):
+    def test_hf_token_absent_when_unset(self):
         cfg = _config()
         env = dict(os.environ)
-        env.pop("ZROK_TOKEN", None)
-        env.pop("ZROK_NAME", None)
+        env.pop("HF_TOKEN", None)
         with mock.patch.dict(os.environ, env, clear=True):
             defaults = cfg.get_kernel_env_defaults()
-        self.assertNotIn("ZROK_TOKEN", defaults)
-        self.assertNotIn("ZROK_NAME", defaults)
+        self.assertNotIn("HF_TOKEN", defaults)
 
 
 if __name__ == "__main__":

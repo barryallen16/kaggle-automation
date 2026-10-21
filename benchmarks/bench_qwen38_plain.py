@@ -1,8 +1,7 @@
 """Faithful benchmark: plain Qwen3.8-27B serve (no speculative decoding).
 
-Mirrors serve-qwen3-8.py serve path exactly: binary v0.4.0, Q4_K_XL main
-model, NO draft model (the original downloaded a draft but never passed
--md), -b 512 / -ub 256. Zrok + chat-demo cells removed (localhost bench).
+Server path: binary v0.4.0, Q4_K_XL main model, NO draft model,
+-b 512 / -ub 256. Localhost only: no tunnel, no public share.
 
 Run (Single Run tab): T4 GPU x2, internet ON, full run (downloads ~16GB).
 Paste back the ===BENCHMARK_JSON_START=== block.

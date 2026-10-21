@@ -47,11 +47,6 @@ TELEGRAM_CHAT_ID=123456789
 
 #hf read token for faster model, datasets downloads.
 HF_TOKEN=hf_read_token
-
-# zrok share token for the serve-script presets (injected into kernels at
-# push, like HF_TOKEN). Get one at https://zrok.io. Empty = serve scripts
-# refuse to start; benchmarks don't need it.
-ZROK_TOKEN=your_zrok_token
 ```
 
 ### 2. Build the image
@@ -86,11 +81,6 @@ TELEGRAM_CHAT_ID=123456789
 
 #hf read token for faster model, datasets downloads.
 HF_TOKEN=hf_read_token
-
-# zrok share token for the serve-script presets (injected into kernels at
-# push, like HF_TOKEN). Get one at https://zrok.io. Empty = serve scripts
-# refuse to start; benchmarks don't need it.
-ZROK_TOKEN=your_zrok_token
 ```
 *(Accounts and Telegram credentials can also be managed directly from the UI — UI values override `.env`.)*
 
@@ -175,9 +165,17 @@ for item_id in range(START_INDEX, END_INDEX):
 
 ## LLM serve benchmarks
 
-Two scripts in `benchmarks/` serve Qwen3.8-27B (Q4_K_XL, 128K context, q4_0 KV cache) through llama-server on 2x T4 and time fixed prompts. Token counts come from the server (`stream_options.include_usage`). Each run prints a JSON block and leaves a per-shard copy under `/kaggle/working`. The matching `serve_qwen3_8_*.py` scripts run the same servers plus a zrok public share instead of timing; they need `ZROK_TOKEN` in the server `.env` (injected into the kernel at push, never stored in the file).
+Two scripts in `benchmarks/` serve Qwen3.8-27B (Q4_K_XL, 128K context, q4_0 KV cache) through llama-server on 2x T4 and time fixed prompts.
+Token counts come from the server (`stream_options.include_usage`).
+Each run prints a JSON block and leaves a per-shard copy under `/kaggle/working`.
 
 The plain build is the default preset in the Single Run tab (`GET /api/presets`).
+
+> The `serve_qwen3_8_*.py` presets were removed on purpose.
+> They published the model to the open internet through a zrok public share (a tunnel out of the kernel) and kept it serving for the whole session.
+> That breaks the Kaggle Acceptable Use Policy ("server farming", "activity unrelated to ML data science") and the Terms of Use (use is limited to your own internal, personal, non-commercial use).
+> Kaggle's automated abuse detector suspends accounts for exactly that pattern.
+> Serve the model on real hardware, or through Kaggle Models, instead.
 
 Round one used a warmup `hi` (8 tokens), an essay (256 tokens), and a generic code task (256 tokens):
 

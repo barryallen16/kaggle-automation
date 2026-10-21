@@ -1,9 +1,8 @@
 """Faithful benchmark: speculative Qwen3.8-27B serve (draft-dflash).
 
-Mirrors serve_qwen3_8_w_draftmodel.py serve path exactly: binary v0.4.1,
-Q4_K_XL main + DFlash2 Q8_0 draft, --spec-type draft-dflash,
---spec-draft-n-max 8, -b 1024 / -ub 512 / -t 4 / --parallel 1.
-Zrok block removed (localhost bench).
+Server path: binary v0.4.1, Q4_K_XL main + DFlash2 Q8_0 draft,
+--spec-type draft-dflash, --spec-draft-n-max 8, -b 1024 / -ub 512 / -t 4 / --parallel 1.
+Localhost only: no tunnel, no public share.
 
 Run (Single Run tab): T4 GPU x2, internet ON, full run (downloads ~44GB).
 Paste back the ===BENCHMARK_JSON_START=== block.
