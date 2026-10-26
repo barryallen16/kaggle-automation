@@ -6,11 +6,13 @@ version, so latest-only pulls return just the stub's log. stop_kernel must
 capture the exact cancelled version via version_label instead.
 """
 
+import json
 import os
 import shutil
 import sys
 import tempfile
 import unittest
+from pathlib import Path
 
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TEST_DIR)
@@ -145,7 +147,30 @@ class TestStopOutputCapture(unittest.TestCase):
         # The recovered version must be PINNED so later manual pulls skip the stub
         self.assertEqual(db.get_run_by_id("runX")["output_version"], 7)
 
-    def test_2_unknown_version_still_stops_cleanly(self):
+    def test_2_stop_stub_ends_without_sys_exit(self):
+        """A SystemExit stub is recorded as KernelWorkerStatus.ERROR by Kaggle.
+
+        The stub must simply end; the push itself is what cancels the real run.
+        """
+        _cfg, _db, KS = _fresh()
+        message = "Session explicitly stopped by Kaggle Automation Dashboard."
+
+        for is_notebook in (True, False):
+            stop_dir = Path(DATA_TMP) / f"stub_{is_notebook}"
+            asyncio_run(
+                KS._write_stop_stub(
+                    stop_dir, "accA/shard-run", "Shard run", is_notebook, message
+                )
+            )
+            if is_notebook:
+                stub = json.loads((stop_dir / "cell.ipynb").read_text("utf-8"))
+                code = "".join(stub["cells"][0]["source"])
+            else:
+                code = (stop_dir / "main.py").read_text("utf-8")
+            self.assertIn(message, code)
+            self.assertNotIn("sys.exit", code)
+
+    def test_3_unknown_version_still_stops_cleanly(self):
         cfg, db, KS = _fresh()
         _seed_run(db, "runY", "accB/shard-run-y")
 

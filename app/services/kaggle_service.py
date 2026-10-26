@@ -787,11 +787,17 @@ class KaggleService:
         is_notebook: bool,
         message: str,
     ) -> None:
-        """Writes a 1-second exit stub + kernel-metadata.json into stop_dir.
+        """Writes an immediate-exit stub + kernel-metadata.json into stop_dir.
 
         Pushing this as a new version is how Kaggle stops a running worker.
         Notebook stubs work for any kernel type; script stubs preserve a
         script kernel's type so the push doesn't corrupt it.
+
+        No sys.exit here: Kaggle wraps even script kernels in an internal
+        notebook (__script__.ipynb) and a SystemExit kills the kernel before
+        the wrapper finishes, so the stub version is recorded as ERROR and
+        every stopped kernel shows KernelWorkerStatus.ERROR on Kaggle. The
+        stub has nothing left to run, so simply ending the code is enough.
         """
         stop_dir.mkdir(parents=True, exist_ok=True)
         stub_filename = "cell.ipynb" if is_notebook else "main.py"
@@ -803,11 +809,7 @@ class KaggleService:
                         "execution_count": None,
                         "metadata": {},
                         "outputs": [],
-                        "source": [
-                            "import sys\n",
-                            f"print({message!r})\n",
-                            "sys.exit(0)\n",
-                        ],
+                        "source": [f"print({message!r})\n"],
                     }
                 ],
                 "metadata": {"kernelspec": dict(cls.DEFAULT_KERNELSPEC)},
@@ -816,7 +818,7 @@ class KaggleService:
             }
             await asyncio.to_thread(_write_json_file, stop_dir / stub_filename, stub)
         else:
-            stop_code = f"import sys\nprint({message!r})\nsys.exit(0)\n"
+            stop_code = f"print({message!r})\n"
             await asyncio.to_thread(
                 _write_text_file, stop_dir / stub_filename, stop_code
             )
@@ -858,7 +860,7 @@ class KaggleService:
             "Session explicitly stopped from Account Kernels Explorer.",
         )
         cli = get_kaggle_cli_path()
-        cmd = [cli, "kernels", "push", "-p", str(stop_dir), "-t", "1"]
+        cmd = [cli, "kernels", "push", "-p", str(stop_dir), "-t", "60"]
         env = AccountManager.get_account_env(account_username)
         tracker.begin(f"ext_stop:{account_username}/{kernel_ref}")
         try:
@@ -894,7 +896,7 @@ class KaggleService:
 
     @classmethod
     async def stop_kernel(cls, run_id: str) -> dict[str, Any]:
-        """Stops the active Kaggle run by replacing it with a 1-second exit stub and killing local streams.
+        """Stops the active Kaggle run by replacing it with an immediate-exit stub and killing local streams.
 
         The whole stop pipeline (output pull, version probe, stub push, version
         recovery) is throttled by a global semaphore: "Stop All" fans out over
@@ -967,7 +969,7 @@ class KaggleService:
         )
 
         cli = get_kaggle_cli_path()
-        cmd = [cli, "kernels", "push", "-p", str(stop_dir), "-t", "1"]
+        cmd = [cli, "kernels", "push", "-p", str(stop_dir), "-t", "60"]
         env = AccountManager.get_account_env(account_username)
 
         # Retry on 409 Conflict (kernel still transitioning) and on the batch-GPU
