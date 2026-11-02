@@ -16,6 +16,7 @@ A FastAPI runner and local web UI for long-running Kaggle jobs. It divides param
 - Artifact downloads: Streams generated output files and zipped archives directly to disk without loading entire archives into memory.
 - Execution history: Lists past runs with links back to the Kaggle notebook.
 - Port-to-Kaggle skill: Prepares `.py` and `.ipynb` files for kernel execution by handling line-buffered logs and scratch paths.
+- Kaggle runner skill: Dispatches, monitors, and stops runs on kabila-aws.isroot.in with persistent session credentials.
 - Access control: Optional shared-secret login (`APP_AUTH_TOKEN`) with HMAC-signed HttpOnly session cookies.
 - Interface: Clean dark UI using bundled pixel-art glyphs and local fonts without external CDN dependencies.
 
