@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """CLI helper to manage and launch runs on kabila-aws.isroot.in (or localhost).
 
 Built to Agent eXperience Interface (AXI) standards:

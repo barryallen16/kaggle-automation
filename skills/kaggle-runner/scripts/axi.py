@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Agent eXperience Interface (AXI) output layer.
 
 Provides:
