@@ -9,7 +9,6 @@ import os
 import re
 import tempfile
 import zipfile
-from pathlib import Path
 
 from config import OUTPUTS_DIR
 from database import get_account_by_username
@@ -329,28 +328,17 @@ async def download_single_file(
     """Downloads a single pulled file for an external kernel."""
     _require_account(account)
     ref = _parse_ref(kernel_ref)
+    if not filename or "\x00" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
     run_id = _ext_run_id(ref)
-    target_dir = OUTPUTS_DIR / run_id
-    # Prevent path traversal
-    safe_name = Path(filename).name
-    if not safe_name or safe_name != filename.split("/")[-1]:
-        # Allow subfolder but sanitize
-        candidate = (target_dir / filename).resolve()
-        try:
-            candidate.relative_to(target_dir.resolve())
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid filename")
-        if not candidate.exists() or not candidate.is_file():
-            raise HTTPException(status_code=404, detail="File not found")
-        return FileResponse(path=str(candidate), filename=candidate.name)
-    # Flat file case
-    candidate = target_dir / safe_name
-    if not candidate.exists():
-        # Try recursive find
-        candidates = list(target_dir.rglob(safe_name))
-        if not candidates:
-            raise HTTPException(status_code=404, detail="File not found")
-        candidate = candidates[0]
+    base = (OUTPUTS_DIR / run_id).resolve()
+    candidate = (base / filename).resolve()
+    try:
+        candidate.relative_to(base)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    if not candidate.exists() or not candidate.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
     return FileResponse(path=str(candidate), filename=candidate.name)
 
 

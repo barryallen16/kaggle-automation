@@ -41,9 +41,16 @@ def verify_session_cookie(cookie_value: str | None, token: str) -> bool:
     if expiry < time.time():
         return False
     expected = _sign(_signing_key(token), expiry_str)
-    return hmac.compare_digest(signature, expected)
+    return hmac.compare_digest(signature.encode("utf-8"), expected.encode("utf-8"))
 
 def is_request_authenticated(request: Request, token: str) -> bool:
+    if not token:
+        return False
+    auth_header = (request.headers.get("authorization") or "").strip()
+    if auth_header.lower().startswith("bearer "):
+        bearer = auth_header[7:].strip()
+        if bearer and hmac.compare_digest(bearer.encode("utf-8"), token.encode("utf-8")):
+            return True
     return verify_session_cookie(request.cookies.get(SESSION_COOKIE_NAME), token)
 
 def should_skip_path(path: str) -> bool:

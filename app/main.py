@@ -4,6 +4,7 @@ import os
 import secrets
 import shutil
 from contextlib import asynccontextmanager
+from urllib.parse import quote
 
 import auth
 from config import APP_AUTH_TOKEN, BASE_DIR
@@ -22,7 +23,6 @@ from routers import (
     kernels,
     logs,
     ops,
-    presets,
     runs,
     settings,
 )
@@ -89,7 +89,6 @@ app.include_router(files.router)
 app.include_router(settings.router)
 app.include_router(kernels.router)
 app.include_router(ops.router)
-app.include_router(presets.router)
 
 # Static files & Jinja templates
 static_dir = BASE_DIR / "app" / "static"
@@ -144,7 +143,9 @@ async def login_page(request: Request, error: str = ""):
 async def login_submit(request: Request, access_token: str = Form(...)):
     if not APP_AUTH_TOKEN:
         return RedirectResponse("/")
-    if not secrets.compare_digest(access_token.strip(), APP_AUTH_TOKEN):
+    if not secrets.compare_digest(
+        access_token.strip().encode("utf-8"), APP_AUTH_TOKEN.encode("utf-8")
+    ):
         await asyncio.sleep(0.6)  # brute-force dampener
         return RedirectResponse("/login?error=Invalid+access+token", status_code=303)
 
@@ -174,6 +175,26 @@ async def logout():
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
+    # Enforce auth BEFORE running the route handler so unauthenticated
+    # requests can never trigger side effects (launches, deletes, settings).
+    if (
+        APP_AUTH_TOKEN
+        and not auth.should_skip_path(request.url.path)
+        and not auth.is_request_authenticated(request, APP_AUTH_TOKEN)
+    ):
+        if request.url.path.startswith("/api/"):
+            response = JSONResponse(
+                status_code=401, content={"detail": "Not authenticated"}
+            )
+        else:
+            next_target = request.url.path + (
+                f"?{request.url.query}" if request.url.query else ""
+            )
+            login_url = f"/login?next={quote(next_target, safe='/')}"
+            response = RedirectResponse(login_url, status_code=303)
+        response.headers.setdefault("Cache-Control", "no-store")
+        return response
+
     response = await call_next(request)
 
     # Auth pages/API must never be served from browser cache - a cached login
@@ -182,18 +203,4 @@ async def auth_middleware(request: Request, call_next):
     if not request.url.path.startswith("/static"):
         response.headers.setdefault("Cache-Control", "no-store")
 
-    if not APP_AUTH_TOKEN or auth.should_skip_path(request.url.path):
-        return response
-
-    # WebSockets bypass HTTP middleware; guarded separately in the endpoint.
-    if request.url.path.startswith("/api/"):
-        if not auth.is_request_authenticated(request, APP_AUTH_TOKEN):
-            return JSONResponse(
-                status_code=401, content={"detail": "Not authenticated"}
-            )
-        return response
-
-    if not auth.is_request_authenticated(request, APP_AUTH_TOKEN):
-        login_url = f"/login?next={request.url.path}"
-        return RedirectResponse(login_url, status_code=303)
     return response
