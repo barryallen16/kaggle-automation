@@ -221,6 +221,7 @@ TOTAL_SHARDS = _get_shard_var('TOTAL_SHARDS', 1, cast=int)
 START_INDEX = _get_shard_var('START_INDEX', None, cast=int)
 END_INDEX = _get_shard_var('END_INDEX', None, cast=int)
 TOTAL_ITEMS = _get_shard_var('TOTAL_ITEMS', None, cast=int)
+MAX_RUNTIME_MINUTES = _get_shard_var('MAX_RUNTIME_MINUTES', 0.0, cast=float)
 SHARD_PARAMS = {}
 """
 

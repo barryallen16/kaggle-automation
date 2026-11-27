@@ -4,9 +4,9 @@ from typing import Annotated, Any
 
 from database import (
     get_active_runs,
-    get_all_runs,
     get_all_workloads,
     get_session_holding_runs,
+    get_workload_runs,
     update_workload_status,
 )
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -58,12 +58,15 @@ class DistributedLaunchJSON(BaseModel):
 @router.get("")
 async def list_workloads():
     workloads = get_all_workloads()
-    all_runs = get_all_runs(limit=500)
+    workload_runs = get_workload_runs()
+    by_workload: dict[str, list[dict[str, Any]]] = {}
+    for r in workload_runs:
+        wid = r.get("workload_id")
+        if wid:
+            by_workload.setdefault(wid, []).append(r)
 
-    # Attach runs to workloads
     for w in workloads:
-        w_id = w["id"]
-        w["shards"] = [r for r in all_runs if r.get("workload_id") == w_id]
+        w["shards"] = by_workload.get(w["id"], [])
 
     return {"success": True, "workloads": workloads}
 

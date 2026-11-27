@@ -1,10 +1,3 @@
-"""Local validation harness for kaggle_batch_inference_task_a.py.
-
-Executes the real script end-to-end with mocked torch/transformers/qwen_vl_utils/PIL,
-a patched subprocess (installs/wget recorded, not run), REAL requests against a local
-HTTP image server, and REAL file I/O - so slicing, resume, checkpointing, output
-format, install flags and env-var coercion are all genuinely exercised.
-"""
 import contextlib
 import http.server
 import json
@@ -15,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from typing import ClassVar
@@ -26,7 +20,6 @@ with open(SCRIPT_PATH, encoding="utf-8") as f:
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\nfakeimagebytes"
 
-# ---------------------------------------------------------------- HTTP server
 class _Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/ok/"):
@@ -48,16 +41,14 @@ threading.Thread(target=_SERVER.serve_forever, daemon=True).start()
 OK_URL = f"http://127.0.0.1:{PORT}/ok/img.jpg"
 BAD_URL = f"http://127.0.0.1:{PORT}/missing.jpg"
 
-# ------------------------------------------------------------ fake ML stack
 STATE = {
     "gpu_count": 2,
-    "responses": [],       # popped once per batch_decode call
-    "commands": [],        # recorded subprocess commands
-    "gen_tail": [91, 92],  # token tail appended by FakeModel.generate
+    "responses": [],
+    "commands": [],
+    "gen_tail": [91, 92],
 }
 
 class FakeBatchFeature(dict):
-    """dict-backed BatchFeature: **unpacking AND attribute access both work."""
     def __getattr__(self, k):
         try:
             return self[k]
@@ -131,9 +122,9 @@ def _build_fakes():
     sys.modules["qwen_vl_utils"] = ql
 
     pil_pkg = types.ModuleType("PIL")
-    pil_img = types.ModuleType("PIL.Image")  # `from PIL import Image` yields THIS module
+    pil_img = types.ModuleType("PIL.Image")
     pil_img.open = lambda bio: FakeImage()
-    pil_img.Image = FakeImage  # real Pillow exposes PIL.Image.Image (used in annotations)
+    pil_img.Image = FakeImage
     pil_pkg.Image = pil_img
     sys.modules["PIL"] = pil_pkg
     sys.modules["PIL.Image"] = pil_img
@@ -151,7 +142,6 @@ def _fake_run(cmd=None, *a, **k):
 
 @contextlib.contextmanager
 def sandbox(dataset_items, extra_ns=None, gpu_count=2, responses=None, env_overrides=None):
-    """Isolated CWD + fakes + patched subprocess; yields the exec namespace."""
     tmp = tempfile.mkdtemp(prefix="task_a_harness_")
     with open(os.path.join(tmp, "task_a_dataset.jsonl"), "w", encoding="utf-8") as f:
         f.writelines(json.dumps(item) + "\n" for item in dataset_items)
@@ -163,8 +153,9 @@ def sandbox(dataset_items, extra_ns=None, gpu_count=2, responses=None, env_overr
     subprocess.run = _fake_run
 
     saved_cwd = os.getcwd()
-    saved_environ = {k: os.environ.get(k) for k in ("START_INDEX", "END_INDEX", "SHARD_ID", "TOTAL_SHARDS")}
-    for k in ("START_INDEX", "END_INDEX", "SHARD_ID", "TOTAL_SHARDS"):
+    env_keys = ("START_INDEX", "END_INDEX", "SHARD_ID", "TOTAL_SHARDS", "MAX_RUNTIME_MINUTES")
+    saved_environ = {k: os.environ.get(k) for k in env_keys}
+    for k in env_keys:
         os.environ.pop(k, None)
     for k, v in (env_overrides or {}).items():
         os.environ[k] = v
@@ -174,11 +165,9 @@ def sandbox(dataset_items, extra_ns=None, gpu_count=2, responses=None, env_overr
     if extra_ns:
         ns.update(extra_ns)
     try:
-        exec(  # noqa: S102 - the harness intentionally executes the notebook under test
+        exec(
             compile(SRC, SCRIPT_PATH, "exec"), ns
         )
-        # NOTE: yield INSIDE try - the with-body must run while tmp/ fakes are live;
-        # cleanup happens only after the body finishes (or raises).
         ns["_transformers"] = tr_mod
         ns["_tmp_dir"] = tmp
         yield ns
@@ -193,9 +182,7 @@ def sandbox(dataset_items, extra_ns=None, gpu_count=2, responses=None, env_overr
         _teardown_fakes()
         shutil.rmtree(tmp, ignore_errors=True)
 
-# ------------------------------------------------------------------ fixtures
 def make_items(n, good_predicate=lambda i: i % 2 == 0 or i == 5):
-    """n items; failing-image ids chosen so B-test gets 4 good / 2 bad for n=6."""
     items = []
     for i in range(n):
         url = OK_URL if good_predicate(i) else BAD_URL
@@ -209,43 +196,35 @@ def make_items(n, good_predicate=lambda i: i % 2 == 0 or i == 5):
     return items
 
 RESPONSES_B = [
-    '{"fit":"casual","colors":["blue","white"]}',          # thinking disabled -> direct JSON
+    '{"fit":"casual","colors":["blue","white"]}',
     'Sure! {"style":"sporty"} hope it helps',
-    '<think>hmm</think>{"nested":{"deep":1},"top":2}',     # stray think block stripped
+    '<think>hmm</think>{"nested":{"deep":1},"top":2}',
     'no json here at all',
 ]
 
-# ================================================================== tests ==
 class TestScript(unittest.TestCase):
     def test_A_compiles_and_install_flags(self):
-        compile(SRC, SCRIPT_PATH, "exec")  # syntax gate
+        compile(SRC, SCRIPT_PATH, "exec")
         items = make_items(0)
         with sandbox(items, responses=[], gpu_count=2) as _ns:
             cmds = "\n".join(STATE["commands"])
             self.assertIn("--no-deps accelerate bitsandbytes qwen-vl-utils", cmds)
             self.assertIn("--no-deps git+https://github.com/huggingface/transformers.git", cmds)
             self.assertIn("tokenizers>=0.23.1", cmds)
-            # Dataset downloads with explicit -O into scratch (never CWD/output)
             self.assertIn("wget -q -O", cmds)
             self.assertIn("https://huggingface.co/datasets/barryallen16/fitcheck-annotate-dataset/resolve/main/task_a_dataset.jsonl", cmds)
-            # Regression guard: dataset must NOT land in /kaggle/working output
             self.assertNotIn("cd /kaggle/working", cmds)
             self.assertIn("task_a_labeled_prior.jsonl", cmds)
-        # uv path must carry --system (Kaggle has no active venv); pip path stays quiet
         self.assertIn("uv pip install --system", cmds)
         self.assertNotIn("pip install --system", cmds.replace("uv pip install --system", ""))
 
     def test_model_class_is_image_text_to_text(self):
-        # Regression guard for the critical fix: must not USE AutoModelForCausalLM.
-        # (A comment mentioning the name is fine; a from_pretrained call is not.)
         self.assertNotIn("AutoModelForCausalLM.from_pretrained", SRC)
         self.assertIn("AutoModelForImageTextToText.from_pretrained", SRC)
 
     def test_B_single_shard_end_to_end(self):
-        items = make_items(6)  # ids 1,3 -> bad URLs
+        items = make_items(6)
         with sandbox(items, responses=RESPONSES_B, gpu_count=2) as ns:
-            # id1/id3 fail on image download; id5 emits unparseable text and is
-            # SKIPPED by the fine-tuning guard instead of being written raw.
             self.assertEqual(ns["success_count"], 3)
             self.assertEqual(ns["failed_count"], 3)
             self.assertEqual(len(ns["items_to_process"]), 6)
@@ -257,27 +236,21 @@ class TestScript(unittest.TestCase):
             self.assertEqual(len(rows), 3)
             self.assertEqual([r["id"] for r in rows], ["id0", "id2", "id4"])
 
-            # teacher_output parsing matrix (clean JSON only - no raw_output row:
-            # unparseable generations must never enter the fine-tuning dataset)
             self.assertEqual(rows[0]["teacher_output"], {"fit": "casual", "colors": ["blue", "white"]})
             self.assertEqual(rows[1]["teacher_output"], {"style": "sporty"})
             self.assertEqual(rows[2]["teacher_output"], {"nested": {"deep": 1}, "top": 2})
-            # enable_thinking=False must be requested on the chat template
             self.assertIn("enable_thinking=False", SRC)
 
             for r in rows:
                 self.assertEqual(r["grounding_metadata"]["cat"], "c" + r["id"][2:])
                 self.assertTrue(r["url"].startswith("https://shop.example"))
 
-            # model class actually exercised
             self.assertEqual(ns["_transformers"]._last_model.loaded_with["model_id"], "Qwen/Qwen3.6-27B")
             self.assertTrue(ns["_transformers"]._last_model.loaded_with["quantization_config"].bnb)
-            # keep rows alive post-sandbox for optional debugging
             globals()["_LAST_ROWS_B"] = rows
 
     def test_C_resume_skips_processed(self):
         items = make_items(6)
-        # Persistent dir across TWO execs (sandbox() wipes its tmp, so manage manually)
         tmp = tempfile.mkdtemp(prefix="task_a_resume_")
         try:
             with open(os.path.join(tmp, "task_a_dataset.jsonl"), "w", encoding="utf-8") as f:
@@ -288,20 +261,16 @@ class TestScript(unittest.TestCase):
             saved_cwd = os.getcwd(); os.chdir(tmp)
             try:
                 ns = {"__name__": "__main__"}
-                exec(  # noqa: S102 - the harness intentionally executes the notebook under test
+                exec(
                     compile(SRC, SCRIPT_PATH, "exec"), ns
                 )
                 out_path = ns["OUTPUT_FILE"]
-                # 3 clean rows; id5's unparseable output was skipped, not written
                 with open(out_path, encoding="utf-8") as f:
                     self.assertEqual(len(f.readlines()), 3)
 
-                # second execution in SAME dir -> everything already done except
-                # failures. id1/id3 fail on images again; id5 is retried and its
-                # fresh (still unparseable) response is skipped by the guard.
                 STATE["responses"] = ["also no json"]
                 ns2 = {"__name__": "__main__"}
-                exec(  # noqa: S102 - the harness intentionally executes the notebook under test
+                exec(
                     compile(SRC, SCRIPT_PATH, "exec"), ns2
                 )
                 self.assertEqual(ns2["success_count"], 0)
@@ -334,10 +303,9 @@ class TestScript(unittest.TestCase):
         for shard in range(3):
             union.extend(seen[shard])
         self.assertEqual(sorted(union), [f"id{i}" for i in range(5)])
-        self.assertEqual(len(union), len(set(union)))  # zero overlap
+        self.assertEqual(len(union), len(set(union)))
 
     def test_E_env_vars_coerced_to_int(self):
-        # Regression: pre-fix, env strings reached slicing -> TypeError crash
         items = make_items(6, good_predicate=lambda i: True)
         with sandbox(items,
                      responses=['{"v":1}', '{"v":2}', '{"v":3}'],
@@ -368,7 +336,7 @@ class TestScript(unittest.TestCase):
             saved = os.getcwd(); os.chdir(tmp)
             try:
                 with self.assertRaises(SystemExit) as cm:
-                    exec(  # noqa: S102 - the harness intentionally executes the notebook under test
+                    exec(
                         compile(SRC, SCRIPT_PATH, "exec"), {"__name__": "__main__"}
                     )
                 self.assertEqual(cm.exception.code, 1)
@@ -378,14 +346,11 @@ class TestScript(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_H_truncated_generation_is_skipped(self):
-        # Regression guard for the fine-tuning dataset: a generation that hits
-        # MAX_NEW_TOKENS must NOT be written even if its text parses as JSON -
-        # truncated labels would poison student-model training data.
         items = make_items(2, good_predicate=lambda i: True)
         old_tail = STATE["gen_tail"]
         try:
             STATE.update({
-                "gen_tail": [7] * (384 + 50),  # completion length > MAX_NEW_TOKENS
+                "gen_tail": [7] * (384 + 50),
                 "commands": [],
             })
             with sandbox(items, responses=['{"fit":"x"}', '{"fit":"y"}'], gpu_count=2) as ns:
@@ -398,6 +363,29 @@ class TestScript(unittest.TestCase):
                 self.assertFalse(content.strip())
         finally:
             STATE["gen_tail"] = old_tail
+
+    def test_I_max_runtime_minutes_stops_loop_early(self):
+        items = make_items(4, good_predicate=lambda i: True)
+        orig_time = time.time
+
+        def fake_time():
+            return 1000.0 if len(STATE["responses"]) >= 4 else 1070.0
+
+        time.time = fake_time
+        try:
+            with sandbox(
+                items,
+                responses=['{"ok":1}', '{"ok":2}', '{"ok":3}', '{"ok":4}'],
+                gpu_count=2,
+                env_overrides={"MAX_RUNTIME_MINUTES": "1"},
+            ) as ns:
+                self.assertEqual(ns["MAX_RUNTIME_MINUTES"], 1.0)
+                self.assertEqual(ns["success_count"], 1)
+                with open(ns["OUTPUT_FILE"], encoding="utf-8") as f:
+                    rows = [json.loads(ln) for ln in f if ln.strip()]
+                self.assertEqual([r["id"] for r in rows], ["id0"])
+        finally:
+            time.time = orig_time
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

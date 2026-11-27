@@ -60,6 +60,7 @@ class TestPortToKaggle(unittest.TestCase):
             self.assertIn("_get_shard_var", out_src)
             self.assertIn("line_buffering", out_src)
             self.assertIn("WORKING_DIR", out_src)
+            self.assertIn("MAX_RUNTIME_MINUTES", out_src)
             self.assertIn("shard-fallback-header", rep["fixes"])
             # idempotent: second run adds nothing
             _r2, tmp2, out2, rep2 = run_port(out_src)

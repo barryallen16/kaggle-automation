@@ -7,6 +7,7 @@ from database import (
     get_run_by_id,
     get_runs_count,
     get_session_holding_runs,
+    get_total_gpu_hours,
     update_run_status,
 )
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
@@ -133,7 +134,12 @@ class LaunchRunJSONRequest(BaseModel):
 async def list_runs(limit: int = 100):
     limit = max(1, min(limit, 500))
     runs = get_all_runs(limit=limit)
-    return {"success": True, "runs": runs, "total": get_runs_count()}
+    return {
+        "success": True,
+        "runs": runs,
+        "total": get_runs_count(),
+        "total_gpu_hours": get_total_gpu_hours(),
+    }
 
 
 @router.get("/active")
@@ -154,26 +160,27 @@ async def get_run_details(run_id: str):
 async def launch_run_json(payload: LaunchRunJSONRequest):
     tracker.begin("launch_run")
     try:
-        capped = await _session_cap_rejection(
-            payload.account_username, payload.accelerator
-        )
-        if capped:
-            return capped
-        env_vars = await _quota_capped_env(
-            payload.account_username, payload.accelerator, payload.env_vars
-        )
-        result = await KaggleService.push_kernel(
-            account_username=payload.account_username,
-            title=payload.title,
-            code_content=payload.code_content,
-            filename=payload.filename,
-            accelerator=payload.accelerator,
-            enable_internet=payload.enable_internet,
-            is_trial=payload.is_trial,
-            timeout_seconds=payload.timeout_seconds,
-            env_vars=env_vars,
-        )
-        return result
+        async with KaggleService._get_account_lock(payload.account_username):
+            capped = await _session_cap_rejection(
+                payload.account_username, payload.accelerator
+            )
+            if capped:
+                return capped
+            env_vars = await _quota_capped_env(
+                payload.account_username, payload.accelerator, payload.env_vars
+            )
+            result = await KaggleService.push_kernel(
+                account_username=payload.account_username,
+                title=payload.title,
+                code_content=payload.code_content,
+                filename=payload.filename,
+                accelerator=payload.accelerator,
+                enable_internet=payload.enable_internet,
+                is_trial=payload.is_trial,
+                timeout_seconds=payload.timeout_seconds,
+                env_vars=env_vars,
+            )
+            return result
     except HTTPException:
         raise
     except Exception as e:
@@ -198,19 +205,23 @@ async def upload_and_launch(
         code_content = content_bytes.decode("utf-8", errors="ignore")
         filename = file.filename or "notebook.ipynb"
 
-        env_vars = await _quota_capped_env(account_username, accelerator, None)
-        result = await KaggleService.push_kernel(
-            account_username=account_username,
-            title=title,
-            code_content=code_content,
-            filename=filename,
-            accelerator=accelerator,
-            enable_internet=enable_internet,
-            is_trial=is_trial,
-            timeout_seconds=timeout_seconds,
-            env_vars=env_vars,
-        )
-        return result
+        async with KaggleService._get_account_lock(account_username):
+            capped = await _session_cap_rejection(account_username, accelerator)
+            if capped:
+                return capped
+            env_vars = await _quota_capped_env(account_username, accelerator, None)
+            result = await KaggleService.push_kernel(
+                account_username=account_username,
+                title=title,
+                code_content=code_content,
+                filename=filename,
+                accelerator=accelerator,
+                enable_internet=enable_internet,
+                is_trial=is_trial,
+                timeout_seconds=timeout_seconds,
+                env_vars=env_vars,
+            )
+            return result
     except HTTPException:
         raise
     except Exception as e:

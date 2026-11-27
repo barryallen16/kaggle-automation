@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from config import KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT, LOGS_DIR, is_gpu_accelerator
+from config import KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT, is_gpu_accelerator
 from database import create_distributed_workload, update_workload_status, utcnow_iso
 
 from services import availability
@@ -136,8 +136,6 @@ class WorkloadDistributor:
         from datetime import datetime, timedelta
 
         from database import get_all_runs, get_run_by_id
-
-        from services.kaggle_service import KaggleService
 
         cutoff = datetime.now(UTC) - timedelta(minutes=cls.RECLAIM_WINDOW_MINUTES)
         candidates: dict[str, list[dict[str, Any]]] = {a: [] for a in accounts}
@@ -490,21 +488,8 @@ class WorkloadDistributor:
             }
         )
 
-        # 4b. One-time log purge for this batch BEFORE any shard writes (shards
-        # pass purge_logs=False so they skip their own).
-        try:
-            LOGS_DIR.mkdir(parents=True, exist_ok=True)
-            KaggleService._purge_previous_logs()
-            logger.info(f"Workload {workload_id}: purged logs once for {R} shards")
-        except Exception as e:
-            logger.warning(f"Workload {workload_id}: log purge skipped: {e}")
-
-        # 5. Launch: throttled across accounts, staggered within an account
-        # Without throttle, 16 accounts *2 sessions = 16 concurrent
-        # `kaggle kernels push` at t=0 -> 2GB spike -> `killed uvicorn`.
-        # push_sem caps global concurrent pushes to DISTRIBUTED_PUSH_CONCURRENCY.
-        push_sem = asyncio.Semaphore(DISTRIBUTED_PUSH_CONCURRENCY)
-
+        # 5. Launch: KaggleService.push_kernel enforces the global push semaphore,
+        # staggered within an account to avoid concurrent cap/409 races.
         async def launch_shard(shard: dict[str, Any]):
             idx = shard["shard_index"]
             account = shard["account_username"]
@@ -528,22 +513,20 @@ class WorkloadDistributor:
             if budget and "MAX_RUNTIME_MINUTES" not in shard_env:
                 shard_env["MAX_RUNTIME_MINUTES"] = str(budget)
 
-            async with push_sem:
-                result = await KaggleService.push_kernel(
-                    account_username=account,
-                    title=shard_title,
-                    code_content=injected_code,
-                    filename=filename,
-                    accelerator=accelerator,
-                    enable_internet=enable_internet,
-                    is_trial=is_trial,
-                    timeout_seconds=timeout_seconds,
-                    env_vars=shard_env or None,
-                    workload_id=workload_id,
-                    shard_index=idx,
-                    total_shards=R,
-                    purge_logs=False,  # purged once per batch above
-                )
+            result = await KaggleService.push_kernel(
+                account_username=account,
+                title=shard_title,
+                code_content=injected_code,
+                filename=filename,
+                accelerator=accelerator,
+                enable_internet=enable_internet,
+                is_trial=is_trial,
+                timeout_seconds=timeout_seconds,
+                env_vars=shard_env or None,
+                workload_id=workload_id,
+                shard_index=idx,
+                total_shards=R,
+            )
             return {
                 "shard_index": idx,
                 "account": account,

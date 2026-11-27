@@ -1,10 +1,3 @@
-"""Tests for kernel-status normalization and the raw-HTTP versioned fetcher.
-
-The helper must never trust a 'log-only' output page (the signature of the
-stop-stub/latest trap), must try every plausible versionLabel spelling, and
-status parsing must fold enum-style CLI output into our five statuses.
-"""
-
 import json
 import os
 import shutil
@@ -47,14 +40,6 @@ class TestStatusNormalization(unittest.TestCase):
         self.assertEqual(n(""), "unknown")
 
     def test_cancel_acknowledged_does_not_leak_but_is_not_stopped(self):
-        """Raw enum names must never reach the DB - but this one maps to its
-        own status, NOT 'stopped'.
-
-        CANCEL_ACKNOWLEDGED is a teardown state: the run is finished but Kaggle
-        still counts the session against the batch GPU cap. Mapping it to
-        'stopped' is what let a blocked account report zero running kernels
-        while holding seven sessions. See tests/test_stuck_session_slots.py.
-        """
         n = _svc()._normalize_kernel_status
         self.assertEqual(n("kernelworkerstatus.cancel_acknowledged"), "cancelling")
         self.assertEqual(n("CANCEL_ACKNOWLEDGED"), "cancelling")
@@ -97,10 +82,8 @@ class TestVersionedHelper(unittest.TestCase):
                 label = body.get("versionLabel", "")
                 seen_labels.append(label)
                 if label == "7":
-                    # Stub-like: only a log -> must be REJECTED
                     return httpx.Response(200, json={"files": [], "log": "stub log here"})
                 if label == "version-7":
-                    # Correct cancelled-version snapshot
                     return httpx.Response(200, json={
                         "files": [{"url": "http://test/f/task_a_labeled_shard_0.jsonl",
                                    "fileName": "task_a_labeled_shard_0.jsonl"}],
@@ -112,9 +95,8 @@ class TestVersionedHelper(unittest.TestCase):
 
         code = self._run_fetch(handler, out_dir)
         self.assertEqual(code, 0)
-        self.assertIn("7", seen_labels)          # plain spelling tried first
-        self.assertIn("version-7", seen_labels)  # fallback spelling accepted
-        # Regression guard: must hit api.kaggle.com, not www.kaggle.com
+        self.assertIn("7", seen_labels)
+        self.assertIn("version-7", seen_labels)
         for u in seen_urls:
             if u.startswith("http://test/"):
                 continue
@@ -135,7 +117,7 @@ class TestVersionedHelper(unittest.TestCase):
             return httpx.Response(404)
 
         code = self._run_fetch(handler, out_dir)
-        self.assertEqual(code, 3)  # nothing recoverable - explicit signal
+        self.assertEqual(code, 3)
         self.assertEqual(os.listdir(out_dir), [])
 
     def test_3_meta_reads_current_version(self):
@@ -192,7 +174,6 @@ class TestVersionedHelper(unittest.TestCase):
         def handler(request):
             if request.url.path == "/v1/kernels.KernelsApiService/GetKernel":
                 return httpx.Response(200, json={"metadata": {"currentVersionNumber": 8, "lastRunTime": "2026-08-30T10:00:00Z"}})
-            # ListKernels has null to simulate the real bug
             if request.url.path == "/v1/kernels.KernelsApiService/ListKernels":
                 return httpx.Response(200, json={"kernels": [{"ref": "owner/my-slug", "currentVersionNumber": None}]})
             return httpx.Response(404)
@@ -252,7 +233,6 @@ class TestVersionedHelper(unittest.TestCase):
 
         out_dir = tempfile.mkdtemp(prefix="vh_zip_")
 
-        # Create a mock zip
         zip_buf = io.BytesIO()
         with zipfile.ZipFile(zip_buf, "w") as zf:
             zf.writestr("test_shard.jsonl", "SHARD_DATA_V7")
@@ -278,6 +258,57 @@ class TestVersionedHelper(unittest.TestCase):
         self.assertTrue(os.path.isfile(saved_file))
         with open(saved_file, "r") as f:
             self.assertEqual(f.read(), "SHARD_DATA_V7")
+
+    def test_8_list_versions_fallback_probe_runs_when_meta_missing(self):
+        import httpx
+
+        import app.services.kaggle_versioned_output as helper
+
+        def handler(request):
+            body = json.loads(request.content or b"{}")
+            if request.url.path == "/v1/kernels.KernelsApiService/GetKernel":
+                return httpx.Response(404, json={"error": "not found"})
+            if request.url.path == "/v1/kernels.KernelsApiService/ListKernels":
+                return httpx.Response(200, json={"kernels": []})
+            if request.url.path == "/v1/kernels.KernelsApiService/GetKernelSessionStatus":
+                lbl = body.get("versionLabel", "")
+                if lbl in ("1", "2", "3"):
+                    return httpx.Response(200, json={"status": "complete"})
+                return httpx.Response(404)
+            if request.url.path == "/v1/kernels.KernelsApiService/ListKernelFiles":
+                lbl = body.get("versionLabel", "")
+                if lbl in ("1", "2", "3"):
+                    return httpx.Response(200, json={"files": [{"name": f"v{lbl}.csv", "size": 10}]})
+                return httpx.Response(404)
+            return httpx.Response(404)
+
+        real_client = httpx.Client
+        helper.httpx.Client = staticmethod(lambda *a, **kw: real_client(
+            *a, transport=httpx.MockTransport(handler), **kw))
+        try:
+            vers = helper.list_versions("owner", "missing-meta", max_versions=10)
+        finally:
+            helper.httpx.Client = real_client
+
+        self.assertEqual([v["version"] for v in vers], [3, 2, 1])
+
+    def test_9_list_versions_returns_empty_on_404(self):
+        import httpx
+
+        import app.services.kaggle_versioned_output as helper
+
+        def handler(request):
+            return httpx.Response(404, json={"error": "not found"})
+
+        real_client = httpx.Client
+        helper.httpx.Client = staticmethod(lambda *a, **kw: real_client(
+            *a, transport=httpx.MockTransport(handler), **kw))
+        try:
+            vers = helper.list_versions("owner", "no-such-kernel", max_versions=10)
+        finally:
+            helper.httpx.Client = real_client
+
+        self.assertEqual(vers, [])
 
 
 if __name__ == "__main__":

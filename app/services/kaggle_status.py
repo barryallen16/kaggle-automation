@@ -29,8 +29,8 @@ async def get_kernel_status(account_username: str, kernel_ref: str) -> dict[str,
     cmd = [cli, "kernels", "status", kernel_ref]
     env = AccountManager.get_account_env(account_username)
 
+    proc = None
     try:
-        proc = None
         async with KaggleService._get_kernel_status_semaphore():
             proc = await asyncio.wait_for(
                 asyncio.create_subprocess_exec(
@@ -53,38 +53,61 @@ async def get_kernel_status(account_username: str, kernel_ref: str) -> dict[str,
 
         return {"success": True, "raw": out_str, "status": status}
     except TimeoutError:
-        if proc is not None:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-            try:
-                await asyncio.wait_for(proc.wait(), timeout=5)
-            except Exception:
-                pass
         logger.warning(
             f"get_kernel_status timed out for {kernel_ref} (@{account_username})"
         )
         return {"success": False, "status": "unknown", "error": "timeout"}
     except Exception as e:
         return {"success": False, "status": "unknown", "error": str(e)}
+    finally:
+        if proc is not None and getattr(proc, "returncode", None) is None:
+            if hasattr(proc, "kill"):
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            if hasattr(proc, "wait"):
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except Exception:
+                    pass
 
 
 async def fetch_full_logs(account_username: str, kernel_ref: str) -> str:
     """Fetches the latest execution logs using `kaggle kernels logs <kernel_ref>`."""
+    from services.kaggle_service import KaggleService
+
     cli = get_kaggle_cli_path()
     cmd = [cli, "kernels", "logs", kernel_ref]
     env = AccountManager.get_account_env(account_username)
+    proc = None
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        stdout, stderr = await proc.communicate()
+        async with KaggleService._get_kernel_status_semaphore():
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=KERNEL_STATUS_TIMEOUT_SECONDS
+            )
         logs = stdout.decode("utf-8", errors="ignore")
         err = stderr.decode("utf-8", errors="ignore")
         return logs if logs else err
+    except TimeoutError:
+        return f"Error fetching logs: timed out after {KERNEL_STATUS_TIMEOUT_SECONDS}s"
     except Exception as e:
         return f"Error fetching logs: {e!s}"
+    finally:
+        if proc is not None and getattr(proc, "returncode", None) is None:
+            if hasattr(proc, "kill"):
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+            if hasattr(proc, "wait"):
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except Exception:
+                    pass

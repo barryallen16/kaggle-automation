@@ -81,18 +81,7 @@ def build_env_preamble(env_vars: dict[str, str], is_notebook: bool) -> str:
     text = "\n".join(lines)
     if is_notebook:
         nb = json.loads(ensure_executable_notebook(text))
-        cell_src = nb["cells"][0]["source"]
-        if isinstance(cell_src, list):
-            cell_src = "".join(cell_src)
-        nb["cells"] = [
-            {
-                "cell_type": "code",
-                "execution_count": None,
-                "metadata": {"tags": ["kaggle-automation-env"]},
-                "outputs": [],
-                "source": cell_src,
-            }
-        ] + nb["cells"]
+        nb["cells"][0]["metadata"] = {"tags": ["kaggle-automation-env"]}
         return json.dumps(nb)
     return text + "\n"
 

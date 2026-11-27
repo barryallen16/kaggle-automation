@@ -3,7 +3,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -132,6 +131,18 @@ class KaggleService:
     # spike -> OOM-killed the server. All stops funnel through this global cap.
     STOP_CONCURRENCY_LIMIT = max(1, int(os.getenv("STOP_CONCURRENCY", "3")))
     _semaphores: ClassVar[dict[str, tuple[int, asyncio.Semaphore]]] = {}
+    _account_locks: ClassVar[dict[str, tuple[int, asyncio.Lock]]] = {}
+
+    @classmethod
+    def _get_account_lock(cls, account_username: str) -> asyncio.Lock:
+        """Per-account lock serializing slot check + push across concurrent launches."""
+        loop_id = id(asyncio.get_running_loop())
+        key = AccountManager.resolve_effective_username(account_username) or "_default"
+        cached = cls._account_locks.get(key)
+        if cached is None or cached[0] != loop_id:
+            cached = (loop_id, asyncio.Lock())
+            cls._account_locks[key] = cached
+        return cached[1]
 
     @classmethod
     def _get_semaphore(cls, name: str, limit: int) -> asyncio.Semaphore:
@@ -186,26 +197,6 @@ class KaggleService:
         return _ensure_executable_notebook(code_content)
 
     @classmethod
-    def _purge_previous_logs(cls) -> None:
-        """Wipes data/logs/ so each new launch starts with a clean log directory.
-
-        Best-effort per file: a log currently held open by a live follower
-        (Windows locks open files) is simply skipped and will age out later.
-        """
-        try:
-            LOGS_DIR.mkdir(parents=True, exist_ok=True)
-            for f in LOGS_DIR.iterdir():
-                try:
-                    if f.is_file():
-                        f.unlink()
-                    elif f.is_dir():
-                        shutil.rmtree(f, ignore_errors=True)
-                except OSError:
-                    continue
-        except Exception as e:
-            logger.warning(f"Could not purge old logs: {e}")
-
-    @classmethod
     def _resolve_free_title(
         cls,
         account_username: str,
@@ -248,7 +239,6 @@ class KaggleService:
         workload_id: str | None = None,
         shard_index: int | None = None,
         total_shards: int | None = None,
-        purge_logs: bool = True,
     ) -> dict[str, Any]:
         """Prepares metadata, writes code, and executes `kaggle kernels push`."""
         # Resolve stale/renamed account names up front: when the first push of
@@ -357,12 +347,6 @@ class KaggleService:
         if effective_timeout:
             cmd.extend(["-t", str(effective_timeout)])
 
-        # Log purge is done once per distributed workload by WorkloadDistributor,
-        # not per shard: per-shard purge raced when 16-32 shards launched in
-        # parallel (each shard deleted logs just created by its peers).
-        if purge_logs:
-            cls._purge_previous_logs()
-
         log_file_path = LOGS_DIR / f"{run_id}.log"
         log_file_path.parent.mkdir(parents=True, exist_ok=True)
         header = (
@@ -399,9 +383,21 @@ class KaggleService:
                     )
                     # Bounded like stop_external_kernel: a hung CLI subprocess
                     # would otherwise wedge the request with no timeout at all.
-                    stdout, stderr = await asyncio.wait_for(
-                        proc.communicate(), timeout=120
-                    )
+                    try:
+                        stdout, stderr = await asyncio.wait_for(
+                            proc.communicate(), timeout=120
+                        )
+                    except TimeoutError:
+                        if proc.returncode is None:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+                            try:
+                                await asyncio.wait_for(proc.wait(), timeout=5)
+                            except Exception:
+                                pass
+                        raise
                 out_str = stdout.decode("utf-8", errors="ignore")
                 err_str = stderr.decode("utf-8", errors="ignore")
 
@@ -863,6 +859,7 @@ class KaggleService:
         cmd = [cli, "kernels", "push", "-p", str(stop_dir), "-t", "60"]
         env = AccountManager.get_account_env(account_username)
         tracker.begin(f"ext_stop:{account_username}/{kernel_ref}")
+        proc = None
         try:
             async with cls._get_push_semaphore():
                 proc = await asyncio.create_subprocess_exec(
@@ -879,6 +876,15 @@ class KaggleService:
                 return {"success": True, "message": f"Stop signal sent to {kernel_ref}"}
             return {"success": False, "error": combined[-500:] or "push failed"}
         except TimeoutError:
+            if proc is not None and proc.returncode is None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5)
+                except Exception:
+                    pass
             return {"success": False, "error": "stop push timed out"}
         except Exception as e:
             return {"success": False, "error": str(e)}
@@ -982,14 +988,30 @@ class KaggleService:
         stop_delays = cls.CONFLICT_RETRY_DELAYS
         cap_delays = cls.SESSION_CAP_RETRY_DELAYS
         for attempt in range(max(len(stop_delays), len(cap_delays)) + 1):
+            proc = None
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=env,
-                )
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+                async with cls._get_push_semaphore():
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env=env,
+                    )
+                    try:
+                        stdout, stderr = await asyncio.wait_for(
+                            proc.communicate(), timeout=120
+                        )
+                    except TimeoutError:
+                        if proc.returncode is None:
+                            try:
+                                proc.kill()
+                            except Exception:
+                                pass
+                            try:
+                                await asyncio.wait_for(proc.wait(), timeout=5)
+                            except Exception:
+                                pass
+                        raise
                 out_str = stdout.decode("utf-8", errors="ignore")
                 err_str = stderr.decode("utf-8", errors="ignore")
                 combined = (out_str + "\n" + err_str).strip()

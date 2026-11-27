@@ -1,5 +1,3 @@
-"""Kernel env injection: HF_TOKEN/WANDB_* flow through, ZROK_* never does."""
-
 import importlib
 import os
 import sys
@@ -25,9 +23,6 @@ class TestKernelEnvDefaults(unittest.TestCase):
         self.assertEqual(env.get("HF_TOKEN"), "hf_x")
 
     def test_zrok_keys_never_injected(self):
-        # The zrok public share was removed: publishing a public endpoint out
-        # of a Kaggle kernel breaks the Kaggle AUP and gets accounts
-        # suspended. Even if the env still holds a token, do not inject it.
         cfg = _config()
         with mock.patch.dict(
             os.environ, {"ZROK_TOKEN": "tok123", "ZROK_NAME": "llama"}, clear=False
@@ -43,6 +38,19 @@ class TestKernelEnvDefaults(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=True):
             defaults = cfg.get_kernel_env_defaults()
         self.assertNotIn("HF_TOKEN", defaults)
+
+    def test_build_env_preamble_notebook_has_single_env_cell(self):
+        import json
+
+        from services.kaggle_kernel_identity import build_env_preamble
+
+        raw = build_env_preamble({"HF_TOKEN": "hf_abc", "MAX_RUNTIME_MINUTES": "120"}, True)
+        nb = json.loads(raw)
+        self.assertEqual(len(nb["cells"]), 1)
+        self.assertEqual(nb["cells"][0]["metadata"].get("tags"), ["kaggle-automation-env"])
+        src = "".join(nb["cells"][0]["source"])
+        self.assertEqual(src.count("os.environ['HF_TOKEN']"), 1)
+        self.assertEqual(src.count("os.environ['MAX_RUNTIME_MINUTES']"), 1)
 
 
 if __name__ == "__main__":

@@ -269,15 +269,19 @@ class AccountManager:
             ["datasets", "list", "-m", "-v"],
             ["models", "list", "-m", "-v"],
         ]:
+            proc = None
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    cli,
-                    *subcmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    env=env,
-                )
-                stdout, _stderr = await proc.communicate()
+                async with cls._get_quota_semaphore():
+                    proc = await asyncio.create_subprocess_exec(
+                        cli,
+                        *subcmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        env=env,
+                    )
+                    stdout, _stderr = await asyncio.wait_for(
+                        proc.communicate(), timeout=30
+                    )
                 out_str = stdout.decode("utf-8", errors="ignore")
 
                 if out_str:
@@ -285,8 +289,22 @@ class AccountManager:
                     rows = list(csv_reader)
                     if rows and "ref" in rows[0]:
                         return rows[0]["ref"].split("/")[0]
+            except TimeoutError:
+                logger.warning(f"Timed out querying {subcmd}")
             except Exception as e:
                 logger.error(f"Error querying {subcmd}: {e}")
+            finally:
+                if proc is not None and getattr(proc, "returncode", None) is None:
+                    if hasattr(proc, "kill"):
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    if hasattr(proc, "wait"):
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=5)
+                        except Exception:
+                            pass
 
         return f"kaggle_{hashlib.sha256(key.encode('utf-8')).hexdigest()[:8]}"
 
@@ -371,21 +389,102 @@ class AccountManager:
                 "error": f"quota lookup timed out after {cls.QUOTA_CALL_TIMEOUT_SECONDS}s",
             }
 
+    @staticmethod
+    def _parse_seconds_str(val: Any) -> float | None:
+        if val is None:
+            return None
+        s = str(val).strip().lower()
+        if s.endswith("s"):
+            s = s[:-1].strip()
+        try:
+            return float(s)
+        except ValueError:
+            return None
+
+    @classmethod
+    async def _fetch_quota_http(cls, token: str) -> dict[str, Any] | None:
+        """Queries GetAcceleratorQuotaStatistics directly (low RAM, includes timeReserved)."""
+        import httpx
+
+        base = (os.getenv("KAGGLE_API_BASE") or "https://api.kaggle.com").rstrip("/")
+        url = f"{base}/v1/kernels.KernelsApiService/GetAcceleratorQuotaStatistics"
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(
+                    url,
+                    json={},
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+                if resp.status_code >= 400:
+                    return None
+                data = resp.json()
+        except Exception:
+            return None
+        if not isinstance(data, dict) or (
+            "gpuQuota" not in data and "tpuQuota" not in data
+        ):
+            return None
+
+        def _entry(q: dict | None, default_name: str, default_limit: float) -> dict[str, Any]:
+            q = q or {}
+            used_s = cls._parse_seconds_str(q.get("timeUsed")) or 0.0
+            limit_s = cls._parse_seconds_str(q.get("totalTimeAllowed"))
+            reserved_s = cls._parse_seconds_str(q.get("timeReserved"))
+            used_h = round(used_s / 3600.0, 2)
+            limit_h = round(limit_s / 3600.0, 2) if limit_s and limit_s > 0 else default_limit
+            pct = min(100.0, round((used_h / limit_h) * 100, 1)) if limit_h > 0 else 0.0
+            out: dict[str, Any] = {
+                "name": default_name,
+                "used": used_h,
+                "limit": limit_h,
+                "unit": "hours",
+                "percent": pct,
+            }
+            if reserved_s is not None:
+                out["reserved_seconds"] = reserved_s
+            return out
+
+        return {
+            "raw": [data],
+            "gpu": _entry(data.get("gpuQuota"), "GPU (T4 x 2)", 30.0),
+            "tpu": _entry(data.get("tpuQuota"), "TPU VM v3-8", 20.0),
+        }
+
     @classmethod
     async def _fetch_quota_unthrottled(cls, username: str) -> dict[str, Any]:
-        """Runs `kaggle quota -v` and parses the output into structured quota info."""
+        """Fetches quota via Kaggle HTTP API when a Bearer token exists, else `kaggle quota -v`."""
+        env = cls.get_account_env(username)
+        token = (env.get("KAGGLE_API_TOKEN") or "").strip()
+        if token:
+            http_summary = await cls._fetch_quota_http(token)
+            if http_summary is not None:
+                return http_summary
+
         cli = get_kaggle_cli_path()
         cmd = [cli, "quota", "-v"]
-        env = cls.get_account_env(username)
+        proc = None
 
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=env,
-            )
-            stdout, stderr = await proc.communicate()
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    env=env,
+                )
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=30)
+            finally:
+                if proc is not None and getattr(proc, "returncode", None) is None:
+                    if hasattr(proc, "kill"):
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                    if hasattr(proc, "wait"):
+                        try:
+                            await asyncio.wait_for(proc.wait(), timeout=5)
+                        except Exception:
+                            pass
             out_str = stdout.decode("utf-8", errors="ignore")
             err_str = stderr.decode("utf-8", errors="ignore")
 
@@ -531,8 +630,10 @@ class AccountManager:
 
             # Save in database
             save_account(temp_id, username, api_key_or_token, quota_data)
+            saved = get_account_by_username(username)
+            actual_id = saved["id"] if saved else temp_id
 
-            return {"id": temp_id, "username": username, "quota": quota_data}
+            return {"id": actual_id, "username": username, "quota": quota_data}
 
     @classmethod
     async def initialize_from_env(cls):
@@ -580,6 +681,12 @@ class AccountManager:
         cls.setup_account_files(username, acc["api_key"])
         quota = await cls.fetch_quota(username)
         save_account(acc["id"], username, acc["api_key"], quota)
+        try:
+            from services.session_monitor import SessionMonitor
+
+            SessionMonitor._quota_cache.pop(username, None)
+        except Exception:
+            pass
         return quota
 
     @staticmethod

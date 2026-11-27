@@ -16,10 +16,12 @@ from config import (
 MONITOR_CONCURRENCY = max(1, int(os.getenv("MONITOR_CONCURRENCY", "3")))
 from database import (
     get_active_runs,
+    get_session_holding_runs,
     update_run_status,
     update_run_telegram_flag,
 )
 
+from services import availability, kaggle_logs
 from services.account_manager import AccountManager
 from services.kaggle_kernel_identity import TERMINAL_KERNEL_STATUSES
 from services.kaggle_service import KaggleService
@@ -36,6 +38,9 @@ class SessionMonitor:
     # dashboard with many shards queries each account at most once per TTL.
     QUOTA_CACHE_TTL_SECONDS = 300
     _quota_cache: ClassVar[dict[str, tuple[float, dict[str, Any]]]] = {}
+    CANCELLING_REAP_INTERVAL_SECONDS = 120
+    CANCELLING_GRACE_SECONDS = 300
+    _last_cancelling_reap: float = 0.0
 
     @staticmethod
     def _parse_start(value: str) -> datetime:
@@ -91,6 +96,13 @@ class SessionMonitor:
                 await cls._monitor_task
             except asyncio.CancelledError:
                 pass
+        for proc in list(kaggle_logs._active_stream_processes.values()):
+            if getattr(proc, "returncode", None) is None:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        kaggle_logs._active_stream_processes.clear()
         logger.info("Background Kaggle Session Monitor stopped.")
 
     @classmethod
@@ -105,20 +117,108 @@ class SessionMonitor:
     @classmethod
     async def check_active_sessions(cls):
         active_runs = get_active_runs()
-        if not active_runs:
-            return
-
         now = datetime.now(UTC)
-        sem = asyncio.Semaphore(MONITOR_CONCURRENCY)
+        if active_runs:
+            sem = asyncio.Semaphore(MONITOR_CONCURRENCY)
 
-        async def guarded(run):
-            async with sem:
+            async def guarded(run):
+                async with sem:
+                    try:
+                        await cls._check_single_run(run, now)
+                    except Exception as e:
+                        logger.error(f"Error checking run {run.get('id')}: {e}")
+
+            await asyncio.gather(*[guarded(r) for r in active_runs])
+
+        mono = time.monotonic()
+        if (mono - cls._last_cancelling_reap) >= cls.CANCELLING_REAP_INTERVAL_SECONDS:
+            cls._last_cancelling_reap = mono
+            try:
+                await cls.reap_stale_cancelling_runs(now)
+            except Exception as e:
+                logger.warning(f"Error reaping cancelling runs: {e}")
+
+    @classmethod
+    async def reap_stale_cancelling_runs(cls, now: datetime | None = None):
+        """Releases 'cancelling' rows once Kaggle actually freed their session slot.
+
+        12h-expired kernels stay in CANCEL_ACKNOWLEDGED permanently on Kaggle
+        even after the slot is released (timeReserved == 0s). Without reaping
+        them here, those runs remain 'Stuck' forever in the UI and block new
+        launches.
+        """
+        holding = get_session_holding_runs()
+        if not holding:
+            return
+        now = now or datetime.now(UTC)
+
+        by_account: dict[str, list[dict[str, Any]]] = {}
+        for r in holding:
+            by_account.setdefault(r["account_username"], []).append(r)
+
+        for acc, rows in by_account.items():
+            # Refresh quota once per account to read live gpu.reserved_seconds
+            try:
+                quota = await AccountManager.refresh_account_quota(acc)
+            except Exception:
+                quota = {}
+            held_refs: set[str] | None = None
+
+            for r in rows:
+                rid = r["id"]
+                ref = r["kernel_ref"]
+                acc_str = (r.get("accelerator") or "").lower()
+                is_tpu = "tpu" in acc_str or any(
+                    x in acc_str for x in ("v3-8", "v5e", "v6e")
+                )
+                if is_tpu:
+                    reserved_s = (quota.get("tpu") or {}).get("reserved_seconds")
+                elif is_gpu_accelerator(acc_str):
+                    reserved_s = (quota.get("gpu") or {}).get("reserved_seconds")
+                else:
+                    reserved_s = None
+                end_str = r.get("end_time") or r.get("start_time")
                 try:
-                    await cls._check_single_run(run, now)
-                except Exception as e:
-                    logger.error(f"Error checking run {run.get('id')}: {e}")
+                    end_dt = cls._parse_start(end_str)
+                    age_s = (now - end_dt).total_seconds()
+                except Exception:
+                    age_s = 0.0
 
-        await asyncio.gather(*[guarded(r) for r in active_runs])
+                status_resp = await KaggleService.get_kernel_status(acc, ref)
+                st = status_resp.get("status", "unknown")
+                if st in ("complete", "error", "stopped", "canceled"):
+                    update_run_status(
+                        rid,
+                        "stopped" if st in ("stopped", "canceled") else st,
+                        status_resp.get("raw", "Reaped after cancellation"),
+                        r.get("end_time") or now.isoformat(),
+                    )
+                    continue
+
+                if reserved_s is not None and reserved_s == 0:
+                    kind = "TPU" if is_tpu else "GPU"
+                    update_run_status(
+                        rid,
+                        "stopped",
+                        f"Session slot released (0s reserved {kind} quota on Kaggle)",
+                        r.get("end_time") or now.isoformat(),
+                    )
+                    continue
+
+                if age_s >= cls.CANCELLING_GRACE_SECONDS:
+                    if held_refs is None:
+                        try:
+                            held = await availability.held_version_sessions(acc)
+                            held_refs = {h["kernel_ref"] for h in held}
+                        except Exception:
+                            held_refs = set()
+                    if ref not in held_refs:
+                        update_run_status(
+                            rid,
+                            "stopped",
+                            "Session slot released (no active kernel version on Kaggle)",
+                            r.get("end_time") or now.isoformat(),
+                        )
 
     @classmethod
     async def _check_single_run(cls, run: dict[str, Any], now: datetime):

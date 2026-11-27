@@ -107,6 +107,16 @@ def init_db():
         )
     """)
 
+    # Query indexes for active/cancelling lookups, account scoping, and workload shards
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_runs_account ON runs(account_username)"
+    )
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_runs_workload ON runs(workload_id)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_runs_start_time ON runs(start_time DESC)"
+    )
+
     conn.commit()
     conn.close()
 
@@ -276,6 +286,48 @@ def get_runs_count() -> int:
     row = conn.execute("SELECT COUNT(*) AS n FROM runs").fetchone()
     conn.close()
     return int(row["n"]) if row else 0
+
+
+def get_workload_runs() -> list[dict[str, Any]]:
+    """All runs belonging to any distributed workload, newest first."""
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT * FROM runs WHERE workload_id IS NOT NULL ORDER BY start_time DESC"
+    ).fetchall()
+    runs = [dict(r) for r in rows]
+    conn.close()
+    return runs
+
+
+def get_total_gpu_hours() -> float:
+    """Total finished GPU hours across ALL runs in the DB (not capped at 500)."""
+    from config import is_gpu_accelerator
+
+    conn = get_db_connection()
+    rows = conn.execute(
+        "SELECT accelerator, start_time, end_time, timeout_seconds FROM runs "
+        "WHERE end_time IS NOT NULL"
+    ).fetchall()
+    conn.close()
+    total = 0.0
+    for r in rows:
+        if not is_gpu_accelerator(r["accelerator"]):
+            continue
+        try:
+            st = datetime.fromisoformat(str(r["start_time"]))
+            et = datetime.fromisoformat(str(r["end_time"]))
+            if st.tzinfo is None:
+                st = st.replace(tzinfo=UTC)
+            if et.tzinfo is None:
+                et = et.replace(tzinfo=UTC)
+            hours = (et - st).total_seconds() / 3600.0
+            if hours <= 0:
+                continue
+            cap = float(r["timeout_seconds"] or 43200) / 3600.0
+            total += min(hours, cap)
+        except (TypeError, ValueError):
+            continue
+    return round(total, 2)
 
 
 def get_active_runs() -> list[dict[str, Any]]:

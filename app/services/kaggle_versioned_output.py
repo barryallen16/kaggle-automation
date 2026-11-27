@@ -1,53 +1,24 @@
-"""Versioned Kaggle kernel-output fetcher (internal helper, run as a script).
-
-Talks straight to Kaggle's kagglesdk HTTP routes (POST + camelCase JSON +
-Bearer access_token) so we depend ONLY on httpx - not on the `kaggle`
-python package being installed in this environment.
-
-Routes replicated from kagglesdk 2.2.4 (kaggle_http_client.py
-KaggleEnv.PROD + kagglesdk/kernels/services/kernels_api_service.py):
-  POST https://api.kaggle.com/v1/kernels.KernelsApiService/ListKernels
-       body {user, search, page, pageSize}
-       -> {kernels: [{ref, currentVersionNumber, ...}]}
-  POST https://api.kaggle.com/v1/kernels.KernelsApiService/ListKernelSessionOutput
-       body {userName, kernelSlug, pageSize, versionLabel?, pageToken?}
-       -> {files: [{url, fileName}], log, nextPageToken}
-
-(The earlier draft hit www.kaggle.com/api/v1/... - Kaggle redirects
-that to its marketing HTML site, which is why the helper returned a
-"failed (rc=1)" with an HTML body. The actual API base is
-api.kaggle.com and the path embeds the gRPC-style service+method name.)
-
-Kaggle finalizes EVERY version (complete/error/cancelled) with its own
-output snapshot; version_label selects which snapshot we get. A result
-containing ONLY a log counts as FAILURE - that is the signature of the
-stop-stub/latest-only trap this helper exists to escape.
-
-Usage (account credentials come from the environment):
-  python kaggle_versioned_output.py meta  OWNER SLUG
-      -> {"current_version_number": N}
-  python kaggle_versioned_output.py fetch OWNER SLUG VERSION OUT_DIR
-      -> {"saved": [names], "tried": [labels], "notes": [...]}
-  python kaggle_versioned_output.py list OWNER [SEARCH] [PAGE] [PAGESIZE]
-      -> {"kernels": [{ref, title, slug, author, lastRunTime, currentVersionNumber, ...}]}
-
-Exit codes: 0 ok (meta may report null), 3 nothing-recovered (fetch),
-1 hard error, 2 usage.
-"""
-
-import io
 import json
 import os
+import shutil
 import sys
+import tempfile
 import zipfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
-# Production API base. The kagglesdk resolves this to
-# https://api.kaggle.com in KaggleEnv.PROD (see kagglesdk/kaggle_env.py).
 KAGGLE_BASE = os.getenv("KAGGLE_API_BASE", "https://api.kaggle.com")
+USAGE = (
+    "Usage:\n"
+    "  python kaggle_versioned_output.py meta  OWNER SLUG\n"
+    "  python kaggle_versioned_output.py fetch OWNER SLUG VERSION OUT_DIR\n"
+    "  python kaggle_versioned_output.py list OWNER [SEARCH] [PAGE] [PAGESIZE]\n"
+    "  python kaggle_versioned_output.py versions OWNER SLUG [MAX_VERSIONS]\n"
+    "  python kaggle_versioned_output.py log OWNER SLUG VERSION\n"
+)
 KERNELS_SERVICE = "kernels.KernelsApiService"
 TIMEOUT = float(os.getenv("VERSIONED_HTTP_TIMEOUT_SECONDS", "60"))
 
@@ -57,17 +28,10 @@ class KaggleError(Exception):
 
 
 def _version_labels(v: int) -> list[str]:
-    """All versionLabel spellings Kaggle has accepted; single source."""
     return [str(v), f"v{v}", f"{v}.0", f"version-{v}", f"version{v}", f"Version{v}"]
 
 
 def _is_permission_error(exc: Exception) -> bool:
-    """True when Kaggle denied the call itself (not a wrong label spelling).
-
-    A 403 PERMISSION_DENIED / kernels.get repeats identically for every
-    versionLabel candidate, so retrying the other spellings only spams the
-    log. Plain `kaggle kernels output` (different endpoint) still works.
-    """
     msg = str(exc or "")
     if "403" not in msg:
         return False
@@ -97,12 +61,9 @@ def _token(explicit: str | None = None) -> str:
 
 
 def _post(client: httpx.Client, method: str, payload: dict):
-    """POST to https://api.kaggle.com/v1/<service>/<method> with Bearer auth."""
     url = f"{KAGGLE_BASE}/v1/{KERNELS_SERVICE}/{method}"
     r = client.post(url, json=payload)
     if r.status_code >= 400:
-        # Truncate the body: a 200-OK HTML page is the signature of being
-        # routed to the marketing site (wrong host or wrong path).
         snippet = r.text[:200].replace("\n", " ")
         raise KaggleError(f"{method} -> HTTP {r.status_code}: {snippet}")
     try:
@@ -121,6 +82,52 @@ def _post(client: httpx.Client, method: str, payload: dict):
     return data
 
 
+def _safe_dest(out_dir: str, rel_name: str) -> str | None:
+    base = os.path.realpath(out_dir)
+    dest = os.path.realpath(os.path.join(base, rel_name))
+    try:
+        if os.path.commonpath([base, dest]) != base or dest == base:
+            return None
+    except ValueError:
+        return None
+    return dest
+
+
+def _is_same_origin(url: str) -> bool:
+    base = urlsplit(KAGGLE_BASE)
+    target = urlsplit(url)
+    if not target.netloc:
+        return True
+    return (target.scheme, target.netloc) == (base.scheme, base.netloc)
+
+
+def _stream_to_file(client: httpx.Client, url: str, dest: str) -> int:
+    if _is_same_origin(url):
+        with client.stream(
+            "GET", url, timeout=TIMEOUT, follow_redirects=True
+        ) as resp:
+            resp.raise_for_status()
+            with open(dest, "wb") as f:
+                f.writelines(resp.iter_bytes(256 * 1024))
+            return resp.status_code
+    extra = {"timeout": TIMEOUT, "follow_redirects": True}
+    transport = getattr(client, "_transport", None)
+    if (
+        isinstance(httpx.Client, type)
+        and transport is not None
+        and not isinstance(transport, httpx.HTTPTransport)
+    ):
+        extra["transport"] = transport
+    with (
+        httpx.Client(**extra) as anon_client,
+        anon_client.stream("GET", url) as resp,
+    ):
+        resp.raise_for_status()
+        with open(dest, "wb") as f:
+            f.writelines(resp.iter_bytes(256 * 1024))
+        return resp.status_code
+
+
 def _download_files(client: httpx.Client, files: list, out_dir: str) -> list:
     saved = []
     for item in files:
@@ -129,19 +136,16 @@ def _download_files(client: httpx.Client, files: list, out_dir: str) -> list:
         if not url or not name:
             continue
 
-        # Kaggle normally returns absolute URLs for the download endpoint, but
-        # if it ever returns a relative one, prepend the prod base.
         if url.startswith("/"):
             url = f"{KAGGLE_BASE}{url}"
 
-        dest = os.path.join(out_dir, name)
+        dest = _safe_dest(out_dir, name)
+        if not dest:
+            continue
         parent = os.path.dirname(dest)
         if parent:
             os.makedirs(parent, exist_ok=True)
-        with client.stream("GET", url, timeout=TIMEOUT) as resp:
-            resp.raise_for_status()
-            with open(dest, "wb") as f:
-                f.writelines(resp.iter_bytes(256 * 1024))
+        _stream_to_file(client, url, dest)
         saved.append(name)
     return saved
 
@@ -186,7 +190,6 @@ def _get_status(client: httpx.Client, owner: str, slug: str, label: str = ""):
 
 
 def _get_kernel_metadata(client: httpx.Client, owner: str, slug: str, label: str = ""):
-    """Fetches kernel metadata via GetKernel. Returns (current_version_number, last_run_time)."""
     payload = {"userName": owner, "kernelSlug": slug}
     if label:
         payload["versionLabel"] = label
@@ -219,7 +222,6 @@ def list_kernels(
     page_size: int = 20,
     token: str | None = None,
 ):
-    """Lists kernels owned/visible to owner via ListKernels API."""
     payload: dict = {"user": owner, "page": page, "pageSize": page_size}
     if search:
         payload["search"] = search
@@ -231,21 +233,14 @@ def list_kernels(
 
 
 def current_version(owner: str, slug: str, token: str | None = None) -> int | None:
-    """Latest pushed version number of the kernel, or None if undeterminable.
-
-    Prioritizes GetKernel as primary since ListKernels often returns null for
-    currentVersionNumber on batch/private kernels.
-    """
     tok = _token(token)
     with httpx.Client(
         timeout=TIMEOUT, headers={"Authorization": f"Bearer {tok}"}
     ) as client:
-        # Primary lookup: GetKernel metadata
         v, _ = _get_kernel_metadata(client, owner, slug)
         if v is not None and v > 0:
             return v
 
-        # Fallback 1: search via ListKernels
         want_ref = f"{owner}/{slug}"
         try:
             data = _post(
@@ -265,7 +260,6 @@ def current_version(owner: str, slug: str, token: str | None = None) -> int | No
         except KaggleError:
             pass
 
-        # Fallback 2: page through user's kernel list
         try:
             for page in range(1, 6):
                 data = _post(
@@ -294,7 +288,6 @@ def current_version(owner: str, slug: str, token: str | None = None) -> int | No
 
 
 def _probe_single_version(owner: str, slug: str, v: int, token: str) -> dict[str, Any]:
-    """Probes status, file count, and timestamp for a single version snapshot."""
     candidates = _version_labels(v)
     entry = {
         "version": v,
@@ -308,7 +301,6 @@ def _probe_single_version(owner: str, slug: str, v: int, token: str) -> dict[str
     with httpx.Client(
         timeout=TIMEOUT, headers={"Authorization": f"Bearer {token}"}
     ) as client:
-        # 1. GetKernel metadata per version if supported
         for label in candidates[:2]:
             try:
                 _, v_time = _get_kernel_metadata(client, owner, slug, label=label)
@@ -318,7 +310,6 @@ def _probe_single_version(owner: str, slug: str, v: int, token: str) -> dict[str
             except Exception:
                 pass
 
-        # 2. Probe status
         for label in candidates:
             try:
                 sdata = _get_status(client, owner, slug, label=label)
@@ -331,7 +322,6 @@ def _probe_single_version(owner: str, slug: str, v: int, token: str) -> dict[str
             except KaggleError:
                 continue
 
-        # 3. Probe output files via ListKernelFiles
         for label in candidates:
             try:
                 fdata = _list_files_page(
@@ -351,13 +341,11 @@ def _probe_single_version(owner: str, slug: str, v: int, token: str) -> dict[str
                         if times:
                             entry["creationTime"] = max(times)
                     break
-                # Version exists but published 0 files
                 entry["label"] = label
                 break
             except KaggleError:
                 continue
 
-        # 4. Fallback output files / logs check via ListKernelSessionOutput
         if not entry["hasOutput"]:
             for label in candidates:
                 try:
@@ -381,60 +369,42 @@ def _probe_single_version(owner: str, slug: str, v: int, token: str) -> dict[str
 def list_versions(
     owner: str, slug: str, max_versions: int = 20, token: str | None = None
 ) -> list[dict[str, Any]]:
-    """Lists per-version snapshots for a kernel, newest first.
-
-    Uses high-concurrency ThreadPoolExecutor so scanning up to 50 versions
-    completes in < 2 seconds.
-    """
     tok = _token(token)
     cur = current_version(owner, slug, token=tok)
 
-    # If current_version could not be directly resolved, probe descending with parallel batches
     if not cur:
-        with httpx.Client(
-            timeout=TIMEOUT, headers={"Authorization": f"Bearer {tok}"}
-        ) as client:
-            # Check existence via GetKernel
+        def check_v(test_v: int) -> int | None:
             try:
-                _get_kernel_metadata(client, owner, slug)
-                cur = 1
+                with httpx.Client(
+                    timeout=TIMEOUT, headers={"Authorization": f"Bearer {tok}"}
+                ) as c:
+                    for lbl in (str(test_v), f"v{test_v}"):
+                        try:
+                            _get_status(c, owner, slug, label=lbl)
+                            return test_v
+                        except KaggleError:
+                            pass
+                        try:
+                            fdata = _list_files_page(
+                                c, owner, slug, label=lbl, page_size=1
+                            )
+                            if fdata is not None:
+                                return test_v
+                        except KaggleError:
+                            pass
             except Exception:
                 pass
+            return None
 
-        if not cur:
-            # Parallel probe 50..1 to find highest active version
-            def check_v(test_v: int) -> int | None:
-                try:
-                    with httpx.Client(
-                        timeout=TIMEOUT, headers={"Authorization": f"Bearer {tok}"}
-                    ) as c:
-                        for lbl in (str(test_v), f"v{test_v}"):
-                            try:
-                                _get_status(c, owner, slug, label=lbl)
-                                return test_v
-                            except KaggleError:
-                                pass
-                            try:
-                                fdata = _list_files_page(
-                                    c, owner, slug, label=lbl, page_size=1
-                                )
-                                if fdata is not None:
-                                    return test_v
-                            except KaggleError:
-                                pass
-                except Exception:
-                    pass
-                return None
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            futures = {executor.submit(check_v, p): p for p in range(50, 0, -1)}
+            for fut in as_completed(futures):
+                res = fut.result()
+                if res and (cur is None or res > cur):
+                    cur = res
 
-            with ThreadPoolExecutor(max_workers=10) as executor:
-                futures = {executor.submit(check_v, p): p for p in range(50, 0, -1)}
-                for fut in as_completed(futures):
-                    res = fut.result()
-                    if res and (cur is None or res > cur):
-                        cur = res
-
-        if not cur:
-            return []
+    if not cur:
+        return []
 
     try:
         max_versions = max(1, min(50, int(max_versions or 20)))
@@ -448,7 +418,7 @@ def list_versions(
     if not versions_to_probe:
         return []
 
-    num_workers = min(10, max(1, len(versions_to_probe)))
+    num_workers = min(4, max(1, len(versions_to_probe)))
     results: dict[int, dict[str, Any]] = {}
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
@@ -470,14 +440,12 @@ def list_versions(
                     "hasOutput": False,
                 }
 
-    # Return sorted descending (newest version first)
     return [results[v] for v in versions_to_probe if v in results]
 
 
 def fetch_version_log(
     owner: str, slug: str, version: int, token: str | None = None
 ) -> str:
-    """Fetches log for a specific version snapshot."""
     candidates = _version_labels(version)
     tok = _token(token)
     with httpx.Client(
@@ -502,46 +470,69 @@ def fetch_version_log(
 def _download_via_kernel_output_api(
     client: httpx.Client, owner: str, slug: str, version: int, out_dir: str
 ) -> list[str]:
-    """Attempts to download version output via DownloadKernelOutput."""
     payload = {"ownerSlug": owner, "kernelSlug": slug, "versionNumber": int(version)}
+    url = f"{KAGGLE_BASE}/v1/{KERNELS_SERVICE}/DownloadKernelOutput"
+    tmp_zip: str | None = None
     try:
-        data = _post(client, "DownloadKernelOutput", payload)
-        redirect_url = data.get("url") if isinstance(data, dict) else None
-        if not redirect_url and isinstance(data, str) and data.startswith("http"):
-            redirect_url = data
+        redirect_url: str | None = None
+        with client.stream("POST", url, json=payload, follow_redirects=False) as resp:
+            if resp.status_code in (301, 302, 303, 307, 308):
+                redirect_url = resp.headers.get("location")
+            elif resp.status_code < 400:
+                ct = (resp.headers.get("content-type") or "").lower()
+                if "zip" in ct or "octet-stream" in ct:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tf:
+                        tmp_zip = tf.name
+                        tf.writelines(resp.iter_bytes(256 * 1024))
+                else:
+                    body = resp.read()
+                    try:
+                        data = json.loads(body)
+                        if isinstance(data, dict):
+                            redirect_url = data.get("url")
+                        elif isinstance(data, str) and data.startswith("http"):
+                            redirect_url = data
+                    except Exception:
+                        redirect_url = None
+
         if redirect_url:
             if redirect_url.startswith("/"):
                 redirect_url = f"{KAGGLE_BASE}{redirect_url}"
-            with client.stream("GET", redirect_url, timeout=TIMEOUT) as resp:
-                if resp.status_code == 200:
-                    buffer = io.BytesIO()
-                    for chunk in resp.iter_bytes(256 * 1024):
-                        buffer.write(chunk)
-                    buffer.seek(0)
-                    # Check if response is a valid zip archive
-                    if zipfile.is_zipfile(buffer):
-                        saved = []
-                        with zipfile.ZipFile(buffer) as zf:
-                            for member in zf.infolist():
-                                if not member.is_dir():
-                                    zf.extract(member, out_dir)
-                                    saved.append(member.filename)
-                        if saved:
-                            return saved
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tf:
+                tmp_zip = tf.name
+            _stream_to_file(client, redirect_url, tmp_zip)
+
+        if tmp_zip and os.path.isfile(tmp_zip) and zipfile.is_zipfile(tmp_zip):
+            saved: list[str] = []
+            with zipfile.ZipFile(tmp_zip) as zf:
+                for member in zf.infolist():
+                    if member.is_dir():
+                        continue
+                    dest = _safe_dest(out_dir, member.filename)
+                    if not dest:
+                        continue
+                    parent = os.path.dirname(dest)
+                    if parent:
+                        os.makedirs(parent, exist_ok=True)
+                    with zf.open(member, "r") as src, open(dest, "wb") as dst:
+                        shutil.copyfileobj(src, dst, length=256 * 1024)
+                    saved.append(member.filename)
+            if saved:
+                return saved
     except Exception:
         pass
+    finally:
+        if tmp_zip:
+            try:
+                os.unlink(tmp_zip)
+            except OSError:
+                pass
     return []
 
 
 def fetch_version_output(
     owner: str, slug: str, version: int, out_dir: str, token: str | None = None
 ):
-    """Downloads ONE specific version's output into out_dir.
-
-    Tries DownloadKernelOutput API first, then every plausible versionLabel spelling
-    with ListKernelSessionOutput; a page consisting solely of a log (stop-stub signature)
-    is rejected. Returns (saved_names, notes).
-    """
     os.makedirs(out_dir, exist_ok=True)
     candidates = _version_labels(version)
 
@@ -555,14 +546,12 @@ def fetch_version_output(
         headers={"Authorization": f"Bearer {tok}"},
         follow_redirects=True,
     ) as client:
-        # Route 1: DownloadKernelOutput direct bundle download
         direct_files = _download_via_kernel_output_api(
             client, owner, slug, version, out_dir
         )
         if direct_files:
             saved.extend(direct_files)
 
-        # Route 2: ListKernelSessionOutput with candidate labels
         if not saved:
             for label in candidates:
                 try:
@@ -581,12 +570,11 @@ def fetch_version_output(
                             break
 
                     tried.append(label)
-                    # Strip the log-only signature: real artifacts are required.
                     if page_files:
                         saved.extend(_download_files(client, page_files, out_dir))
                         if page_log:
                             got_log = page_log
-                        break  # this label worked - done
+                        break
                     notes.append(
                         f"label '{label}': no output files published for "
                         f"this version (log-only or empty)"
@@ -600,7 +588,6 @@ def fetch_version_output(
                         break
                     notes.append(f"label '{label}' failed: {e}")
 
-        # If files saved and log was captured, persist log file
         if saved and got_log:
             log_path = os.path.join(out_dir, f"{slug}.log")
             with open(log_path, "w", encoding="utf-8", newline="") as f:
@@ -621,7 +608,7 @@ def main(argv):
         print(json.dumps({"saved": saved, "tried": notes}))
         if saved:
             return 0
-        return 3  # nothing recoverable - caller decides fallback
+        return 3
 
     if len(argv) >= 1 and argv[0] == "list":
         if len(argv) < 2:
@@ -661,7 +648,7 @@ def main(argv):
         print(json.dumps({"log": log}))
         return 0
 
-    sys.stderr.write(__doc__ or "")
+    sys.stderr.write(USAGE)
     return 2
 
 
