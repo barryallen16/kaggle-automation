@@ -27,7 +27,6 @@ class ManualShardItem(BaseModel):
 
 
 def _json_or_400(text: str | None, name: str):
-    """json.loads for form fields that accept JSON; None for blank/non-JSON input."""
     text = (text or "").strip()
     if not text or text[0] not in "[{":
         return None
@@ -49,9 +48,7 @@ class DistributedLaunchJSON(BaseModel):
     is_trial: bool = False
     timeout_seconds: int | None = None
     env_vars: dict[str, str] | None = None
-    # Global session count (int) OR per-account overrides {username: 1|2}
     sessions_per_account: int | dict[str, int] = 2
-    # Optional manual shards configuration
     manual_shards: list[ManualShardItem] | None = None
 
 
@@ -113,14 +110,6 @@ async def launch_distributed_json(payload: DistributedLaunchJSON):
 
 @router.post("/{workload_id}/stop")
 async def stop_workload(workload_id: str):
-    """Stops every active shard of a distributed workload in one call.
-
-    Shards stuck in 'cancelling' (CANCEL_ACKNOWLEDGED) are finished for the run
-    but still hold a Kaggle session slot, and a stop stub cannot release one -
-    so they are NOT stop targets. When every shard ended up that way this used
-    to 404 with "No active shards found", which reads as a bug; name what is
-    actually holding the slots instead.
-    """
     if not any(w["id"] == workload_id for w in get_all_workloads()):
         raise HTTPException(status_code=404, detail=f"Workload {workload_id} not found")
 
@@ -194,7 +183,7 @@ async def stop_workload(workload_id: str):
 async def upload_and_launch_distributed(
     file: Annotated[UploadFile, File()],
     base_title: str = Form(...),
-    accounts: str = Form(...),  # JSON array string or comma separated
+    accounts: str = Form(...),
     total_items: int = Form(10000000),
     start_offset: int = Form(0),
     accelerator: str = Form("none"),
@@ -202,10 +191,9 @@ async def upload_and_launch_distributed(
     is_trial: bool = Form(False),
     timeout_seconds: int | None = Form(None),
     env_vars: str | None = Form(None),
-    sessions_per_account: str = Form("2"),  # "2" or JSON object {"user": 2}
+    sessions_per_account: str = Form("2"),
 ):
     try:
-        # Accounts: JSON array or comma-separated string
         acc_parsed = _json_or_400(accounts, "accounts")
         if isinstance(acc_parsed, list):
             acc_list = acc_parsed
@@ -235,7 +223,6 @@ async def upload_and_launch_distributed(
                 )
             parsed_env_vars = {str(k): str(v) for k, v in env_obj.items()}
 
-        # Sessions: plain int or per-account JSON object
         sessions_raw = (sessions_per_account or "2").strip()
         sessions_obj = _json_or_400(sessions_raw, "sessions_per_account")
         if isinstance(sessions_obj, dict):

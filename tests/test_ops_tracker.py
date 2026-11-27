@@ -5,7 +5,6 @@ from services.ops_tracker import run_stop_key, tracker, workload_stop_key
 
 class OpsTrackerTestCase(unittest.TestCase):
     def setUp(self):
-        # Fresh tracker per test so tests never leak into each other
         with tracker._lock:
             tracker._counts.clear()
             tracker._started.clear()
@@ -29,12 +28,11 @@ class OpsTrackerTestCase(unittest.TestCase):
         self.assertNotIn("workload_x", tracker.snapshot()["stopping_workload_ids"])
 
     def test_counted_keys_survive_multiple_owners(self):
-        # distribute / launch_run / refresh_quotas are shared keys counted per owner
         tracker.begin("distribute")
         tracker.begin("distribute")
         self.assertTrue(tracker.snapshot()["distributing"])
-        tracker.end("distribute")  # one owner finishes
-        self.assertTrue(tracker.snapshot()["distributing"])  # still another in flight
+        tracker.end("distribute")
+        self.assertTrue(tracker.snapshot()["distributing"])
         tracker.end("distribute")
         self.assertFalse(tracker.snapshot()["distributing"])
 
@@ -51,7 +49,6 @@ class OpsTrackerTestCase(unittest.TestCase):
         self.assertEqual(snap["stopping_kernel_refs"], [])
 
     def test_shared_key_begin_end_balance(self):
-        # end() on a never-begun key must not crash and must stay inactive
         tracker.end("distribute")
         self.assertFalse(tracker.snapshot()["distributing"])
 

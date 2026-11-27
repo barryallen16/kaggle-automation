@@ -1,5 +1,3 @@
-"""Second GPU session with a taken title launches as Title (2)."""
-
 import os
 import sys
 import unittest

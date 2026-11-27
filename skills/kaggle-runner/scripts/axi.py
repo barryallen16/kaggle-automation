@@ -1,12 +1,3 @@
-"""Agent eXperience Interface (AXI) output layer.
-
-Provides:
-  1. TOON (Token-Oriented Object Notation) encoding on stdout (~40% token savings).
-  2. AXI-compliant structured errors on stdout with actionable hints.
-  3. Consistent exit codes: 0 (success/no-op), 1 (blocked/error), 2 (usage error).
-  4. AxiParser: argparse that fails loud on stdout with valid flags listed.
-"""
-
 import argparse
 import math
 import os
@@ -265,7 +256,6 @@ def _root_array_lines(arr: list) -> list[str]:
 
 
 def toon(data: Any) -> str:
-    """Encodes a JSON-like value as TOON text without trailing newline."""
     if isinstance(data, dict):
         if not data:
             return ""
@@ -279,7 +269,6 @@ def toon(data: Any) -> str:
 
 
 def emit(data: Any, hints: list[str] | None = None) -> None:
-    """Prints TOON output to stdout, followed by next-step hints."""
     text = toon(data)
     if text:
         print(text)
@@ -288,7 +277,6 @@ def emit(data: Any, hints: list[str] | None = None) -> None:
 
 
 def print_hints(lines: list[str]) -> None:
-    """Prints AXI help hints array."""
     valid_hints = [line for line in lines if line]
     if not valid_hints:
         return
@@ -298,7 +286,6 @@ def print_hints(lines: list[str]) -> None:
 
 
 def fail(message: str, hint: str | None = None, code: int = 1) -> None:
-    """Outputs a structured error to stdout and exits."""
     print(f"error: {message}")
     if hint:
         print(f"help: {hint}")
@@ -306,12 +293,10 @@ def fail(message: str, hint: str | None = None, code: int = 1) -> None:
 
 
 def usage_error(message: str, hint: str | None = None) -> None:
-    """Usage error (bad flag, missing argument) on stdout with exit code 2."""
     fail(message, hint=hint, code=2)
 
 
 class AxiParser(argparse.ArgumentParser):
-    """ArgumentParser that outputs structured errors to stdout with valid flags listed."""
 
     def error(self, message: str) -> None:
         flags = []
@@ -329,7 +314,6 @@ class AxiParser(argparse.ArgumentParser):
 
 
 def bin_path(argv0: str | None = None) -> str:
-    """Returns absolute path of script with home directory collapsed to ~."""
     path = os.path.abspath(argv0 or sys.argv[0])
     home = os.path.expanduser("~")
     if path.startswith(home + os.sep):

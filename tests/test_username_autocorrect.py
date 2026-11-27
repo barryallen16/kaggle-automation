@@ -1,19 +1,3 @@
-"""Hermetic regression tests for the account username auto-correct race.
-
-Bug: adding a NEW Kaggle account leaves a placeholder username in the DB
-(kaggle_<hash>). The first push of a launch batch discovers the real username
-from Kaggle's response and renames the account row MID-BATCH - the second GPU
-session of the same account was already planned under the stale placeholder
-name and its token file had been deleted by the rename, so its push died with
-"Authentication required to call the Kaggle API.".
-
-Also covers the Stop-All OOM: every stop_kernel now runs under a global
-semaphore so a 36-shard workload cannot spawn 36 heavyweight stop pipelines at
-once.
-
-Uses a stub CLI + temp data dir - nothing touches production or real Kaggle.
-"""
-
 import os
 import shutil
 import sys
@@ -29,14 +13,6 @@ STUB_PATH = None
 
 
 def _write_stub() -> str:
-    """Stub `kaggle` CLI.
-
-    - `kernels push`: AUTHENTICATES only when KAGGLE_API_TOKEN is set (mirrors
-      the real CLI). On success prints a Kaggle URL owned by KAGGLE_STUB_OWNER
-      (the "real username" Kaggle reveals on a successful push) with a unique
-      slug per push so consecutive pushes create distinct kernel refs.
-    - anything else: silent success.
-    """
     if os.name == "nt":
         stub = os.path.join(DATA_TMP, "fake_kaggle.bat")
         content = (
@@ -105,7 +81,6 @@ def tearDownModule():
 
 
 def _fresh():
-    """Fresh DB + modules for each test (config paths bind at import)."""
     import importlib
 
     import config as cfg
@@ -120,8 +95,6 @@ def _fresh():
         except OSError:
             pass
 
-    # Reload order matters: ks/wd import AccountManager by name, so the manager
-    # (and its in-memory username-alias map) must be fresh before they reload.
     importlib.reload(cfg)
     importlib.reload(db)
     importlib.reload(am)
@@ -146,7 +119,6 @@ def _asyncio_run(coro):
 
 class TestUsernameAutoCorrect(unittest.TestCase):
     def test_alias_env_and_db_survive_rename(self):
-        """update_username keeps old credentials readable + registers an alias."""
         import config as cfg
         db, am = _fresh()
         db.save_account("id1", "kaggle_abc123", "tok_abc", None)
@@ -154,35 +126,22 @@ class TestUsernameAutoCorrect(unittest.TestCase):
 
         am.AccountManager.update_username("kaggle_abc123", "realuser1")
 
-        # Old name resolves to the current one
         self.assertEqual(am.AccountManager.resolve_effective_username("kaggle_abc123"), "realuser1")
         self.assertEqual(am.AccountManager.resolve_effective_username("realuser1"), "realuser1")
-        # Env built under the STALE name still carries the token (the old
-        # config dir was mirrored, not deleted - a second shard of the same
-        # batch must not hit "Authentication required").
         env = am.AccountManager.get_account_env("kaggle_abc123")
         self.assertEqual(env.get("KAGGLE_API_TOKEN"), "tok_abc")
-        # DB row moved to the real username
         self.assertIsNone(db.get_account_by_username("kaggle_abc123"))
         self.assertEqual(db.get_account_by_username("realuser1")["api_key"], "tok_abc")
         self.assertTrue(cfg.ACCOUNTS_DIR.joinpath("kaggle_abc123", ".kaggle", "access_token").exists())
 
     def test_two_gpu_sessions_survive_mid_batch_auto_correct(self):
-        """Fresh account (placeholder name) + sessions=2: BOTH pushes succeed.
-
-        Before the fix the first push renamed kaggle_<hash> -> owner_x and
-        deleted the old config dir; the second session then failed auth and the
-        workload only reached 'partial' with 1 shard.
-        """
         db, am = _fresh()
         import app.services.workload_distributor as wd
         importlib = __import__("importlib")
         importlib.reload(wd)
-        # Stub reveals the account's REAL username on the first push.
         os.environ["KAGGLE_STUB_OWNER"] = "owner_x"
         os.environ["KAGGLE_STUB_COUNTFILE"] = STUB_COUNT_FILE
         try:
-            # Seed a token file for the placeholder account (no DB row needed).
             am.AccountManager.setup_account_files("kaggle_hash1", "tok_x")
 
             res = _asyncio_run(wd.WorkloadDistributor.distribute_and_launch(
@@ -210,7 +169,6 @@ class TestUsernameAutoCorrect(unittest.TestCase):
             self.assertTrue(r["kernel_ref"].startswith("owner_x/"), r["kernel_ref"])
 
     def test_stop_kernel_globally_throttled(self):
-        """Stop-All fans out over every active shard; the pipeline stays bounded."""
         import asyncio
 
         import services.kaggle_service as ks

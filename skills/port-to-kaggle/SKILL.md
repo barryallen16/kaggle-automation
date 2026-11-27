@@ -3,56 +3,61 @@ name: port-to-kaggle
 description: Port a .py or .ipynb script to run in kaggle-automation (single + distributed sharding).
 ---
 
-# Port to Kaggle-Automation
+# Port to kaggle-automation
 
-Takes a Python script or notebook and rewrites it so the dashboard can push it to Kaggle as-is.
+Rewrites a `.py` script or `.ipynb` notebook so the server can push it to Kaggle as a single or distributed job.
 
-## Run it
+## Usage
 
 ```bash
 python skills/port-to-kaggle/scripts/port_to_kaggle.py in.py --out out.py --title "My Job" --accelerator nvidia-tesla-t4-x2
-python skills/port-to-kaggle/scripts/port_to_kaggle.py in.ipynb --out out.ipynb --check   # report only
+python skills/port-to-kaggle/scripts/port_to_kaggle.py in.ipynb --out out.ipynb --check
 python skills/port-to-kaggle/scripts/port_to_kaggle.py --version
 ```
 
-Same extension in → out. Safe to re-run (idempotent, tagged cells / marker checks).
+Keep the input and output extensions the same.
+Re-running on an already ported file is idempotent using tagged cells and marker checks.
+Pass `--check` to inspect issues without writing the output file.
 
-The JSON report ends with `next`: ready-to-run commands for the next step (re-check, push, sharded push).
-Errors print to stdout as `{"error": ..., "help": ...}` with exit code 2, so there is no traceback to parse.
+The JSON report ends with a `next` field containing copy-pasteable commands for checking, single launch, or distributed launch.
+Usage errors print `{"error": ..., "help": ...}` to stdout with exit code `2` instead of a traceback.
 
-## What it fixes (auto)
+## Automatic edits
 
-1. Notebook normalized via `KaggleService.ensure_executable_notebook` (kernelspec, raw-py wrap).
-2. Shard-fallback header (`SHARD_ID`, `TOTAL_SHARDS`, `START_INDEX`, `END_INDEX`, env-coerced to int) — standalone-safe, overridden by the distributor's real header at push time.
-3. Line-buffered stdout/stderr.
-4. `WORKING_DIR` (`/kaggle/working` else cwd) + `SCRATCH_DIR` (creates `/kaggle/tmp` on Kaggle, else working dir — never bare cwd, so large downloads don't land in published outputs).
+The tool normalizes notebooks via `KaggleService.ensure_executable_notebook` to add Python 3 kernelspec metadata and wrap raw Python into cells.
+It prepends a standalone shard fallback header (`SHARD_ID`, `TOTAL_SHARDS`, `START_INDEX`, `END_INDEX`, coerced to `int`) that the distributor overrides at push time.
+It also turns on line-buffered `stdout` and `stderr`, sets `WORKING_DIR` (`/kaggle/working` or current directory), and sets `SCRATCH_DIR` (`/kaggle/tmp` on Kaggle or `WORKING_DIR` locally) so large downloads do not bloat published outputs.
 
-## What it warns about (you fix)
+## Warnings
 
-- No GPU guard, title >50 chars, P100 accelerator, hardcoded `HF_TOKEN`/API keys, datasets into `/kaggle/working` (use scratch), unsharded `OUTPUT_FILE`, bare `pip install` (use `uv pip install --system`).
+The linter warns on missing GPU availability guards, titles longer than 50 characters, P100 accelerators, hardcoded `HF_TOKEN` or API keys, input downloads into `/kaggle/working`, `OUTPUT_FILE` paths that ignore `SHARD_ID`, and `pip install` calls without `uv pip install --system`.
 
-## Not handled here (server does it at push)
+## Server-side behavior
 
-Secrets preamble (`HF_TOKEN`, `WANDB_*`), `MAX_RUNTIME_MINUTES` quota cap, title auto-rename (`Title (2)` when taken) + shard-title fit into 50 chars, slug conflict check, output-version pinning. See `app/services/kaggle_service.py`, `app/routers/runs.py`, `app/services/workload_distributor.py`.
+The server injects `HF_TOKEN`, `WANDB_*`, and `MAX_RUNTIME_MINUTES` at push time in `app/services/kaggle_service.py`, `app/routers/runs.py`, and `app/services/workload_distributor.py`.
+It also handles 50-character title trimming for shards, duplicate-title renaming (`Title (2)`), slug conflict checks, and output version tracking.
 
-## Launch it
+## Launch
 
-The `next` commands in the report push the ported file straight to the server:
+Run via `kaggle_runner.py` (which loads `.env` automatically), or post directly with `curl`:
 
 ```bash
-# single run
+python skills/kaggle-runner/scripts/kaggle_runner.py run out.py \
+  --title "My Job" --accelerator nvidia-tesla-t4-x2
+
 curl -sS -X POST http://127.0.0.1:8000/api/runs/upload-and-launch \
+  -H "Authorization: Bearer $KABILA_APP_AUTH_TOKEN" \
   -F file=@out.py -F account_username=<account> \
   -F title="My Job" -F accelerator=nvidia-tesla-t4-x2
 
-# sharded across accounts
 curl -sS -X POST http://127.0.0.1:8000/api/distributed/upload-and-launch \
+  -H "Authorization: Bearer $KABILA_APP_AUTH_TOKEN" \
   -F file=@out.py -F base_title="My Job" -F accounts=<account1,account2> \
   -F total_items=10000000 -F accelerator=nvidia-tesla-t4-x2
 ```
 
-Add `-H 'Cookie: kaggle_auto_session=<value>'` to both calls when the server runs with `APP_AUTH_TOKEN` set.
+Pass `Authorization: Bearer <APP_AUTH_TOKEN>` whenever `APP_AUTH_TOKEN` is set on the server.
 
-## Reference port
+## Reference script
 
-`kaggle_batch_inference_task_a.py` — shard fallback, scratch/outputs split, `flush=True`, resume skip-set, `uv --system` installs.
+`kaggle_batch_inference_task_a.py` shows shard fallbacks, scratch versus output directories, `flush=True`, resume skip-sets, and `uv pip install --system`.

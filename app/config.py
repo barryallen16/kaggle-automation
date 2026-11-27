@@ -5,13 +5,9 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# Base directories
 BASE_DIR = Path(__file__).resolve().parent.parent
-# DATA_DIR can be redirected via env (used by the test suite for isolation).
-# Empty or whitespace values are treated as unset (Path("") would silently become cwd).
 _data_dir_env = (os.getenv("AUTOMATION_DATA_DIR") or "").strip()
 DATA_DIR = (
     Path(_data_dir_env).expanduser().resolve() if _data_dir_env else BASE_DIR / "data"
@@ -22,14 +18,11 @@ LOGS_DIR = DATA_DIR / "logs"
 OUTPUTS_DIR = DATA_DIR / "outputs"
 DB_PATH = DATA_DIR / "kaggle_automation.db"
 
-# Ensure all required directories exist
 for directory in [DATA_DIR, ACCOUNTS_DIR, NOTEBOOKS_DIR, LOGS_DIR, OUTPUTS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)
 
 
 def get_kaggle_cli_path() -> str:
-    """Robustly discovers the kaggle CLI executable path across OS and virtual environments."""
-    # 1. Check current running Python environment (e.g. .venv/Scripts on Windows, .venv/bin on Linux)
     is_windows = os.name == "nt"
     bin_folder = "Scripts" if is_windows else "bin"
     binary_name = "kaggle.exe" if is_windows else "kaggle"
@@ -38,59 +31,39 @@ def get_kaggle_cli_path() -> str:
     if current_venv_binary.exists():
         return str(current_venv_binary)
 
-    # 2. Check project root .venv directory
     project_venv_binary = BASE_DIR / ".venv" / bin_folder / binary_name
     if project_venv_binary.exists():
         return str(project_venv_binary)
 
-    # 3. Check system PATH
     found = shutil.which(binary_name) or shutil.which("kaggle")
     if found:
         return found
 
-    # 4. Fallback to env or default
     return os.getenv("KAGGLE_CLI_PATH", "kaggle")
 
 
-# Application Config
 KAGGLE_APIKEYS_RAW = os.getenv("KAGGLE_APIKEYS", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-# off = silent, errors-only = failures + 11h warning (default), full = everything.
 TELEGRAM_MODE = os.getenv("TELEGRAM_MODE", "errors-only")
-# Dashboard login secret. Leave EMPTY to disable auth (local dev only).
 APP_AUTH_TOKEN = os.getenv("APP_AUTH_TOKEN", "")
 KAGGLE_CLI_PATH = get_kaggle_cli_path()
 
-# Session limits (in seconds)
-MAX_KAGGLE_SESSION_SECONDS = 12 * 3600  # 12 hours
-WARNING_BEFORE_EXPIRY_SECONDS = 3600  # 1 hour warning
-TRIAL_RUN_DEFAULT_TIMEOUT = 300  # 5 minutes
+MAX_KAGGLE_SESSION_SECONDS = 12 * 3600
+WARNING_BEFORE_EXPIRY_SECONDS = 3600
+TRIAL_RUN_DEFAULT_TIMEOUT = 300
 
-# Kaggle's batch GPU session cap per account (single source; JS mirrors it).
 KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT = 2
 
 
 def is_gpu_accelerator(accelerator: object) -> bool:
-    """True for anything that burns weekly GPU quota (not none/default/cpu)."""
     a = str(accelerator or "").lower()
     return bool(a) and a not in ("none", "default", "cpu")
 
 
 def get_kernel_env_defaults() -> dict:
-    """Secrets to inject into every pushed kernel's environment.
-
-    Read lazily (re-reading .env) so adding/updating keys takes effect on the
-    NEXT launch without a server restart. HF_TOKEN + WANDB_* today - extend
-    here. A READ-scoped HF token suffices: kernels only download public
-    artifacts.
-
-    ZROK_* is deliberately NOT injected: the public-share serve scripts were
-    removed because tunneling a public endpoint out of a Kaggle kernel breaks
-    the Kaggle Acceptable Use Policy and gets accounts suspended.
-    """
     try:
-        load_dotenv()  # picks up newly added keys; never overrides existing env
+        load_dotenv()
     except Exception:
         pass
     out = {}

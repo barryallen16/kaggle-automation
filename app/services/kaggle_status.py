@@ -1,10 +1,3 @@
-"""Kernel status + log fetching (leaf module extracted from KaggleService).
-
-Small interface: get_kernel_status, fetch_full_logs. Throttling still goes
-through KaggleService's semaphore (test-pinned seam, see
-tests/test_username_autocorrect.py) via a lazy import to avoid a cycle.
-"""
-
 import asyncio
 import logging
 import os
@@ -14,7 +7,10 @@ from typing import Any
 from config import get_kaggle_cli_path
 
 from services.account_manager import AccountManager
-from services.kaggle_kernel_identity import normalize_kernel_status
+from services.kaggle_kernel_identity import (
+    normalize_kernel_status,
+    strip_kaggle_cli_warnings,
+)
 
 logger = logging.getLogger("kaggle_status")
 
@@ -22,8 +18,7 @@ KERNEL_STATUS_TIMEOUT_SECONDS = int(os.getenv("KERNEL_STATUS_TIMEOUT_SECONDS", "
 
 
 async def get_kernel_status(account_username: str, kernel_ref: str) -> dict[str, Any]:
-    """Queries `kaggle kernels status <kernel_ref>` - throttled + bounded."""
-    from services.kaggle_service import KaggleService  # lazy: test-pinned seam
+    from services.kaggle_service import KaggleService
 
     cli = get_kaggle_cli_path()
     cmd = [cli, "kernels", "status", kernel_ref]
@@ -44,9 +39,10 @@ async def get_kernel_status(account_username: str, kernel_ref: str) -> dict[str,
             stdout, _stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=KERNEL_STATUS_TIMEOUT_SECONDS
             )
-        out_str = stdout.decode("utf-8", errors="ignore").strip()
+        out_str = strip_kaggle_cli_warnings(
+            stdout.decode("utf-8", errors="ignore")
+        ).strip()
 
-        # Status parsing: e.g. 'username/slug has status "running"'
         status_match = re.search(r'status "(.*?)"', out_str, re.IGNORECASE)
         captured = status_match.group(1) if status_match else out_str
         status = normalize_kernel_status(captured)
@@ -74,7 +70,6 @@ async def get_kernel_status(account_username: str, kernel_ref: str) -> dict[str,
 
 
 async def fetch_full_logs(account_username: str, kernel_ref: str) -> str:
-    """Fetches the latest execution logs using `kaggle kernels logs <kernel_ref>`."""
     from services.kaggle_service import KaggleService
 
     cli = get_kaggle_cli_path()
@@ -92,8 +87,8 @@ async def fetch_full_logs(account_username: str, kernel_ref: str) -> str:
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=KERNEL_STATUS_TIMEOUT_SECONDS
             )
-        logs = stdout.decode("utf-8", errors="ignore")
-        err = stderr.decode("utf-8", errors="ignore")
+        logs = strip_kaggle_cli_warnings(stdout.decode("utf-8", errors="ignore"))
+        err = strip_kaggle_cli_warnings(stderr.decode("utf-8", errors="ignore"))
         return logs if logs else err
     except TimeoutError:
         return f"Error fetching logs: timed out after {KERNEL_STATUS_TIMEOUT_SECONDS}s"

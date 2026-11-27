@@ -1,12 +1,10 @@
-// Account Kernels Explorer - browses any notebook per account (even not from dashboard)
-
 let kernelsState = {
   account: null,
   page: 1,
   pageSize: 20,
   search: "",
   kernels: [],
-  selected: null, // {account, ref, title}
+  selected: null,
 };
 
 function populateKernelsAccountSelect() {
@@ -48,10 +46,8 @@ async function fetchAndPopulateKernelsAccounts() {
 
 function initKernelsTab() {
   populateKernelsAccountSelect();
-  // Always ensure accounts are loaded - direct fetch is more reliable than relying on AppState timing
-  fetchAndPopulateKernelsAccounts();
-  // Retry once after 1.5s in case first fetch raced with AppState refresh
-  setTimeout(() => {
+    fetchAndPopulateKernelsAccounts();
+    setTimeout(() => {
     const sel = document.getElementById('kernels-account-select');
     if (sel && sel.options.length <= 2) {
       fetchAndPopulateKernelsAccounts();
@@ -67,8 +63,7 @@ function updateKernelsPaginationUI() {
   const nextBtn = document.getElementById('btn-kernels-next');
   if (info) info.textContent = `Page ${kernelsState.page}`;
   if (prevBtn) prevBtn.disabled = kernelsState.page <= 1;
-  // next disabled until we know there is no next page - keep enabled, will disable after fetch if no token
-  if (nextBtn && !nextBtn.dataset.hasNext) nextBtn.disabled = true;
+    if (nextBtn && !nextBtn.dataset.hasNext) nextBtn.disabled = true;
 }
 
 function loadKernelsPage(delta) {
@@ -115,8 +110,7 @@ async function loadKernelsForAccount() {
     if (res.status === 401) { window.location.href = '/login'; return; }
     const data = await res.json();
     if (!data.success) throw new Error(data.detail || 'Failed to list kernels');
-    // Ensure reverse chronological (newest lastRunTime first) even if backend didn't sort
-    let kernels = data.kernels || [];
+        let kernels = data.kernels || [];
     try {
       kernels.sort((a, b) => {
         const ta = a.lastRunTime || a.creationTime || '';
@@ -142,11 +136,7 @@ async function loadKernelsForAccount() {
 
 function isTerminalStatus(st) {
   st = (st || '').toLowerCase();
-  // 'cancelling' is our normalized CANCEL_ACKNOWLEDGED - terminal for the run,
-  // but the kernel still holds a GPU session slot, so the Stop button must not
-  // invite another (useless) stop. The raw spellings still arrive unnormalized
-  // via kernelsState rows from ListKernels, so keep them too.
-  return st === 'complete' || st === 'error' || st === 'stopped' || st === 'failed'
+          return st === 'complete' || st === 'error' || st === 'stopped' || st === 'failed'
     || st === 'cancelled' || st === 'cancelling'
     || st === 'cancelacknowledged' || st === 'cancel_acknowledged';
 }
@@ -154,13 +144,12 @@ function updateStopButtonState(account, ref, status) {
   const terminal = isTerminalStatus(status);
   const stopping = isKernelStopping(account, ref);
   const disabled = stopping || terminal;
-  // Per-row stop buttons (filter by data-ref to avoid CSS.escape issues with slash)
-  document.querySelectorAll('button[data-ref]').forEach(btn => {
+    document.querySelectorAll('button[data-ref]').forEach(btn => {
     if (btn.dataset.ref === ref && btn.getAttribute('onclick') && btn.getAttribute('onclick').includes('kernelsStopRow')) {
       btn.disabled = disabled;
       btn.classList.toggle('opacity-40', disabled);
       btn.classList.toggle('cursor-not-allowed', disabled);
-      btn.title = stopping ? 'Stop is in progress — please wait' : (terminal ? `Already ${status} — stop not needed` : 'Stop this kernel if running');
+      btn.title = stopping ? 'Stop is in progress - please wait' : (terminal ? `Already ${status} - stop not needed` : 'Stop this kernel if running');
       if (disabled) btn.classList.add('opacity-60'); else btn.classList.remove('opacity-60');
       if (stopping && !btn.dataset.busyHtml) {
         btn.dataset.busyHtml = btn.innerHTML;
@@ -171,14 +160,13 @@ function updateStopButtonState(account, ref, status) {
       }
     }
   });
-  // Detail panel stop button if selected matches
-  if (kernelsState.selected && kernelsState.selected.ref === ref) {
+    if (kernelsState.selected && kernelsState.selected.ref === ref) {
     const detailBtn = document.getElementById('btn-kernels-stop');
     if (detailBtn) {
       detailBtn.disabled = disabled;
       detailBtn.classList.toggle('opacity-40', disabled);
       detailBtn.classList.toggle('cursor-not-allowed', disabled);
-      detailBtn.title = stopping ? 'Stop is in progress — please wait' : (terminal ? `Already ${status}` : 'Stop this kernel');
+      detailBtn.title = stopping ? 'Stop is in progress - please wait' : (terminal ? `Already ${status}` : 'Stop this kernel');
     }
   }
 }
@@ -193,8 +181,8 @@ function renderKernelsTable() {
     const ref = k.ref || '';
     const title = k.title || k.slug || ref;
     const lastRun = k.lastRunTime || k.creationTime || '';
-    const lastRunDisplay = lastRun ? formatKernelsTime(lastRun) : '<span class="text-slate-500">—</span>';
-    const version = k.currentVersionNumber != null ? `v${k.currentVersionNumber}` : '—';
+    const lastRunDisplay = lastRun ? formatKernelsTime(lastRun) : '<span class="text-slate-500">-</span>';
+    const version = k.currentVersionNumber != null ? `v${k.currentVersionNumber}` : '-';
     const statusCellId = `kstatus-${idx}`;
     return `
       <tr class="hover:bg-slate-800/30 transition">
@@ -218,8 +206,7 @@ function renderKernelsTable() {
     `;
   }).join('');
   refreshIcons();
-  // Auto-fetch status for first 6 rows with staggered calls to avoid burst (backend throttles to 3 anyway)
-  kernelsState.kernels.slice(0, 6).forEach((k, idx) => {
+    kernelsState.kernels.slice(0, 6).forEach((k, idx) => {
     setTimeout(() => fetchKernelStatus(kernelsState.account, k.ref, `kstatus-${idx}`), idx * 400);
   });
 }
@@ -240,8 +227,7 @@ async function kernelsStopRow(account, ref, title, btn) {
     const data = await res.json();
     if (data.success) {
       showToast(data.message || 'Stop signal sent', 'success');
-      // Find and refresh status cell for this ref
-      const idx = kernelsState.kernels.findIndex(k => k.ref === ref);
+            const idx = kernelsState.kernels.findIndex(k => k.ref === ref);
       if (idx >= 0) fetchKernelStatus(account, ref, `kstatus-${idx}`);
     } else {
       throw new Error(data.detail || data.error || 'Stop failed');
@@ -288,8 +274,7 @@ async function fetchKernelStatus(account, kernelRef, cellId) {
     else if (st === 'stopped') cls = 'bg-slate-800 text-slate-400 border-slate-700';
     else if (st === 'cancelling') cls = 'bg-amber-950 text-amber-300 border-amber-800';
     el.innerHTML = `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${cls}" title="${st === 'cancelling' ? 'Stuck tearing down - still holds a GPU session slot until the kernel is deleted' : esc(st)}">${esc(st.toUpperCase())}</span>`;
-    // Grey out stop if already terminal
-    updateStopButtonState(account, kernelRef, st);
+        updateStopButtonState(account, kernelRef, st);
   } catch (err) {
     el.innerHTML = `<span class="text-[10px] text-rose-400">err</span>`;
   }
@@ -303,25 +288,21 @@ function openKernelsDetail(account, ref, title) {
   if (titleEl) titleEl.textContent = title || ref;
   if (refEl) refEl.textContent = ref;
   if (panel) panel.classList.remove('hidden');
-  // Stop button initially disabled until we know status is running
-  const stopBtn = document.getElementById('btn-kernels-stop');
+    const stopBtn = document.getElementById('btn-kernels-stop');
   if (stopBtn) {
     stopBtn.disabled = true;
     stopBtn.classList.add('opacity-40', 'cursor-not-allowed');
     stopBtn.title = 'Checking status...';
   }
-  // Auto-refresh files and logs preview
-  kernelsListFiles();
+    kernelsListFiles();
   document.getElementById('kernels-logs-pre').textContent = 'Fetching logs...';
   kernelsFetchLogs();
-  // Also fetch status for this kernel to correctly enable/disable stop
-  fetch(`/api/kernels/status?account=${encodeURIComponent(account)}&kernel_ref=${encodeURIComponent(ref)}`)
+    fetch(`/api/kernels/status?account=${encodeURIComponent(account)}&kernel_ref=${encodeURIComponent(ref)}`)
     .then(r => r.json()).then(d => {
       if (d.success) updateStopButtonState(account, ref, d.status);
     }).catch(()=>{});
   refreshIcons();
-  // Scroll to detail
-  if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (panel) panel.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function closeKernelsDetail() {
@@ -508,7 +489,7 @@ function renderKernelVersions(versions) {
     return;
   }
   tbody.innerHTML = versions.map(v => {
-    const timeDisplay = v.creationTime ? formatKernelsTime(v.creationTime) : '<span class="text-slate-500">—</span>';
+    const timeDisplay = v.creationTime ? formatKernelsTime(v.creationTime) : '<span class="text-slate-500">-</span>';
     const status = (v.status || 'unknown').toLowerCase();
     let statusCls = 'bg-slate-800 text-slate-300 border-slate-700';
     if (status === 'complete') statusCls = 'bg-emerald-950 text-emerald-300 border-emerald-800';
@@ -575,8 +556,7 @@ async function kernelsStop() {
     const data = await res.json();
     if (data.success) {
       showToast(data.message || 'Stop signal sent', 'success');
-      // Refresh status for this kernel
-      const idx = kernelsState.kernels.findIndex(k => k.ref === ref);
+            const idx = kernelsState.kernels.findIndex(k => k.ref === ref);
       if (idx >= 0) fetchKernelStatus(account, ref, `kstatus-${idx}`);
     } else {
       throw new Error(data.detail || data.error || 'Stop failed');

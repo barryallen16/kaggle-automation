@@ -1,13 +1,3 @@
-"""Tests for output pulls on stopped runs.
-
-After a stop, the kernel's LATEST version is the exit-stub (log only). The
-run's real partial output lives on the CANCELLED version. Pull paths must:
-  1. prefer the run's pinned output_version,
-  2. rescue legacy unpinned stopped runs by probing (current - 1),
-  3. persist a rescued pin, and
-  4. never fall back to the stub when real version data exists.
-"""
-
 import os
 import shutil
 import sys
@@ -109,9 +99,9 @@ class TestStoppedRunPulls(unittest.TestCase):
 
         res = asyncio_run(fr.pull_files_from_kaggle("pinned"))
         self.assertTrue(res["success"])
-        self.assertEqual(calls["versioned"], [3])   # pinned version fetched...
-        self.assertEqual(calls["plain"], 0)          # ...stub never touched
-        self.assertEqual(calls["current_lookup"], 0)  # pin short-circuits lookup
+        self.assertEqual(calls["versioned"], [3])
+        self.assertEqual(calls["plain"], 0)
+        self.assertEqual(calls["current_lookup"], 0)
         names = [f["name"] for f in res["files"]]
         self.assertIn("shard.jsonl", names)
 
@@ -119,7 +109,6 @@ class TestStoppedRunPulls(unittest.TestCase):
         cfg, db, ks, fr = _fresh()
         _seed_run(db, "legacy", status="stopped")
 
-        # Current latest = the stop-stub (v9); cancelled run was v8.
         async def fake_current(account, ref):
             return 9
 
@@ -128,7 +117,7 @@ class TestStoppedRunPulls(unittest.TestCase):
         async def fake_versioned(account, ref, version, run_id):
             calls["versioned"].append(version)
             if version != 8:
-                return None  # stub v9 has nothing but a log -> helper yields no files
+                return None
             d = cfg.OUTPUTS_DIR / run_id
             d.mkdir(parents=True, exist_ok=True)
             (d / "partial.jsonl").write_text('{"id":1}\n', encoding="utf-8")
@@ -143,8 +132,7 @@ class TestStoppedRunPulls(unittest.TestCase):
 
         res = asyncio_run(fr.pull_files_from_kaggle("legacy"))
         self.assertTrue(res["success"])
-        self.assertEqual(calls["versioned"], [8])  # probed previous FIRST
-        # Rescued pin persisted so future pulls skip probing
+        self.assertEqual(calls["versioned"], [8])
         self.assertEqual(db.get_run_by_id("legacy")["output_version"], 8)
         self.assertIn("version 8", res["message"])
 
@@ -172,7 +160,7 @@ class TestStoppedRunPulls(unittest.TestCase):
 
         res = asyncio_run(fr.pull_files_from_kaggle("done"))
         self.assertTrue(res["success"])
-        self.assertEqual(calls["versioned"], [4])  # no probe for completed runs
+        self.assertEqual(calls["versioned"], [4])
         self.assertEqual(calls["plain"], 0)
         self.assertEqual(db.get_run_by_id("done")["output_version"], 4)
 

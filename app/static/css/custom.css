@@ -1,9 +1,3 @@
-/* Neo-Tokyo Night Theme - Kaggle Automation Dashboard
-   Crushed black, firebrick red + teal neon (Akira night palette).
-   Never synthwave: no magenta, no purple glow, no cyan wash. Neon stays
-   isolated and sparing - darkness does the heavy lifting. */
-/* Fonts served locally from /static/fonts (see fonts.css): Geist body, Geist Mono code, Geist Pixel display */
-
 :root {
   --bg-primary: #060608;
   --bg-secondary: #0e0e12;
@@ -25,8 +19,6 @@ body {
   color: #e3e3e0;
 }
 
-/* Native select popups ignore the closed <select> background and inherit
-   its text-white — white-on-white option names on a light OS theme. */
 select {
   color-scheme: dark;
 }
@@ -39,7 +31,6 @@ code, pre, .terminal-font {
   font-family: 'Geist Mono', 'JetBrains Mono', monospace;
 }
 
-/* Custom Scrollbars */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
@@ -55,7 +46,6 @@ code, pre, .terminal-font {
   background: #43434c;
 }
 
-/* Glassmorphism Card */
 .glass-panel {
   background: rgba(14, 14, 19, 0.88);
   backdrop-filter: blur(12px);
@@ -74,7 +64,6 @@ code, pre, .terminal-font {
   box-shadow: 0 4px 20px rgba(69, 200, 196, 0.08);
 }
 
-/* Glowing text and borders (kept minimal - flat theme) */
 .glow-cyan {
   box-shadow: 0 0 15px rgba(69, 200, 196, 0.3);
 }
@@ -83,12 +72,10 @@ code, pre, .terminal-font {
   box-shadow: 0 0 15px rgba(16, 185, 129, 0.3);
 }
 
-/* Pixel icons render crisp */
 svg[data-pixel-icon], .pixel-icon-svg {
   shape-rendering: crispEdges;
 }
 
-/* Pulse animation for active running badges */
 @keyframes pulse-ring {
   0% { transform: scale(0.95); opacity: 0.8; }
   50% { transform: scale(1.15); opacity: 0.4; }
@@ -99,27 +86,19 @@ svg[data-pixel-icon], .pixel-icon-svg {
   animation: pulse-ring 2s infinite ease-in-out;
 }
 
-/* Log Terminal */
 .terminal-window {
   background-color: #050507;
   border: 1px solid #1e1e24;
   color: #4cc9c4;
 }
 
-/* Tab Active State */
 .nav-tab.active {
   background: rgba(69, 200, 196, 0.08);
   border-color: var(--accent-cyan);
   color: var(--accent-cyan);
 }
 
-/* ------------------------------------------------------------------
-   Mobile responsiveness helpers
-   ------------------------------------------------------------------ */
 
-/* Compact table cells on phones - the px-6 utilities used by dynamically
-   rendered rows are too wide for ~360px screens. Tables themselves keep
-   horizontal scrolling via their overflow-x-auto wrappers. */
 @media (max-width: 640px) {
   table th,
   table td {
@@ -129,7 +108,6 @@ svg[data-pixel-icon], .pixel-icon-svg {
     padding-bottom: 0.65rem !important;
   }
 
-  /* iOS Safari auto-zooms when focusing inputs smaller than 16px */
   input,
   select,
   textarea {
@@ -137,21 +115,14 @@ svg[data-pixel-icon], .pixel-icon-svg {
   }
 }
 
-/* Keep long unbroken tokens (kernel refs, file names, log lines) from
-   stretching layouts sideways on narrow screens */
 pre, code, .terminal-font, .font-mono {
   overflow-wrap: anywhere;
 }
 
-/* ------------------------------------------------------------------
-   Collapsible desktop sidebar (expanded <-> icon-only rail)
-   ------------------------------------------------------------------ */
-/* #sidebar id beats Tailwind's .w-64, so the collapsed width wins */
 #sidebar.sidebar-collapsed {
   width: 4.5rem;
 }
 
-/* Logo: center the mark, hide the wordmark text */
 #sidebar.sidebar-collapsed > .h-16 {
   justify-content: center;
   padding-left: 0.5rem;
@@ -161,7 +132,6 @@ pre, code, .terminal-font, .font-mono {
   display: none;
 }
 
-/* Nav: snugger padding, icon buttons centered with no text */
 #sidebar.sidebar-collapsed nav {
   padding-left: 0.5rem;
   padding-right: 0.5rem;
@@ -176,25 +146,20 @@ pre, code, .terminal-font, .font-mono {
 #sidebar.sidebar-collapsed .nav-tab > span {
   display: none;
 }
-/* Keep only each item's leading icon (drops e.g. the trailing hard-drive glyph) */
 #sidebar.sidebar-collapsed .nav-tab > i:not(:first-child) {
   display: none;
 }
 
-/* Quick-stats footer: hidden while collapsed (hover titles cover the nav) */
 #sidebar.sidebar-collapsed > div:last-child {
   display: none;
 }
-/* ------------------------------------------------------------------
-   Fixed sidebar: keep <main> offset in sync with sidebar width
-   ------------------------------------------------------------------ */
 @media (min-width: 1024px) {
   #sidebar ~ main {
-    margin-left: 16rem; /* matches Tailwind's w-64 expanded width */
+    margin-left: 16rem; 
     transition: margin-left 0.3s ease-in-out;
   }
 
   #sidebar.sidebar-collapsed ~ main {
-    margin-left: 4.5rem; /* matches #sidebar.sidebar-collapsed width above */
+    margin-left: 4.5rem; 
   }
 }

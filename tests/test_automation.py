@@ -2,8 +2,6 @@ import os
 import shutil
 import tempfile
 
-# Redirect ALL data (DB, account configs, logs) to a temp dir BEFORE app imports,
-# so tests never touch the production database or data/ directory.
 _TEST_TMP = tempfile.mkdtemp(prefix="kaggle_automation_test_")
 os.environ["AUTOMATION_DATA_DIR"] = _TEST_TMP
 
@@ -26,7 +24,6 @@ from services.workload_distributor import WorkloadDistributor
 
 class TestKaggleAutomation(unittest.TestCase):
     def setUp(self):
-        # Fresh DB per test
         if DB_PATH.exists():
             DB_PATH.unlink()
         init_db()
@@ -48,7 +45,6 @@ class TestKaggleAutomation(unittest.TestCase):
         usernames = [a["username"] for a in accounts]
         self.assertIn(test_user, usernames)
 
-        # Test isolated config directory
         cfg_dir = AccountManager.get_account_config_dir(test_user)
         self.assertTrue(cfg_dir.exists())
 
@@ -93,7 +89,6 @@ class TestKaggleAutomation(unittest.TestCase):
 
         self.assertEqual(chunk_size, 2500000)
 
-        # Test python script injection
         raw_py = "for i in range(START_INDEX, END_INDEX):\n    pass"
         injected_py = WorkloadDistributor.inject_shard_config_into_notebook(
             code_content=raw_py,
@@ -108,7 +103,6 @@ class TestKaggleAutomation(unittest.TestCase):
         self.assertIn("START_INDEX = 2500000", injected_py)
         self.assertIn("END_INDEX = 5000000", injected_py)
 
-        # Test .ipynb injection
         raw_nb = json.dumps(
             {
                 "cells": [{"cell_type": "code", "source": ["print('Hello')"]}],

@@ -1,8 +1,3 @@
-// Pixel icon set - Pixelarticons v2.4.1 (MIT license, github.com/halfmoonui/Pixelarticons)
-// Bundled locally as a drop-in replacement for lucide: any element
-// <i data-lucide="name"></i> is replaced with the matching pixel-art SVG,
-// preserving its Tailwind classes. Render refreshIcons() after DOM updates.
-// Raw SVGs also live in /static/icons/pixel/ for easy swapping.
 (function () {
   'use strict';
 

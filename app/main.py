@@ -14,8 +14,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
-
-# Import routers
 from routers import (
     accounts,
     distributed,
@@ -37,7 +35,6 @@ logger = logging.getLogger("app.main")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
     logger.info("Initializing Kaggle Automation Backend...")
     init_db()
 
@@ -47,18 +44,15 @@ async def lifespan(app: FastAPI):
             "Set it in .env before exposing this service beyond localhost."
         )
 
-    # Auto-initialize accounts from .env KAGGLE_APIKEYS on startup
     try:
         await AccountManager.initialize_from_env()
     except Exception as e:
         logger.warning(f"Account auto-initialization error: {e}")
 
-    # Start background 12-hour session monitor
     await SessionMonitor.start()
 
     yield
 
-    # Shutdown
     logger.info("Shutting down Kaggle Automation Backend...")
     await SessionMonitor.stop()
 
@@ -70,8 +64,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Enable CORS (same-origin UI only; the dashboard is served from this server,
-# so cross-origin access is never needed. Web origins must match host:port.)
 app.add_middleware(
     CORSMiddleware,
     allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
@@ -80,7 +72,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Register routers
 app.include_router(accounts.router)
 app.include_router(runs.router)
 app.include_router(distributed.router)
@@ -90,7 +81,6 @@ app.include_router(settings.router)
 app.include_router(kernels.router)
 app.include_router(ops.router)
 
-# Static files & Jinja templates
 static_dir = BASE_DIR / "app" / "static"
 static_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
@@ -119,19 +109,12 @@ async def health_check():
     }
 
 
-# ------------------------------------------------------------------
-# Authentication (shared secret -> signed HttpOnly cookie)
-# Enabled only when APP_AUTH_TOKEN is set in .env / environment.
-# ------------------------------------------------------------------
 @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
 async def login_page(request: Request, error: str = ""):
     if not APP_AUTH_TOKEN:
         return RedirectResponse("/")
-    # Already signed in? Never show the form again - otherwise the browser's
-    # back button lands on the stale /login entry and demands re-auth.
     if auth.is_request_authenticated(request, APP_AUTH_TOKEN):
         next_url = request.query_params.get("next") or "/"
-        # Only allow relative, same-site paths ("/x" ok, "//evil" or URLs not)
         if not next_url.startswith("/") or next_url.startswith("//"):
             next_url = "/"
         return RedirectResponse(next_url, status_code=303)
@@ -146,10 +129,9 @@ async def login_submit(request: Request, access_token: str = Form(...)):
     if not secrets.compare_digest(
         access_token.strip().encode("utf-8"), APP_AUTH_TOKEN.encode("utf-8")
     ):
-        await asyncio.sleep(0.6)  # brute-force dampener
+        await asyncio.sleep(0.6)
         return RedirectResponse("/login?error=Invalid+access+token", status_code=303)
 
-    # Land the user on the page they originally wanted (?next=...), not always "/"
     next_url = request.query_params.get("next") or "/"
     if not next_url.startswith("/") or next_url.startswith("//"):
         next_url = "/"
@@ -175,8 +157,6 @@ async def logout():
 
 @app.middleware("http")
 async def auth_middleware(request: Request, call_next):
-    # Enforce auth BEFORE running the route handler so unauthenticated
-    # requests can never trigger side effects (launches, deletes, settings).
     if (
         APP_AUTH_TOKEN
         and not auth.should_skip_path(request.url.path)
@@ -197,9 +177,6 @@ async def auth_middleware(request: Request, call_next):
 
     response = await call_next(request)
 
-    # Auth pages/API must never be served from browser cache - a cached login
-    # page (or cached 303 to it) makes the back button feel like a forced
-    # re-login. Static assets keep normal caching.
     if not request.url.path.startswith("/static"):
         response.headers.setdefault("Cache-Control", "no-store")
 

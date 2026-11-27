@@ -1,13 +1,3 @@
-"""Shared-secret authentication: APP_AUTH_TOKEN -> HMAC-signed HttpOnly cookie.
-
-Design:
-- .env APP_AUTH_TOKEN acts as both the login credential and (hashed) the signing key,
-  so rotating the token instantly invalidates all issued sessions.
-- Cookie value: "<expiry_epoch>.<hmac_sha256(expiry)>" - constant-time verified.
-- SameSite=Strict doubles as CSRF protection (cross-site requests carry no cookie).
-- If APP_AUTH_TOKEN is unset, auth is DISABLED (local dev convenience); main.py
-  logs a loud warning at startup.
-"""
 import hashlib
 import hmac
 import time
@@ -15,7 +5,7 @@ import time
 from fastapi import Request
 
 SESSION_COOKIE_NAME = "kaggle_auto_session"
-SESSION_TTL_SECONDS = 7 * 24 * 3600  # 7 days
+SESSION_TTL_SECONDS = 7 * 24 * 3600
 
 EXEMPT_PATHS = {"/login", "/api/health"}
 EXEMPT_PREFIXES = ("/static/",)

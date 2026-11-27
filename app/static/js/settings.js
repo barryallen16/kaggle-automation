@@ -1,5 +1,3 @@
-// Settings & Telegram Bot Module
-
 async function loadSettingsData() {
   try {
     const res = await fetch('/api/settings');
@@ -75,7 +73,6 @@ async function sendTestTelegramMessage() {
   }
 }
 
-// History Catalog rendering helper
 function loadHistoryData() {
   renderHistory();
 }
@@ -101,8 +98,7 @@ function renderHistory() {
       complete: '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-blue-950 text-blue-400 border border-blue-800">COMPLETE</span>',
       error: '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-rose-950 text-rose-400 border border-rose-800">ERROR</span>',
       stopped: '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-400 border border-slate-700">STOPPED</span>',
-      // Stuck tearing down: the run is over but Kaggle still counts its session.
-      cancelling: '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-950 text-amber-300 border border-amber-800" title="CANCEL_ACKNOWLEDGED - still holds a GPU session slot until the kernel is deleted">CANCELLING</span>'
+         cancelling: '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-950 text-amber-300 border border-amber-800" title="CANCEL_ACKNOWLEDGED - still holds a GPU session slot until the kernel is deleted">CANCELLING</span>'
     };
 
     const badge = statusBadges[r.status] || `<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-300">${esc(String(r.status || 'unknown').toUpperCase())}</span>`;

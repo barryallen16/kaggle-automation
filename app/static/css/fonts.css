@@ -1,5 +1,3 @@
-/* Local fonts - no CDN dependency */
-/* Geist (body text) */
 @font-face {
   font-family: 'Geist';
   src: url('/static/fonts/Geist-Regular.ttf') format('truetype');
@@ -25,7 +23,6 @@
   font-style: normal;
 }
 
-/* Geist Mono (code & terminal) */
 @font-face {
   font-family: 'Geist Mono';
   src: url('/static/fonts/GeistMono-Regular.ttf') format('truetype');
@@ -33,7 +30,6 @@
   font-style: normal;
 }
 
-/* Geist Pixel (display / branding) - all five shape variants */
 @font-face {
   font-family: 'Geist Pixel Square';
   src: url('/static/fonts/GeistPixel-Square.ttf') format('truetype');

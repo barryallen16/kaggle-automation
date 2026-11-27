@@ -1,12 +1,3 @@
-"""Regression: files explorer must never crash on nameless rows.
-
-`renderFilesTable` did `f.name.split('.')` unguarded, so one remote row
-without `name`/`fileName` (non-CSV CLI output, renamed header) crashed the
-whole table with `Cannot read properties of undefined (reading 'split')`
-even after a successful 66-file pull. Backend now normalizes + drops
-nameless rows; versioned 403 stops probing early; hard-drive icon renders.
-"""
-
 import asyncio
 import os
 import shutil
@@ -75,6 +66,21 @@ class TestListOutputFilesNormalization(unittest.TestCase):
         for blob in (b"No files found\n", b"Error: something broke\n", b"\n", b""):
             self.assertEqual(self._list_with_stdout(blob), [])
 
+    def test_outdated_kaggle_warning_banner_stripped_from_csv_and_status(self):
+        from services.kaggle_kernel_identity import strip_kaggle_cli_warnings
+
+        banner = (
+            b"Warning: Looks like you're using an outdated `kaggle` version "
+            b"(installed: 2.2.4), please consider upgrading to the latest version (2.2.5)\r\n"
+        )
+        files = self._list_with_stdout(banner + b"name,size,creationDate\na.jsonl,10,2026-09-16\n")
+        self.assertEqual([f["name"] for f in files], ["a.jsonl"])
+        self.assertEqual(
+            strip_kaggle_cli_warnings(banner.decode() + "Error: real failure\n"),
+            "Error: real failure\n",
+        )
+        self.assertEqual(strip_kaggle_cli_warnings("Warning: custom log\n"), "Warning: custom log\n")
+
 
 class TestVersionedPermissionShortCircuit(unittest.TestCase):
     def test_403_stops_after_first_label(self):
@@ -119,7 +125,6 @@ class TestVersionedPermissionShortCircuit(unittest.TestCase):
         finally:
             helper.httpx.Client = real_client
         self.assertEqual(saved, [])
-        # Only the first label attempted, not all six spellings.
         self.assertEqual(len([c for c in calls if c]), 1)
         self.assertTrue(any("plain latest pull" in n for n in notes))
 

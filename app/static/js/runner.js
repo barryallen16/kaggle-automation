@@ -1,5 +1,3 @@
-// Single Run & Trial Launcher Module
-
 let uploadedFileContent = null;
 let uploadedFileName = "notebook.ipynb";
 
@@ -63,7 +61,7 @@ function updateRunnerAccountQuotaCard() {
       </div>
 
       <div class="grid grid-cols-2 gap-2.5 pt-0.5">
-        <!-- GPU Quota Balance -->
+
         <div class="bg-[#101015] p-2 rounded-lg border ${gpuRemainingNum <= 0 ? 'border-amber-800/70' : 'border-[#1E1E24]'}">
           <div class="flex justify-between text-[11px] mb-1">
             <span class="text-slate-400 flex items-center space-x-1">
@@ -75,22 +73,22 @@ function updateRunnerAccountQuotaCard() {
           <div class="w-full bg-[#050507] rounded-full h-1.5 overflow-hidden border border-slate-800">
             <div class="${gpuRemainingNum <= 0 ? 'bg-amber-500' : 'bg-cyan-400'} h-1.5 rounded-full transition-all duration-300" style="width: ${gpuRemainingNum <= 0 ? 100 : gpuPercent}%"></div>
           </div>
-          ${gpuRemainingNum <= 0 ? '<div class="text-[10px] text-amber-400/90 font-semibold mt-1">Empty — CPU runs only</div>' : ''}
+          ${gpuRemainingNum <= 0 ? '<div class="text-[10px] text-amber-400/90 font-semibold mt-1">Empty - CPU runs only</div>' : ''}
         </div>
 
-        <!-- TPU Quota Balance -->
+
         <div class="bg-[#101015] p-2 rounded-lg border ${tpuRemainingNum <= 0 ? 'border-amber-800/70' : 'border-[#1E1E24]'}">
           <div class="flex justify-between text-[11px] mb-1">
             <span class="text-slate-400 flex items-center space-x-1">
               <i data-lucide="cpu" class="w-3 h-3 text-purple-400"></i>
-              <span>TPU (v3-8)</span>
+              <span>TPU (v5e-8)</span>
             </span>
             <span class="text-white font-mono font-bold">${tpuRemaining}h / ${tpu.limit}h</span>
           </div>
           <div class="w-full bg-[#050507] rounded-full h-1.5 overflow-hidden border border-slate-800">
             <div class="${tpuRemainingNum <= 0 ? 'bg-amber-500' : 'bg-purple-400'} h-1.5 rounded-full transition-all duration-300" style="width: ${tpuRemainingNum <= 0 ? 100 : tpuPercent}%"></div>
           </div>
-          ${tpuRemainingNum <= 0 ? '<div class="text-[10px] text-amber-400/90 font-semibold mt-1">Empty — CPU runs only</div>' : ''}
+          ${tpuRemainingNum <= 0 ? '<div class="text-[10px] text-amber-400/90 font-semibold mt-1">Empty - CPU runs only</div>' : ''}
         </div>
       </div>
     </div>
@@ -99,10 +97,6 @@ function updateRunnerAccountQuotaCard() {
   updateRunnerQuotaWarning();
 }
 
-// Warns when the selected accelerator burns a quota pool the chosen account
-// has none of (a GPU run on an empty account stalls until force-stopped and
-// loses its output). Advisory only - the launch stays available, since CPU
-// runs need no quota and the operator may know something the dashboard doesn't.
 function updateRunnerQuotaWarning() {
   const hint = document.getElementById('runner-quota-warn');
   if (!hint) return;
@@ -125,15 +119,14 @@ function updateRunnerQuotaWarning() {
     : (typeof gpuSessionsFree === 'function' ? gpuSessionsFree(acc) : 1);
   const cap = (typeof QuotaAdapter !== 'undefined' && QuotaAdapter.MAX_SESSIONS) || 2;
 
-  // Warning icon is a pixel icon (no emoji); the message itself stays text.
-  const warn = (msg) => {
+    const warn = (msg) => {
     hint.innerHTML = `<i data-lucide="alert-triangle" class="w-3 h-3 inline align-[-1px]"></i><span class="align-middle">${esc(msg)}</span>`;
     hint.classList.remove('hidden');
     refreshIcons();
   };
 
   if (kind && free < 1) {
-    warn(`@${acc.username} has no free sessions (${cap}/${cap} busy) — stop a run or pick another account.`);
+    warn(`@${acc.username} has no free sessions (${cap}/${cap} busy) - stop a run or pick another account.`);
     return;
   }
   const left = kind === 'tpu' ? remaining.tpuLeft : remaining.gpuLeft;
@@ -143,28 +136,23 @@ function updateRunnerQuotaWarning() {
     return;
   }
   const pool = kind === 'tpu' ? 'TPU' : 'GPU';
-  warn(`@${acc.username} has 0h ${pool} quota left — a ${pool} run will stall and may be force-stopped with its output lost. Switch to CPU or pick another account.`);
+  warn(`@${acc.username} has 0h ${pool} quota left - a ${pool} run will stall and may be force-stopped with its output lost. Switch to CPU or pick another account.`);
 }
 
 function populateAccountSelects() {
   const runnerSelect = document.getElementById('runner-account-select');
   if (!runnerSelect) return;
 
-  // Preserve previously chosen account or recall saved preference
-  const prevValue = runnerSelect.value || AppState.selectedRunnerAccount || localStorage.getItem('kaggle_last_runner_account');
+    const prevValue = runnerSelect.value || AppState.selectedRunnerAccount || localStorage.getItem('kaggle_last_runner_account');
   const accounts = AppState.accounts || [];
 
   if (!accounts.length) {
-    runnerSelect.innerHTML = '<option value="" disabled selected>No accounts — add one on the Dashboard</option>';
+    runnerSelect.innerHTML = '<option value="" disabled selected>No accounts - add one on the Dashboard</option>';
     updateRunnerAccountQuotaCard();
     return;
   }
 
-  // Build options with username and quota left; flag quota-empty accounts so
-  // they read as CPU-only options instead of looking broken. Accounts with no
-  // free session slot for the chosen accelerator are disabled outright (a
-  // launch there cannot land) - except CPU, which needs no slot.
-  const accSel = document.getElementById('runner-accelerator-select');
+          const accSel = document.getElementById('runner-accelerator-select');
   const kindFor = (typeof QuotaAdapter !== 'undefined' && QuotaAdapter.kindFor)
     ? QuotaAdapter.kindFor
     : (typeof quotaKindForAccelerator === 'function' ? quotaKindForAccelerator : () => 'gpu');
@@ -186,13 +174,12 @@ function populateAccountSelects() {
         q.tpuLeft <= 0 ? 'TPU empty' : '',
         capped ? 'sessions full' : ''
       ].filter(Boolean).join(' · ');
-      return `<option value="${esc(a.username)}"${capped ? ' disabled' : ''}>@${esc(a.username)} — ${q.gpuLeft.toFixed(1)}h GPU / ${q.tpuLeft.toFixed(1)}h TPU left${flags ? ` (${flags})` : ''}</option>`;
+      return `<option value="${esc(a.username)}"${capped ? ' disabled' : ''}>@${esc(a.username)} - ${q.gpuLeft.toFixed(1)}h GPU / ${q.tpuLeft.toFixed(1)}h TPU left${flags ? ` (${flags})` : ''}</option>`;
     }).join('');
 
   runnerSelect.innerHTML = optionsHtml;
 
-  // Restore preserved value, or fallback to the healthiest account (first in sorted list)
-  if (prevValue && accounts.some(a => a.username === prevValue)) {
+    if (prevValue && accounts.some(a => a.username === prevValue)) {
     runnerSelect.value = prevValue;
     AppState.selectedRunnerAccount = prevValue;
   } else if (accounts.length > 0) {
@@ -200,11 +187,9 @@ function populateAccountSelects() {
     AppState.selectedRunnerAccount = accounts[0].username;
   }
 
-  // Update the live quota card
-  updateRunnerAccountQuotaCard();
+    updateRunnerAccountQuotaCard();
 }
 
-// Hook change listener on the runner select once DOM is ready
 document.addEventListener('DOMContentLoaded', () => {
   const runnerSelect = document.getElementById('runner-account-select');
   if (runnerSelect) {
@@ -231,9 +216,8 @@ function handleFileInputChange(e) {
     uploadedFileContent = event.target.result;
     const textarea = document.getElementById('runner-code-textarea');
     if (textarea) textarea.value = uploadedFileContent;
-    
-    // Auto-fill title if empty
-    const titleInput = document.getElementById('runner-title');
+
+        const titleInput = document.getElementById('runner-title');
     if (titleInput && !titleInput.value) {
       const baseName = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
       titleInput.value = baseName.charAt(0).toUpperCase() + baseName.slice(1);
@@ -256,7 +240,7 @@ function toggleTrialFields() {
 
 async function handleSingleRunSubmit(e) {
   e.preventDefault();
-  
+
   const account = document.getElementById('runner-account-select').value;
   if (!account) {
     showToast('Please select a target Kaggle account first', 'warning');
@@ -269,11 +253,10 @@ async function handleSingleRunSubmit(e) {
   const enableInternet = document.getElementById('runner-internet').checked;
   const isTrial = document.getElementById('runner-is-trial').checked;
   const timeoutSeconds = isTrial ? parseInt(document.getElementById('runner-trial-timeout').value || '300') : 43200;
-  
+
   let code = document.getElementById('runner-code-textarea').value;
   if (!code.trim()) {
-    // Default mock script if user left it blank
-    code = `import time\nimport sys\n\nprint("[KAGGLE] Session started successfully.")\nprint(f"Python Version: {sys.version}")\nfor i in range(10):\n    print(f"Step {i+1}/10: Processing batch data...")\n    time.sleep(2)\n\nprint("[KAGGLE] Execution complete.")\n`;
+        code = `import time\nimport sys\n\nprint("[KAGGLE] Session started successfully.")\nprint(f"Python Version: {sys.version}")\nfor i in range(10):\n    print(f"Step {i+1}/10: Processing batch data...")\n    time.sleep(2)\n\nprint("[KAGGLE] Execution complete.")\n`;
     uploadedFileName = "main.py";
   }
 
@@ -297,7 +280,7 @@ async function handleSingleRunSubmit(e) {
 
   try {
     showToast(isTrial ? 'Initiating Trial Run on Kaggle...' : 'Deploying full notebook session to Kaggle...', 'info');
-    
+
     const res = await fetch('/api/runs/launch-json', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -308,9 +291,8 @@ async function handleSingleRunSubmit(e) {
     if (res.ok && data.success) {
       showToast(data.renamed ? `Kernel pushed as "${data.title}" (requested title was running)!` : 'Kernel pushed and queued on Kaggle!', 'success');
       await refreshGlobalData();
-      
-      // Automatically switch to Live Terminal for this run
-      setTimeout(() => {
+
+            setTimeout(() => {
         switchTab('terminal');
         viewLogsForRun(data.run_id);
       }, 500);

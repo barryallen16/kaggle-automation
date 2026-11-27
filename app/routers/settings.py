@@ -1,4 +1,3 @@
-
 from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TELEGRAM_MODE
 from database import get_setting, set_setting
 from fastapi import APIRouter, HTTPException

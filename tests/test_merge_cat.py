@@ -1,10 +1,3 @@
-"""Tests for the cat-style cross-run file merge endpoint.
-
-The merge must be raw byte concatenation in cart order - exactly
-`cat shard/* > merged.jsonl` - with no parsing, dedupe or re-encoding,
-and must fall back to pulling a run's outputs when a file is local-missing.
-"""
-
 import os
 import shutil
 import sys
@@ -29,7 +22,6 @@ def tearDownModule():
 
 
 def _fresh():
-    """Reload config/database/service/files modules bound to the temp dir."""
     global cfg, db, files_router
     import importlib
 
@@ -44,7 +36,6 @@ def _fresh():
     cfg = importlib.reload(_cfg)
     db = importlib.reload(_db)
     ks = importlib.reload(_ks)
-    # Stub CLI: pushes/pulls would fail fast if ever invoked
     ks.get_kaggle_cli_path = lambda: os.path.join(DATA_TMP, "no_such_kaggle_cli")
     import routers.files as _files
     files_router = importlib.reload(_files)
@@ -93,7 +84,6 @@ class TestCatMerge(unittest.TestCase):
         (out1 / "shard_0.jsonl").write_bytes(a_bytes)
         (out2 / "shard_1.jsonl").write_bytes(b_bytes)
 
-        from pydantic import BaseModel  # noqa: F401  (import sanity)
         req = fr.MergeRequest(items=[
             fr.MergeItem(run_id="m1", filename="shard_0.jsonl"),
             fr.MergeItem(run_id="m2", filename="shard_1.jsonl"),
@@ -103,7 +93,6 @@ class TestCatMerge(unittest.TestCase):
         self.assertEqual(resp.filename, "merged.jsonl")
         with open(resp.path, "rb") as f:
             merged = f.read()
-        # Pure cat: exact bytes, exact order, duplicate ids preserved
         self.assertEqual(merged, a_bytes + b_bytes)
 
     def test_2_extension_follows_majority_and_binary_intact(self):
@@ -122,7 +111,7 @@ class TestCatMerge(unittest.TestCase):
             fr.MergeItem(run_id="m3", filename="part1.jsonl"),
         ])
         resp = asyncio_run(fr.merge_selected_files(req))
-        self.assertEqual(resp.filename, "merged.jsonl")  # majority suffix wins
+        self.assertEqual(resp.filename, "merged.jsonl")
         with open(resp.path, "rb") as f:
             merged = f.read()
         self.assertTrue(merged.startswith(b'{"x":1}\n'))
@@ -135,7 +124,6 @@ class TestCatMerge(unittest.TestCase):
         _seed_run(db, "m4")
         (cfg.OUTPUTS_DIR / "m4").mkdir(parents=True, exist_ok=True)
 
-        # No version lookup possible in tests - helper would hit the network
         async def no_version(account, ref):
             return None
 

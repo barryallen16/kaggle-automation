@@ -8,8 +8,7 @@
   <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32x32.png">
   <meta name="theme-color" content="#0a0d14">
   <script src="https://cdn.tailwindcss.com/3.4.17"></script>
-  <script>
-    tailwind.config = {
+  <script>    tailwind.config = {
       darkMode: 'class',
       theme: {
         extend: {
@@ -20,7 +19,8 @@
         }
       }
     }
-  </script>
+
+</script>
   <script src="/static/js/pixel-icons.js?v=5"></script>
   <link rel="stylesheet" href="/static/css/fonts.css">
   <link rel="stylesheet" href="/static/css/custom.css">
@@ -28,7 +28,6 @@
 <body class="bg-[#0a0d14] text-slate-100 min-h-screen antialiased flex items-center justify-center p-4">
 
   <div class="relative w-full max-w-sm">
-    <!-- Brand -->
     <div class="flex flex-col items-center mb-8 space-y-3">
       <img src="/static/icons/android-chrome-192x192.png" alt="Logo"
            class="w-16 h-16 rounded-2xl">
@@ -36,12 +35,11 @@
       <p class="text-xs text-cyan-400 uppercase tracking-[0.2em]">Multi-Account Hub</p>
     </div>
 
-    <!-- Login Card -->
     <form method="post" action="/login"
           class="glass-card rounded-2xl border border-[#222d4a] shadow-2xl p-7 space-y-5">
       <div>
-        <h2 class="text-sm font-bold text-white">Restricted Access</h2>
-        <p class="text-xs text-slate-400 mt-1">Enter your dashboard access token to continue.</p>
+        <h2 class="text-sm font-bold text-white">Sign In</h2>
+        <p class="text-xs text-slate-400 mt-1">Enter your dashboard access token.</p>
       </div>
 
       {% if error %}
@@ -61,21 +59,18 @@
       <button type="submit"
               class="w-full inline-flex items-center justify-center space-x-2 px-6 py-3 rounded-xl text-sm font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition">
         <i data-lucide="lock" class="w-4 h-4"></i>
-        <span>Unlock Dashboard</span>
+        <span>Sign in</span>
       </button>
 
       <p class="text-[11px] text-slate-500 text-center pt-1">Session stays valid for 7 days on this browser.</p>
     </form>
   </div>
 
-  <script>
-    document.addEventListener('DOMContentLoaded', () => refreshIcons());
-    // If the browser restores this page from the back/forward cache, force a
-    // real network reload - the server will bounce authenticated users away
-    // instead of showing a stale login form.
+  <script>    document.addEventListener('DOMContentLoaded', () => refreshIcons());
     window.addEventListener('pageshow', (e) => {
       if (e.persisted) window.location.reload();
     });
-  </script>
+
+</script>
 </body>
 </html>

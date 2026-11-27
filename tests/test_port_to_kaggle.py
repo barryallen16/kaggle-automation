@@ -1,5 +1,3 @@
-"""Hermetic tests for skills/port-to-kaggle/scripts/port_to_kaggle.py."""
-
 import json
 import os
 import shutil
@@ -62,7 +60,6 @@ class TestPortToKaggle(unittest.TestCase):
             self.assertIn("WORKING_DIR", out_src)
             self.assertIn("MAX_RUNTIME_MINUTES", out_src)
             self.assertIn("shard-fallback-header", rep["fixes"])
-            # idempotent: second run adds nothing
             _r2, tmp2, out2, rep2 = run_port(out_src)
             try:
                 with open(out2, encoding="utf-8") as f:
@@ -94,7 +91,7 @@ class TestPortToKaggle(unittest.TestCase):
         )
         try:
             self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertFalse(os.path.exists(out))  # --check writes nothing
+            self.assertFalse(os.path.exists(out))
             joined = "\n".join(rep["warnings"])
             self.assertIn("title>", joined)
             self.assertIn("GPU guard", joined)
@@ -103,9 +100,6 @@ class TestPortToKaggle(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
     def test_scratch_dir_creates_tmp_before_fallback(self):
-        # Regression: on Kaggle /kaggle/tmp does not exist, and the old
-        # `else getcwd()` fallback dumped multi-GB downloads into
-        # /kaggle/working (published outputs), stalling finalization.
         src = "print('hello')\n"
         r, tmp, out, _rep = run_port(src)
         try:
@@ -120,7 +114,6 @@ class TestPortToKaggle(unittest.TestCase):
 
 
 class TestAgentErgonomics(unittest.TestCase):
-    """AXI: version fast path, structured errors on stdout, next-step hints."""
 
     def test_version_flags_print_bare_version(self):
         for flag in ("--version", "-v", "-V"):
@@ -154,8 +147,29 @@ class TestAgentErgonomics(unittest.TestCase):
             joined = "\n".join(rep["next"])
             self.assertIn("/api/runs/upload-and-launch", joined)
             self.assertIn("/api/distributed/upload-and-launch", joined)
+            self.assertIn("Authorization: Bearer $KABILA_APP_AUTH_TOKEN", joined)
+            self.assertNotIn("kaggle_auto_session", joined)
+            self.assertNotIn("loop prints without flush", "\n".join(rep["warnings"]))
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def test_api_base_reads_kabila_api_url(self):
+        old = os.environ.get("KABILA_API_URL")
+        os.environ["KABILA_API_URL"] = "https://kabila-aws.isroot.in/"
+        try:
+            r, tmp, _out, rep = run_port("print('hello')\n")
+            try:
+                self.assertEqual(r.returncode, 0, r.stderr)
+                joined = "\n".join(rep["next"])
+                self.assertIn("https://kabila-aws.isroot.in/api/runs/upload-and-launch", joined)
+                self.assertIn("https://kabila-aws.isroot.in/api/distributed/upload-and-launch", joined)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+        finally:
+            if old is None:
+                os.environ.pop("KABILA_API_URL", None)
+            else:
+                os.environ["KABILA_API_URL"] = old
 
     def test_check_mode_hints_to_write_the_file(self):
         r, tmp, out, rep = run_port("print('hello')\n", extra=["--check"])

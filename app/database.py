@@ -7,7 +7,6 @@ from config import DB_PATH
 
 
 def utcnow_iso() -> str:
-    """Timezone-aware UTC timestamp (ISO-8601 with Z suffix, parseable by JS Date)."""
     return datetime.now(UTC).isoformat()
 
 
@@ -23,7 +22,6 @@ def init_db():
     cursor = conn.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
 
-    # Accounts table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
             id TEXT PRIMARY KEY,
@@ -35,7 +33,6 @@ def init_db():
         )
     """)
 
-    # Runs history table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS runs (
             id TEXT PRIMARY KEY,
@@ -65,7 +62,6 @@ def init_db():
         )
         """)
 
-    # Lightweight migrations for pre-existing databases
     def _ensure_column(table: str, column_def: str):
         col_name = column_def.split()[0]
         cursor.execute(f"PRAGMA table_info({table})")
@@ -74,19 +70,11 @@ def init_db():
             cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column_def}")
 
     _ensure_column("runs", "output_version INTEGER")
-    # Repair rows written before enum-style CLI statuses were normalized: any
-    # leaked CLI/SDK cancel spelling (canceled/cancelled/cancel_acknowledged/...)
-    # collapsed to 'stopped'. EXCLUDE 'cancelling' - it matches '%cancel%' but is
-    # our OWN normalized status for CANCEL_ACKNOWLEDGED, which still holds a
-    # Kaggle session slot (see get_session_holding_runs). Rewriting it to
-    # 'stopped' here made stuck sessions vanish on every server restart, so
-    # capped accounts read as idle again.
     cursor.execute(
         "UPDATE runs SET status = 'stopped' "
         "WHERE lower(status) LIKE '%cancel%' AND lower(status) <> 'cancelling'"
     )
 
-    # Distributed workloads table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS distributed_workloads (
             id TEXT PRIMARY KEY,
@@ -99,7 +87,6 @@ def init_db():
         )
     """)
 
-    # System settings table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS settings (
             key TEXT PRIMARY KEY,
@@ -107,7 +94,6 @@ def init_db():
         )
     """)
 
-    # Query indexes for active/cancelling lookups, account scoping, and workload shards
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_runs_status ON runs(status)")
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_runs_account ON runs(account_username)"
@@ -121,7 +107,6 @@ def init_db():
     conn.close()
 
 
-# Database helper functions
 def save_account(
     account_id: str, username: str, api_key: str, last_quota: dict | None = None
 ):
@@ -257,12 +242,6 @@ def update_run_telegram_flag(run_id: str, flag_name: str, value: int = 1):
 
 
 def set_run_output_version(run_id: str, version: int):
-    """Pins which Kaggle VERSION holds this run's real output.
-
-    After a stop, the latest kernel version is our exit-stub (log only);
-    the cancelled run version - with the partial /kaggle/working data -
-    sits one behind. Pinning lets every later pull skip the stub.
-    """
     conn = get_db_connection()
     with conn:
         conn.execute(
@@ -289,7 +268,6 @@ def get_runs_count() -> int:
 
 
 def get_workload_runs() -> list[dict[str, Any]]:
-    """All runs belonging to any distributed workload, newest first."""
     conn = get_db_connection()
     rows = conn.execute(
         "SELECT * FROM runs WHERE workload_id IS NOT NULL ORDER BY start_time DESC"
@@ -300,7 +278,6 @@ def get_workload_runs() -> list[dict[str, Any]]:
 
 
 def get_total_gpu_hours() -> float:
-    """Total finished GPU hours across ALL runs in the DB (not capped at 500)."""
     from config import is_gpu_accelerator
 
     conn = get_db_connection()
@@ -341,13 +318,6 @@ def get_active_runs() -> list[dict[str, Any]]:
 
 
 def get_session_holding_runs() -> list[dict[str, Any]]:
-    """Runs whose kernel may still occupy a Kaggle session slot.
-
-    get_active_runs() only returns queued/running, so a kernel stuck in
-    'cancelling' (CANCEL_ACKNOWLEDGED) is invisible to it - yet Kaggle keeps
-    counting that session against the batch GPU cap. Every stuck session must
-    stay queryable or accounts read as free and pushes fail on the cap.
-    """
     conn = get_db_connection()
     rows = conn.execute(
         "SELECT * FROM runs WHERE status = 'cancelling' ORDER BY start_time DESC"
@@ -358,14 +328,6 @@ def get_session_holding_runs() -> list[dict[str, Any]]:
 
 
 def get_gpu_kernel_refs_for_account(account_username: str, limit: int = 12) -> list[str]:
-    """Distinct GPU kernel refs ever pushed on an account, newest first.
-
-    Deliberately NOT filtered to active rows: a kernel version stuck in
-    'running' on Kaggle keeps its session slot long after its own run row went
-    terminal, so the version probe has to see kernels whose runs are all
-    finished. Bounded to the most recent refs - this feeds an HTTP probe per
-    kernel, not a report the user reads.
-    """
     from config import is_gpu_accelerator
 
     conn = get_db_connection()

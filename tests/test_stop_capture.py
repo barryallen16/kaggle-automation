@@ -1,11 +1,3 @@
-"""Tests for stop-time recovery of a cancelled version's partial output.
-
-Kaggle finalizes EVERY version (complete/error/cancelled) with its own
-output snapshot. Stopping pushes an exit-stub that becomes the LATEST
-version, so latest-only pulls return just the stub's log. stop_kernel must
-capture the exact cancelled version via version_label instead.
-"""
-
 import json
 import os
 import shutil
@@ -24,9 +16,6 @@ _STUB_CLI = None
 
 
 def _make_stub_cli():
-    """Zero-exit stub CLI, written ONCE. Installed as get_kaggle_cli_path,
-    which the app calls from 12 places, so re-truncating the file on every call
-    raced concurrent pushes launching the same stub."""
     global _STUB_CLI
     if _STUB_CLI and os.path.exists(_STUB_CLI):
         return _STUB_CLI
@@ -113,7 +102,6 @@ class TestStopOutputCapture(unittest.TestCase):
             return 7
 
         async def fake_plain_download(account, ref, run_id):
-            # Latest pull before the stub: creates empty dir, no files
             from pathlib import Path as _P
 
             d = os.path.join(cfg.OUTPUTS_DIR, run_id)
@@ -125,17 +113,16 @@ class TestStopOutputCapture(unittest.TestCase):
 
             d = os.path.join(cfg.OUTPUTS_DIR, run_id)
             os.makedirs(d, exist_ok=True)
-            with open(  # noqa: ASYNC230 - tiny fixture write inside an async stand-in
-                os.path.join(d, "task_a_labeled_shard_0.jsonl"), "w"
-            ) as f:
-                f.write('{"id": "recovered"}\n')
+            (_P(d) / "task_a_labeled_shard_0.jsonl").write_text(
+                '{"id": "recovered"}\n', encoding="utf-8"
+            )
             captured["versioned"] = (account, ref, version, run_id)
             return _P(d)
 
         KS.get_kernel_current_version = staticmethod(fake_version)
         KS.download_outputs = staticmethod(fake_plain_download)
         KS.download_outputs_of_version = staticmethod(fake_versioned_download)
-        KS.STOP_CAPTURE_RETRY_DELAYS = (0,)  # instant in tests
+        KS.STOP_CAPTURE_RETRY_DELAYS = (0,)
 
         res = asyncio_run(KS.stop_kernel("runX"))
         self.assertTrue(res["success"], res)
@@ -144,14 +131,9 @@ class TestStopOutputCapture(unittest.TestCase):
         marker = os.path.join(cfg.OUTPUTS_DIR, "runX", "task_a_labeled_shard_0.jsonl")
         self.assertTrue(os.path.isfile(marker))
         self.assertEqual(db.get_run_by_id("runX")["status"], "stopped")
-        # The recovered version must be PINNED so later manual pulls skip the stub
         self.assertEqual(db.get_run_by_id("runX")["output_version"], 7)
 
     def test_2_stop_stub_ends_without_sys_exit(self):
-        """A SystemExit stub is recorded as KernelWorkerStatus.ERROR by Kaggle.
-
-        The stub must simply end; the push itself is what cancels the real run.
-        """
         _cfg, _db, KS = _fresh()
         message = "Session explicitly stopped by Kaggle Automation Dashboard."
 
@@ -195,7 +177,7 @@ class TestStopOutputCapture(unittest.TestCase):
 
         res = asyncio_run(KS.stop_kernel("runY"))
         self.assertTrue(res["success"])
-        self.assertEqual(calls["versioned"], 0)  # nothing to recover - never invoked
+        self.assertEqual(calls["versioned"], 0)
         self.assertEqual(db.get_run_by_id("runY")["status"], "stopped")
 
 

@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "app/templates/index.html"
+        ],
+        "createdAt": "2026-11-27T12:32:42.214Z",
+        "reason": "Agent: false positive on uncompiled Tailwind utility classes (containers use p-4/p-5/p-6/p-8 and table cells use px-6 py-3.5 or px-3 py-2)"
+      }
+    ]
+  }
+}

@@ -12,8 +12,6 @@ VALID_MODES = ("off", "errors-only", "full")
 
 
 class TelegramService:
-    # ponytail: in-memory 11h dedup per workload (no DB/persistence).
-    # Ceiling: restart resends one warning per workload; upgrade to DB flag if noisy.
     _warned_workloads: ClassVar[set[str]] = set()
 
     @staticmethod
@@ -34,11 +32,10 @@ class TelegramService:
             return False
         if mode == "full":
             return True
-        return event in ("11h", "failed")  # errors-only default
+        return event in ("11h", "failed")
 
     @staticmethod
     def _esc(value: Any) -> str:
-        """Escapes user-controlled text for Telegram parse_mode=HTML."""
         return html.escape(str(value if value is not None else ""), quote=True)
 
     @classmethod
@@ -69,7 +66,6 @@ class TelegramService:
 
     @classmethod
     async def send_message(cls, text: str) -> dict[str, Any]:
-        """Sends a bot direct-message to the configured Telegram USER ID."""
         token, chat_id = cls.get_credentials()
         if not token or not chat_id:
             logger.warning("Telegram not configured. Message not sent.")
@@ -114,7 +110,7 @@ class TelegramService:
             return f"{badge}<b>Run Started</b> (<code>{esc(label)}</code>)\n\n{head}• {link}"
         if event == "11h":
             return (
-                "<b>1h left (11/12h) — save outputs now</b>\n\n"
+                "<b>1h left (11/12h) - save outputs now</b>\n\n"
                 f"{head}• {link}"
             )
         if event == "failed":
@@ -126,7 +122,6 @@ class TelegramService:
     async def notify(
         cls, event: str, run: dict[str, Any], detail: str = ""
     ) -> dict[str, Any]:
-        """Single entry point. Events: started | 11h | failed | complete."""
         if not cls.should_send(event):
             return {"success": True, "suppressed": True}
         wid = run.get("workload_id")

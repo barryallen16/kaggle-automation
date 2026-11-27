@@ -20,14 +20,12 @@ SAFE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
 
 def _validate_run_id(run_id: str) -> str:
-    """Rejects run ids that could escape the outputs directory."""
     if not SAFE_ID_RE.match(run_id or ""):
         raise HTTPException(status_code=400, detail="Invalid run id")
     return run_id
 
 
 def _safe_output_path(run_id: str, filename: str) -> Path:
-    """Resolves a user-supplied filename inside the run's output dir, blocking traversal."""
     _validate_run_id(run_id)
     if not filename or "\x00" in filename:
         raise HTTPException(status_code=400, detail="Invalid filename")
@@ -41,11 +39,6 @@ def _safe_output_path(run_id: str, filename: str) -> Path:
 
 
 def _concat_files_to_temp(resolved: list[Path], ext: str) -> str:
-    """Byte-concatenates resolved files into a temp file; returns its path.
-
-    Runs inside a worker thread (see merge_selected_files). Cleans the temp
-    file up if any read fails, then re-raises.
-    """
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as out:
         name = out.name
         try:
@@ -68,7 +61,6 @@ async def list_files(run_id: str):
         run["account_username"], run["kernel_ref"]
     )
 
-    # Check if files have been downloaded locally
     local_output_dir = OUTPUTS_DIR / run_id
     local_files = []
     if local_output_dir.exists():
@@ -91,12 +83,6 @@ async def list_files(run_id: str):
 
 
 def _stopped_probe_flag(run: dict) -> bool:
-    """Legacy stopped runs have no pinned version: the cancelled run sits
-    exactly one version behind the stop-stub that is now 'current'.
-
-    'cancelling' (CANCEL_ACKNOWLEDGED) counts too - the session monitor records
-    it as itself, and those runs never get an output_version pin either.
-    """
     return run.get("status") in ("stopped", "cancelling") and not run.get(
         "output_version"
     )
@@ -120,7 +106,6 @@ async def pull_files_from_kaggle(run_id: str):
             prefer_version=run.get("output_version"),
             probe_previous_for_stop=_stopped_probe_flag(run),
         )
-        # Persist a rescued legacy pin so future pulls skip probing
         if target_dir and used_version and not run.get("output_version"):
             from database import set_run_output_version
 
@@ -131,8 +116,6 @@ async def pull_files_from_kaggle(run_id: str):
         )
 
     if target_dir is None:
-        # Surface the actual reason in the response body so the UI can show
-        # the operator why the versioned pull found nothing.
         hint = (" | ".join(diagnostics)) if diagnostics else "no diagnostics captured"
         raise HTTPException(
             status_code=502, detail=f"Kaggle output download failed: {hint}"
@@ -161,7 +144,6 @@ async def pull_files_from_kaggle(run_id: str):
 async def download_single_file(run_id: str, filename: str):
     local_file = _safe_output_path(run_id, filename)
     if not local_file.exists():
-        # Try pulling first (only for known runs; never auto-pull on traversal attempts)
         run = get_run_by_id(_validate_run_id(run_id))
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
@@ -215,8 +197,6 @@ async def download_all_zip(run_id: str):
             status_code=404, detail="No output files available to download"
         )
 
-    # Stream from a temp file instead of buffering the whole archive in RAM.
-    # Built in a worker thread: zipping hundreds of MB must not stall the loop.
     def _build_zip() -> str:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
             name = tmp.name
@@ -243,12 +223,8 @@ async def download_all_zip(run_id: str):
     )
 
 
-# ------------------------------------------------------------------
-# Local output deletion (keeps remote Kaggle artifacts untouched)
-# ------------------------------------------------------------------
 @router.delete("/{run_id}/files/{filename:path}")
 async def delete_single_output_file(run_id: str, filename: str):
-    """Deletes one downloaded output file from the server's local storage."""
     target = _safe_output_path(run_id, filename)
     if not target.is_file():
         raise HTTPException(status_code=404, detail="File not found on server")
@@ -261,7 +237,6 @@ async def delete_single_output_file(run_id: str, filename: str):
 
 @router.delete("/{run_id}/files")
 async def delete_all_output_files(run_id: str):
-    """Deletes the entire local output folder for a run (Kaggle copy untouched)."""
     _validate_run_id(run_id)
     run = get_run_by_id(run_id)
     if not run:
@@ -279,12 +254,7 @@ async def delete_all_output_files(run_id: str):
     }
 
 
-# ------------------------------------------------------------------
-# Global clear: wipe local outputs, logs, and pushed-notebook payloads
-# (server storage only)
-# ------------------------------------------------------------------
 def _clear_dir_contents(target: Path) -> int:
-    """Deletes every entry inside a data dir (best-effort); returns entries removed."""
     count = 0
     if target.exists():
         for p in target.iterdir():
@@ -302,7 +272,6 @@ def _clear_dir_contents(target: Path) -> int:
 
 @router.delete("/files/clear-all-outputs")
 async def clear_all_outputs():
-    """Deletes all locally stored output files for every run (Kaggle remote untouched)."""
     count = _clear_dir_contents(OUTPUTS_DIR)
     return {
         "success": True,
@@ -312,14 +281,12 @@ async def clear_all_outputs():
 
 @router.delete("/files/clear-all-logs")
 async def clear_all_logs():
-    """Deletes all local log files (Kaggle remote logs untouched)."""
     count = _clear_dir_contents(LOGS_DIR)
     return {"success": True, "message": f"Cleared {count} log file(s) from server."}
 
 
 @router.delete("/files/clear-all")
 async def clear_all_outputs_and_logs():
-    """Deletes all local outputs and logs in one call."""
     out = await clear_all_outputs()
     log = await clear_all_logs()
     return {"success": True, "message": f"{out['message']} {log['message']}"}
@@ -327,13 +294,6 @@ async def clear_all_outputs_and_logs():
 
 @router.delete("/files/clear-all-notebooks")
 async def clear_all_notebooks():
-    """Deletes all local push payloads (run dirs + stop stubs).
-
-    Every push writes its code + kernel-metadata.json here and never reads it
-    back (the DB keeps only the path, to tell notebooks from scripts), so
-    this grows without bound on a busy server. Pushed kernels on Kaggle are
-    untouched - only the local copies go.
-    """
     count = _clear_dir_contents(NOTEBOOKS_DIR)
     return {
         "success": True,
@@ -341,10 +301,6 @@ async def clear_all_notebooks():
     }
 
 
-# ------------------------------------------------------------------
-# Cross-run merge: pick individual files from many finished notebooks
-# and download them concatenated into one file.
-# ------------------------------------------------------------------
 class MergeItem(BaseModel):
     run_id: str
     filename: str
@@ -356,18 +312,11 @@ class MergeRequest(BaseModel):
 
 @router.post("/files/merge-download")
 async def merge_selected_files(request: MergeRequest):
-    """Cat-style merge: raw byte concatenation of selected files in cart order.
-
-    Exactly `cat shard/* > merged.jsonl` - no parsing, no dedupe, no
-    re-encoding, so it is instant even for hundreds of MB of shards.
-    The output extension follows the most common suffix among inputs.
-    """
     if not request.items:
         raise HTTPException(
             status_code=400, detail="Cart is empty - select at least one file."
         )
 
-    # 1. Resolve every selected file locally; auto-pull missing runs from Kaggle.
     resolved: list[Path] = []
     seen_runs: set = set()
     pull_failed_runs: set = set()
@@ -406,14 +355,11 @@ async def merge_selected_files(request: MergeRequest):
             )
         resolved.append(path)
 
-    # 2. Output name: most common input suffix (sanitized), else .bin
     suffixes = [p.suffix.lower() for p in resolved if p.suffix]
     ext = max(set(suffixes), key=suffixes.count) if suffixes else ".bin"
     if not re.fullmatch(r"\.[A-Za-z0-9_]{1,10}", ext):
         ext = ".bin"
 
-    # The concatenation can move hundreds of MB - run it in a worker thread so
-    # the event loop stays responsive for other requests.
     tmp_name = await asyncio.to_thread(_concat_files_to_temp, resolved, ext)
 
     media_type = "application/octet-stream"

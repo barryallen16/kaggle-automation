@@ -1,11 +1,3 @@
-"""A push rejected for the batch-GPU session cap is classified and gated early.
-
-Regression cover for a real wedge: a single launch into a 2/2 account used to
-push blind, get "maximum batch gpu session count" back, and then sleep on an
-18-minute retry ladder (10 attempts) while the two kernels holding the slots ran
-for hours. The button showed a spinner for the whole window and still failed.
-"""
-
 import asyncio
 import importlib
 import os
@@ -58,7 +50,6 @@ class TestClassifyPushFailure(unittest.TestCase):
         self.assertEqual(ks._classify_push_failure("Kernel successfully pushed"), "")
 
     def test_cap_wins_over_conflict_wording(self):
-        """A capped push that also says 'conflict' must take the cap ladder."""
         ks = _ks()
         out = "conflict: maximum batch GPU session count exceeded"
         self.assertEqual(ks._classify_push_failure(out), "session_cap")
@@ -66,19 +57,12 @@ class TestClassifyPushFailure(unittest.TestCase):
 
 class TestSessionCapLadders(unittest.TestCase):
     def test_cap_ladder_is_one_short_retry(self):
-        """A cap is terminal. Only a stop-teardown race justifies a retry at all.
-
-        This was 20..300s (~18min, 10 attempts) and then 15/30/60 (~105s).
-        Both hung the button on a failure that was never going to succeed:
-        the kernels holding the slots run for hours.
-        """
         ks = _ks()
         delays = ks.KaggleService.SESSION_CAP_RETRY_DELAYS
         self.assertEqual(len(delays), 1)
         self.assertLessEqual(sum(delays), 30)
 
     def test_conflicts_still_retry_harder_than_a_cap(self):
-        """409s clear on their own in seconds; a cap does not."""
         ks = _ks()
         self.assertGreater(
             len(ks.KaggleService.CONFLICT_RETRY_DELAYS),
@@ -86,14 +70,12 @@ class TestSessionCapLadders(unittest.TestCase):
         )
 
     def test_ladders_are_shared_with_the_stop_path(self):
-        """The stop path must not regress to its own 3x5s ladder."""
         ks = _ks()
         self.assertTrue(ks.KaggleService.SESSION_CAP_RETRY_DELAYS)
         self.assertTrue(ks.KaggleService.CONFLICT_RETRY_DELAYS)
 
 
 class TestCapPushFailsFast(unittest.TestCase):
-    """End-to-end: a capped push returns an actionable error, and quickly."""
 
     def test_cap_push_returns_session_cap_status(self):
         ks, _slept = _run_against_capped_cli()
@@ -103,11 +85,6 @@ class TestCapPushFailsFast(unittest.TestCase):
         self.assertIn("batch GPU session limit", ks["message"])
 
     def test_cap_push_retries_exactly_once(self):
-        """Proves the loop really ran: 1 sleep == initial attempt + 1 retry.
-
-        Without this the suite would still pass if push_kernel bailed out
-        before the CLI ever ran, which is the failure mode that matters.
-        """
         _, slept = _run_against_capped_cli()
         self.assertEqual(len(slept), 1)
         self.assertLessEqual(sum(slept), 30, "cap must not sleep through a ladder")
@@ -118,7 +95,6 @@ class TestCapPushFailsFast(unittest.TestCase):
 
 
 def _capped_cli(stub):
-    """A kaggle stub that always fails with the batch-GPU session cap."""
     line = (
         "Kernel push error: 400 - maximum batch GPU session count reached "
         "for this account"
@@ -134,11 +110,6 @@ def _capped_cli(stub):
 
 
 def _run_against_capped_cli():
-    """Drives push_kernel against a CLI that always reports a session cap.
-
-    Returns (result_dict, list_of_sleep_durations) so tests can assert both the
-    message and that no long backoff ladder ran.
-    """
     import asyncio
 
     import config as cfg
@@ -189,7 +160,6 @@ def _run_against_capped_cli():
 
 
 class TestLaunchPreflightGate(unittest.TestCase):
-    """A full account is rejected before push_kernel is ever called."""
 
     def _with_busy(self, busy_value, fn):
         runs = _runs()
@@ -247,18 +217,8 @@ class TestLaunchPreflightGate(unittest.TestCase):
 
 
 class TestPhantomVersionHoldsSlot(unittest.TestCase):
-    """A stale VERSION holding a slot is invisible to run-row slot math.
-
-    Live 2026-10-17: cassatamaddy had one active run, one free slot by every
-    count in this app, and Kaggle refused the push with "Maximum batch GPU
-    session count of 2 reached". Quota accrual proved two sessions were
-    burning: today's run plus a 3-day-old v1 still reporting RUNNING on the
-    same kernel. Run rows had long since marked that v1's kernel finished.
-    """
 
     def test_cancel_acknowledged_is_not_a_holder(self):
-        """Day-old cancel_acknowledged versions hold nothing - counting them
-        would wedge an account forever, which is worse than the bug."""
         from services import availability
 
         self.assertNotIn(
@@ -282,7 +242,6 @@ class TestPhantomVersionHoldsSlot(unittest.TestCase):
                 ]
             }
 
-        # Both are imported inside the function, so patch at the source module.
         orig_refs = database.get_gpu_kernel_refs_for_account
         orig_probe = ko.list_kernel_versions
         database.get_gpu_kernel_refs_for_account = lambda a, limit=12: ["acct/ghost"]

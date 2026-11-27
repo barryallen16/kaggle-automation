@@ -1,12 +1,3 @@
-"""Pre-stop output snapshot must time out instead of wedging Stop forever.
-
-_stop_kernel_impl pulls latest outputs BEFORE pushing the stop stub. A kernel
-that published gigabytes (models in /kaggle/working instead of scratch)
-stalls that pull indefinitely: no timeout meant the stop request, the ops
-tracker entry, and the Stop button hung with it. download_outputs now raises
-after OUTPUT_PULL_TIMEOUT_SECONDS so the stop pipeline continues.
-"""
-
 import asyncio
 import os
 import shutil

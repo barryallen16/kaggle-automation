@@ -4,42 +4,34 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Kaggle Multi-Account Automation Platform</title>
-  <!-- Favicons & Web App Manifest -->
   <link rel="icon" type="image/x-icon" href="/static/icons/favicon.ico">
   <link rel="icon" type="image/png" sizes="32x32" href="/static/icons/favicon-32x32.png">
   <link rel="icon" type="image/png" sizes="16x16" href="/static/icons/favicon-16x16.png">
   <link rel="apple-touch-icon" sizes="180x180" href="/static/icons/apple-touch-icon.png">
   <link rel="manifest" href="/static/icons/site.webmanifest">
   <meta name="theme-color" content="#060608">
-  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com/3.4.17"></script>
-  <script>
-    tailwind.config = {
+  <script>    tailwind.config = {
       darkMode: 'class',
       theme: {
         extend: {
           colors: {
-            // Neo-Tokyo night: crushed black, firebrick red + teal neon.
-            // These REPLACE the default cyan/rose/purple/slate ramps wholesale,
-            // so every existing *-400 text accent, *-600 button and *-950 tint
-            // re-renders in-film without touching a single class name.
-            // Luminance steps mirror the defaults, so contrast relationships hold.
-            cyan: {   // Kaneda-teal neon (was electric cyan)
+            cyan: {
               50: '#EFFCFA', 100: '#C9F5EE', 200: '#93E9DD', 300: '#6FDBD1',
               400: '#45C8C4', 500: '#22A9A3', 600: '#0F8B84', 700: '#0C6E69',
               800: '#0D4F4B', 900: '#0A3331', 950: '#041B1A',
             },
-            rose: {   // firebrick headlight-trail red (was pink-red)
+            rose: {
               50: '#FBF0EE', 100: '#F6D9D2', 200: '#ECB3A6', 300: '#E08E7D',
               400: '#D2604F', 500: '#C94838', 600: '#B23227', 700: '#8E2620',
               800: '#6E1F1B', 900: '#471512', 950: '#250C0A',
             },
-            purple: { // cold steel-indigo signage (was synthwave purple)
+            purple: {
               50: '#EFF0FC', 100: '#DFE1F6', 200: '#C6CAF0', 300: '#A9ADEF',
               400: '#8288E0', 500: '#6770D8', 600: '#4F59C4', 700: '#3E46A3',
               800: '#323A7E', 900: '#262C60', 950: '#14173A',
             },
-            slate: {  // neutral night grays (was blue-gray)
+            slate: {
               50: '#F6F6F5', 100: '#E7E7E5', 200: '#D1D1CE', 300: '#B4B4B0',
               400: '#8E8E8A', 500: '#6E6E6A', 600: '#4C4C49', 700: '#2E2E33',
               800: '#1B1B20', 900: '#101014', 950: '#060608',
@@ -52,30 +44,24 @@
         }
       }
     }
-  </script>
-  <!-- Lucide Icons -->
+
+</script>
   <script src="/static/js/pixel-icons.js?v=6"></script>
-  <!-- Local fonts (Geist / Geist Mono / Geist Pixel) -->
   <link rel="stylesheet" href="/static/css/fonts.css?v=6">
   <link rel="stylesheet" href="/static/css/custom.css?v=7">
 </head>
 <body class="bg-[#060608] text-slate-100 min-h-screen flex flex-col antialiased">
 
-  <!-- Toast Notification Container (z-[60]: above modals so alerts stay visible; full-width on phones) -->
   <div id="toast-container" class="fixed top-5 right-4 left-4 sm:left-auto z-[60] flex flex-col space-y-3 pointer-events-none">
 
   </div>
 
-  <!-- Mobile sidebar backdrop -->
   <div id="sidebar-overlay" onclick="toggleSidebar(false)"
        class="fixed inset-0 z-40 bg-black/70 backdrop-blur-sm hidden lg:hidden"></div>
 
-  <!-- Main App Layout (dvh: correct height under mobile browser toolbars) -->
   <div class="flex flex-1 h-screen h-[100dvh] overflow-hidden">
 
-    <!-- Sidebar Navigation (off-canvas drawer on mobile, fixed column on desktop) -->
     <aside id="sidebar" class="fixed lg:fixed lg:top-0 lg:left-0 inset-y-0 left-0 z-50 w-64 max-w-[85vw] h-[100dvh] bg-[#0C0C10] border-r border-[#1E1E24] flex flex-col flex-shrink-0 overflow-hidden transform -translate-x-full lg:translate-x-0 transition-[transform,width] duration-300 ease-in-out sidebar-collapsed">
-    <!-- App Header / Logo -->
       <div class="h-16 flex items-center px-6 border-b border-[#1E1E24] space-x-3 flex-shrink-0">
         <img src="/static/icons/android-chrome-192x192.png" alt="Logo" class="w-9 h-9 rounded-xl">
         <div class="min-w-0">
@@ -87,8 +73,6 @@
         </button>
       </div>
 
-      <!-- Navigation Links (min-h-0: never push the footer out of view on
-           short windows - the link list scrolls internally instead) -->
       <nav class="flex-1 min-h-0 px-4 py-6 space-y-1.5 overflow-y-auto">
         <button onclick="switchTab('dashboard')" id="nav-dashboard" class="nav-tab active w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all border border-transparent">
           <i data-lucide="layout-dashboard" class="w-4 h-4 text-cyan-400"></i>
@@ -121,7 +105,6 @@
         </button>
 
         <button onclick="switchTab('kernels')" id="nav-kernels" class="nav-tab w-full flex items-center space-x-3 px-3.5 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800/60 transition-all border border-transparent">
-          <!-- Inline SVG (not JS-replaced) so this nav icon always renders -->
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" shape-rendering="crispEdges" aria-hidden="true" focusable="false" class="w-4 h-4 text-indigo-400 flex-shrink-0"><path d="M6 2h2v2h-2zM8 2h2v2h-2zM10 2h2v2h-2zM12 2h2v2h-2zM14 2h2v2h-2zM16 2h2v2h-2zM18 2h2v2h-2zM4 4h2v2h-2zM6 4h2v2h-2zM8 4h2v2h-2zM10 4h2v2h-2zM12 4h2v2h-2zM14 4h2v2h-2zM16 4h2v2h-2zM18 4h2v2h-2zM20 4h2v2h-2zM4 6h2v2h-2zM6 6h2v2h-2zM8 6h2v2h-2zM10 6h2v2h-2zM12 6h2v2h-2zM14 6h2v2h-2zM16 6h2v2h-2zM18 6h2v2h-2zM20 6h2v2h-2zM4 8h2v2h-2zM6 8h2v2h-2zM8 8h2v2h-2zM10 8h2v2h-2zM12 8h2v2h-2zM14 8h2v2h-2zM16 8h2v2h-2zM18 8h2v2h-2zM20 8h2v2h-2zM4 10h2v2h-2zM6 10h2v2h-2zM8 10h2v2h-2zM10 10h2v2h-2zM12 10h2v2h-2zM14 10h2v2h-2zM16 10h2v2h-2zM18 10h2v2h-2zM20 10h2v2h-2zM4 12h2v2h-2zM6 12h2v2h-2zM8 12h2v2h-2zM10 12h2v2h-2zM12 12h2v2h-2zM14 12h2v2h-2zM16 12h2v2h-2zM18 12h2v2h-2zM20 12h2v2h-2zM4 14h2v2h-2zM6 14h2v2h-2zM8 14h2v2h-2zM10 14h2v2h-2zM12 14h2v2h-2zM14 14h2v2h-2zM16 14h2v2h-2zM18 14h2v2h-2zM20 14h2v2h-2zM6 16h2v2h-2zM8 16h2v2h-2zM10 16h2v2h-2zM12 16h2v2h-2zM14 16h2v2h-2zM16 16h2v2h-2zM18 16h2v2h-2z"/></svg>
           <span>Account Kernels</span>
         </button>
@@ -136,7 +119,6 @@
         </button>
       </nav>
 
-      <!-- Sidebar Footer / Quick Stats (pinned to the bottom of the viewport) -->
       <div class="flex-shrink-0 p-4 border-t border-[#1E1E24] bg-[#060608]/40">
         <div class="flex items-center justify-between text-xs text-slate-400 mb-2">
           <span>Active Runs:</span>
@@ -149,16 +131,13 @@
       </div>
     </aside>
 
-    <!-- Main Content Area -->
     <main class="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#060608]">
-      
-      <!-- Top Bar -->
+
       <header class="h-16 border-b border-[#1E1E24] bg-[#101015] px-4 sm:px-8 flex items-center justify-between flex-shrink-0 gap-3">
         <div class="flex items-center space-x-2 sm:space-x-4 min-w-0">
           <button onclick="toggleSidebar()" class="lg:hidden inline-flex items-center justify-center w-9 h-9 flex-shrink-0 rounded-lg bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700 transition" aria-label="Open menu">
             <i data-lucide="menu" class="w-5 h-5"></i>
           </button>
-          <!-- Desktop sidebar collapse/expand toggle (icon rail) -->
           <button id="btn-sidebar-collapse" onclick="toggleSidebarCollapse()" title="Collapse sidebar" aria-label="Collapse sidebar" aria-expanded="true"
                   class="hidden lg:inline-flex items-center justify-center w-9 h-9 flex-shrink-0 rounded-lg bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700 border border-slate-700 transition">
             <svg id="icon-sidebar-collapse" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square">
@@ -195,14 +174,9 @@
         </div>
       </header>
 
-      <!-- Scrollable Tab Content Viewport -->
       <div class="flex-1 overflow-y-auto overflow-x-hidden p-4 sm:p-6 lg:p-8 space-y-6">
 
-        <!-- ============================================== -->
-        <!-- TAB 1: DASHBOARD & QUOTAS                     -->
-        <!-- ============================================== -->
         <section id="tab-dashboard" class="space-y-6">
-          <!-- Top KPI Cards -->
           <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 sm:gap-5">
             <div class="glass-card rounded-2xl p-5 border border-[#26262E]">
               <div class="flex items-center justify-between">
@@ -243,7 +217,6 @@
             </div>
           </div>
 
-          <!-- Accounts & Quotas Grid -->
           <div class="space-y-4">
             <div class="flex items-center justify-between flex-wrap gap-2">
               <h3 class="text-base font-bold text-white flex items-center space-x-2">
@@ -257,7 +230,6 @@
             </div>
 
             <div id="accounts-grid" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 sm:gap-5">
-              <!-- Rendered dynamically by dashboard.js -->
               <div class="col-span-full text-center py-12 text-slate-500">
                 <i data-lucide="loader-2" class="w-8 h-8 animate-spin mx-auto mb-3 text-slate-600"></i>
                 Loading accounts and quotas...
@@ -265,7 +237,6 @@
             </div>
           </div>
 
-          <!-- Active Running Sessions Table -->
           <div class="space-y-4 pt-4">
             <h3 class="text-base font-bold text-white flex items-center space-x-2">
               <i data-lucide="radio" class="w-5 h-5 text-emerald-400 animate-pulse"></i>
@@ -297,9 +268,6 @@
         </section>
 
 
-        <!-- ============================================== -->
-        <!-- TAB 2: SINGLE RUN & TRIAL                     -->
-        <!-- ============================================== -->
         <section id="tab-runner" class="hidden space-y-6">
           <div class="max-w-4xl mx-auto glass-panel rounded-2xl p-5 sm:p-8 border border-[#26262E]">
             <div class="border-b border-[#1E1E24] pb-5 mb-6">
@@ -311,14 +279,12 @@
             </div>
 
             <form id="single-run-form" onsubmit="handleSingleRunSubmit(event)" class="space-y-6">
-              <!-- Account Selection -->
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                 <div>
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Target Kaggle Account</label>
                   <select id="runner-account-select" required class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
                     <option value="">-- Select Account --</option>
                   </select>
-                  <!-- Live Quota Balance Card -->
                   <div id="runner-account-quota-card" class="mt-2.5"></div>
                 </div>
 
@@ -328,25 +294,26 @@
                 </div>
               </div>
 
-              <!-- Accelerator & Hardware Options -->
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                 <div>
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Hardware Accelerator</label>
                   <select id="runner-accelerator-select" onchange="populateAccountSelects()" class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-cyan-500">
-                    <option value="none">Default / CPU</option>
-                    <option value="nvidia-tesla-t4-x2" selected>T4 GPU x 2 (High Performance)</option>
-                    <option value="nvidia-tesla-t4-highmem">T4 GPU High Memory</option>
-                    <option value="nvidia-a100">A100 GPU</option>
-                    <option value="nvidia-l4">L4 GPU</option>
-                    <option value="nvidia-h100">H100 GPU</option>
-                    <option value="v3-8">TPU VM v3-8</option>
-                    <option value="tpu-v5e-8">TPU v5e-8</option>
-                    <option value="tpu-v6e-8">TPU v6e-8</option>
+                    <optgroup class="bg-[#0C0C10] text-slate-400" label="Free Tier (kaggle.com)">
+                      <option class="bg-[#0C0C10] text-white" value="none">None (CPU)</option>
+                      <option class="bg-[#0C0C10] text-white" value="nvidia-tesla-t4-x2" selected>GPU T4 x2</option>
+                      <option class="bg-[#0C0C10] text-white" value="tpu-v5e-8">TPU v5e-8</option>
+                    </optgroup>
+                    <optgroup class="bg-[#0C0C10] text-slate-400" label="Paid / Competition (if eligible)">
+                      <option class="bg-[#0C0C10] text-white" value="nvidia-tesla-t4-highmem">T4 GPU High Memory</option>
+                      <option class="bg-[#0C0C10] text-white" value="nvidia-l4">L4 GPU</option>
+                      <option class="bg-[#0C0C10] text-white" value="nvidia-a100">A100 GPU</option>
+                      <option class="bg-[#0C0C10] text-white" value="nvidia-h100">H100 GPU</option>
+                      <option class="bg-[#0C0C10] text-white" value="tpu-v6e-8">TPU v6e-8</option>
+                    </optgroup>
                   </select>
                   <p id="runner-quota-warn" class="hidden text-[11px] text-amber-300/80 mt-2"></p>
                 </div>
 
-                <!-- Internet and Options -->
                 <div class="flex items-center space-x-6 pt-1 md:pt-6 flex-wrap gap-y-2">
                   <label class="flex items-center space-x-2.5 cursor-pointer">
                     <input type="checkbox" id="runner-internet" checked class="w-4 h-4 text-cyan-500 rounded bg-slate-900 border-slate-700 focus:ring-0">
@@ -355,13 +322,12 @@
                 </div>
               </div>
 
-              <!-- Trial Run Toggle Box -->
               <div class="p-4 rounded-xl bg-amber-950/30 border border-amber-800/50 flex items-start space-x-3">
                 <input type="checkbox" id="runner-is-trial" onchange="toggleTrialFields()" class="w-4 h-4 mt-0.5 text-amber-500 rounded bg-slate-900 border-amber-700 focus:ring-0">
                 <div class="flex-1">
                   <label for="runner-is-trial" class="text-sm font-bold text-amber-300 cursor-pointer">Trial Run Mode (Pre-Flight Verification)</label>
                   <p class="text-xs text-amber-200/70 mt-0.5">Run with a short timeout to verify dependencies and start iterations without consuming your 12-hour session quota.</p>
-                  
+
                   <div id="trial-timeout-container" class="mt-3 hidden">
                     <label class="block text-xs font-medium text-amber-200 mb-1">Trial Timeout Limit (Seconds)</label>
                     <input type="number" id="runner-trial-timeout" value="300" min="60" max="3600" class="w-48 bg-[#0C0C10] border border-amber-700/60 rounded-lg px-3 py-1.5 text-xs text-white">
@@ -369,11 +335,9 @@
                 </div>
               </div>
 
-              <!-- Notebook Source Code / File Upload -->
               <div>
                 <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Notebook / Script Code</label>
 
-                <!-- File Upload Dropzone -->
                 <div class="border-2 border-dashed border-[#282832] hover:border-cyan-500/60 focus-within:border-cyan-500/60 rounded-xl p-4 text-center cursor-pointer mb-3 transition" onclick="document.getElementById('runner-file-input').click()">
                   <input type="file" id="runner-file-input" accept=".ipynb,.py" class="sr-only" onchange="handleFileInputChange(event)" aria-label="Upload notebook or script file">
                   <i data-lucide="upload-cloud" class="w-6 h-6 text-slate-400 mx-auto mb-1"></i>
@@ -383,7 +347,6 @@
                 <textarea id="runner-code-textarea" rows="8" class="w-full terminal-font text-xs bg-[#050507] border border-[#26262E] rounded-xl p-4 text-cyan-300 focus:outline-none focus:border-cyan-500" placeholder="# Paste Python code or edit uploaded script here..."></textarea>
               </div>
 
-              <!-- Submit Button -->
               <div class="flex justify-end space-x-4 pt-2">
                 <button type="submit" id="btn-launch-run" class="inline-flex items-center space-x-2 px-6 py-3 rounded-xl text-sm font-bold bg-cyan-600 hover:bg-cyan-500 text-white transition">
                   <i data-lucide="rocket" class="w-4 h-4"></i>
@@ -395,9 +358,6 @@
         </section>
 
 
-        <!-- ============================================== -->
-        <!-- TAB 3: DISTRIBUTED WORKLOAD RUNNER            -->
-        <!-- ============================================== -->
         <section id="tab-distributed" class="hidden space-y-6">
           <div class="max-w-4xl mx-auto glass-panel rounded-2xl p-5 sm:p-8 border border-[#26262E]">
             <div class="border-b border-[#1E1E24] pb-5 mb-6">
@@ -409,7 +369,6 @@
             </div>
 
             <form id="distributed-run-form" onsubmit="handleDistributedSubmit(event)" class="space-y-6">
-              <!-- Title & Total Workload Items -->
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                 <div>
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Workload Base Title</label>
@@ -422,28 +381,28 @@
                 </div>
               </div>
 
-              <!-- Participating Accounts Selection -->
               <div>
                 <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Select Participating Kaggle Accounts</label>
                 <div id="dist-accounts-checkboxes" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3 p-4 bg-[#0C0C10] border border-[#26262E] rounded-xl">
-                  <!-- Checkboxes dynamically rendered -->
                 </div>
               </div>
 
-              <!-- Hardware and Options -->
               <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
                 <div>
                   <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Accelerator per Account</label>
                   <select id="dist-accelerator" onchange="renderDistributedAccountCheckboxes(); if (typeof distShardingMode !== 'undefined' && distShardingMode === 'manual') renderManualShards();" class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-purple-500">
-                    <option value="none">Default / CPU</option>
-                    <option value="nvidia-tesla-t4-x2" selected>T4 GPU x 2 (High Performance)</option>
-                    <option value="nvidia-tesla-t4-highmem">T4 GPU High Memory</option>
-                    <option value="nvidia-a100">A100 GPU</option>
-                    <option value="nvidia-l4">L4 GPU</option>
-                    <option value="nvidia-h100">H100 GPU</option>
-                    <option value="v3-8">TPU VM v3-8</option>
-                    <option value="tpu-v5e-8">TPU v5e-8</option>
-                    <option value="tpu-v6e-8">TPU v6e-8</option>
+                    <optgroup class="bg-[#0C0C10] text-slate-400" label="Free Tier (kaggle.com)">
+                      <option class="bg-[#0C0C10] text-white" value="none">None (CPU)</option>
+                      <option class="bg-[#0C0C10] text-white" value="nvidia-tesla-t4-x2" selected>GPU T4 x2</option>
+                      <option class="bg-[#0C0C10] text-white" value="tpu-v5e-8">TPU v5e-8</option>
+                    </optgroup>
+                    <optgroup class="bg-[#0C0C10] text-slate-400" label="Paid / Competition (if eligible)">
+                      <option class="bg-[#0C0C10] text-white" value="nvidia-tesla-t4-highmem">T4 GPU High Memory</option>
+                      <option class="bg-[#0C0C10] text-white" value="nvidia-l4">L4 GPU</option>
+                      <option class="bg-[#0C0C10] text-white" value="nvidia-a100">A100 GPU</option>
+                      <option class="bg-[#0C0C10] text-white" value="nvidia-h100">H100 GPU</option>
+                      <option class="bg-[#0C0C10] text-white" value="tpu-v6e-8">TPU v6e-8</option>
+                    </optgroup>
                   </select>
                 </div>
 
@@ -461,10 +420,9 @@
                   </label>
                 </div>
               </div>
-              <p id="dist-quota-hint" class="hidden text-[11px] text-amber-300/80 mt-2"><i data-lucide="alert-triangle" class="w-3 h-3 inline align-[-1px]"></i><span class="align-middle">2 sessions halve wall-clock time but burn each account's weekly GPU quota 2× faster — total items/week stays the same.</span></p>
-              <p class="text-[11px] text-slate-500 mt-1">Each account row above has its own GPU-session selector — tweak it there to override the global value for that account only.</p>
+              <p id="dist-quota-hint" class="hidden text-[11px] text-amber-300/80 mt-2"><i data-lucide="alert-triangle" class="w-3 h-3 inline align-[-1px]"></i><span class="align-middle">2 sessions halve wall-clock time but burn weekly GPU quota 2× faster; weekly capacity stays the same.</span></p>
+              <p class="text-[11px] text-slate-500 mt-1">Each account row above has its own GPU-session selector to override this per account.</p>
 
-              <!-- Workload Partition Strategy Selector (UX Law 1: Hick's Law, UX Law 19: Tesler's Law) -->
               <div class="pt-2">
                 <div class="flex items-center justify-between flex-wrap gap-3 mb-3">
                   <div>
@@ -481,7 +439,6 @@
                   </div>
                 </div>
 
-                <!-- Panel 1: Auto Partition Preview -->
                 <div id="dist-auto-shards-panel" class="p-4 rounded-xl bg-purple-950/30 border border-purple-800/50">
                   <div class="flex items-center justify-between mb-2">
                     <h4 class="text-xs font-bold text-purple-300 uppercase tracking-wider">Auto-Calculated Shards Partition</h4>
@@ -492,7 +449,6 @@
                   </div>
                 </div>
 
-                <!-- Panel 2: Manual Sharding Custom Rows (Hidden by default) -->
                 <div id="dist-manual-shards-panel" class="hidden p-4 rounded-xl bg-[#0D0D12] border border-purple-800/50 space-y-4">
                   <div class="flex items-center justify-between flex-wrap gap-2 border-b border-[#1E1E24] pb-3">
                     <div>
@@ -514,12 +470,9 @@
                     </div>
                   </div>
 
-                  <!-- Container for Shard Rows -->
                   <div id="dist-manual-shards-container" class="space-y-2.5">
-                    <!-- Populated dynamically by distributed.js -->
                   </div>
 
-                  <!-- Summary & Live Validation Bar -->
                   <div id="dist-manual-summary" class="p-3 rounded-xl bg-[#07070A] border border-[#1E1E24] flex items-center justify-between flex-wrap gap-2 text-xs">
                     <div class="flex items-center space-x-4">
                       <span class="text-slate-400">Shards: <strong id="dist-manual-count" class="text-white">0</strong></span>
@@ -532,7 +485,6 @@
                 </div>
               </div>
 
-              <!-- Notebook Source Code -->
               <div>
                 <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Base Notebook Code (Shard variables will be auto-injected)</label>
                 <div class="border-2 border-dashed border-[#282832] hover:border-purple-500/60 focus-within:border-purple-500/60 rounded-xl p-4 text-center cursor-pointer mb-3 transition" onclick="document.getElementById('dist-file-input').click()">
@@ -543,7 +495,6 @@
                 <textarea id="dist-code-textarea" rows="6" class="w-full terminal-font text-xs bg-[#050507] border border-[#26262E] rounded-xl p-4 text-purple-300 focus:outline-none focus:border-purple-500" placeholder="# In your notebook, variables SHARD_ID, TOTAL_SHARDS, START_INDEX, END_INDEX will be injected automatically!"></textarea>
               </div>
 
-              <!-- Submit -->
               <div class="flex justify-end space-x-4 pt-2">
                 <button type="submit" id="btn-launch-dist" class="inline-flex items-center space-x-2 px-6 py-3 rounded-xl text-sm font-bold bg-purple-600 hover:bg-purple-500 text-white transition">
                   <i data-lucide="cpu" class="w-4 h-4"></i>
@@ -552,7 +503,6 @@
               </div>
             </form>
           </div>
-          <!-- Recent Workloads -->
           <div class="space-y-4 pt-4">
             <h3 class="text-base font-bold text-white flex items-center space-x-2">
               <i data-lucide="archive" class="w-5 h-5 text-purple-400"></i>
@@ -583,11 +533,7 @@
         </section>
 
 
-        <!-- ============================================== -->
-        <!-- TAB 4: LIVE LOGS & STREAM TERMINAL            -->
-        <!-- ============================================== -->
         <section id="tab-terminal" class="hidden space-y-4">
-          <!-- Terminal Control Toolbar -->
           <div class="glass-card rounded-2xl p-4 border border-[#26262E] flex flex-wrap items-center justify-between gap-3 sm:gap-4">
             <div class="flex items-center space-x-3 sm:space-x-4 flex-1 min-w-[240px]">
               <label for="terminal-run-select" class="text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Select Run:</label>
@@ -620,7 +566,6 @@
             </div>
           </div>
 
-          <!-- Terminal Screen -->
           <div class="terminal-window rounded-2xl p-4 border border-[#1E1E24] flex flex-col h-[480px] sm:h-[600px] shadow-2xl relative">
             <div class="flex items-center justify-between pb-3 mb-2 border-b border-slate-800 text-xs text-slate-500">
               <div class="flex items-center space-x-2">
@@ -637,12 +582,8 @@
         </section>
 
 
-        <!-- ============================================== -->
-        <!-- TAB 5: OUTPUT FILES EXPLORER                  -->
-        <!-- ============================================== -->
         <section id="tab-files" class="hidden space-y-6">
           <div class="glass-card rounded-2xl p-6 border border-[#26262E] space-y-5">
-            <!-- Run selector row -->
             <div class="flex flex-wrap items-center gap-x-4 gap-y-3 w-full">
               <label for="files-run-select" class="text-xs font-semibold text-slate-400 uppercase tracking-wider whitespace-nowrap">Select Run:</label>
               <select id="files-run-select" onchange="handleFilesRunSelect(event)" class="flex-1 min-w-[240px] max-w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-500">
@@ -650,7 +591,6 @@
               </select>
             </div>
 
-            <!-- Action buttons row -->
             <div class="flex flex-wrap items-center gap-3 w-full">
               <button onclick="pullRemoteFiles()" id="btn-pull-files" class="inline-flex items-center space-x-2 px-4 py-2 rounded-xl text-xs font-bold bg-amber-600/20 text-amber-400 hover:bg-amber-600/30 border border-amber-500/40 transition">
                 <i data-lucide="cloud-download" class="w-4 h-4"></i>
@@ -676,7 +616,6 @@
               </div>
             </div>
 
-            <!-- Output Files Table -->
             <div class="glass-panel rounded-xl overflow-hidden mt-1">
               <div class="overflow-x-auto">
                 <table class="w-full text-left text-sm text-slate-300 min-w-[720px]">
@@ -699,7 +638,6 @@
             </div>
           </div>
 
-          <!-- Merge Cart: collect files across finished notebooks -> single merged download -->
           <div id="merge-cart-panel" class="glass-card rounded-2xl border border-emerald-800/50 bg-gradient-to-br from-emerald-950/20 to-transparent p-0 overflow-hidden">
             <div class="flex flex-wrap items-center justify-between gap-3 px-6 py-4 border-b border-[#1E1E24]">
               <h3 class="text-sm font-bold text-white flex items-center space-x-2">
@@ -731,9 +669,6 @@
         </section>
 
 
-        <!-- ============================================== -->
-        <!-- TAB 6: RUN CATALOG & HISTORY                  -->
-        <!-- ============================================== -->
         <section id="tab-history" class="hidden space-y-4">
           <div class="glass-panel rounded-2xl overflow-hidden border border-[#26262E]">
             <div class="overflow-x-auto">
@@ -759,9 +694,6 @@
         </section>
 
 
-        <!-- ============================================== -->
-        <!-- TAB 7: ACCOUNT KERNELS (any notebook per account) -->
-        <!-- ============================================== -->
         <section id="tab-kernels" class="hidden space-y-6">
           <div class="glass-card rounded-2xl p-6 border border-[#26262E] space-y-5">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -771,7 +703,7 @@
                   <span>Account Kernels Explorer</span>
                   <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-700/50">NEW</span>
                 </h3>
-                <p class="text-xs text-slate-400 mt-1">Browse <span class="text-white font-semibold">any</span> notebook (running or completed) owned by an account — even if it was not launched from this dashboard. Pull outputs/logs directly.</p>
+                <p class="text-xs text-slate-400 mt-1">Browse any notebook owned by an account and pull its outputs or logs.</p>
               </div>
               <div class="flex items-center gap-2">
                 <select id="kernels-account-select" class="bg-[#0C0C10] border border-[#26262E] rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-indigo-500 min-w-[180px]">
@@ -818,7 +750,6 @@
             </div>
           </div>
 
-          <!-- Selected kernel detail: files + logs -->
           <div id="kernels-detail-panel" class="hidden glass-card rounded-2xl p-6 border border-indigo-800/50 space-y-4">
             <div class="flex flex-wrap items-center justify-between gap-3 border-b border-[#1E1E24] pb-3">
               <h4 class="text-sm font-bold text-white flex items-center gap-2">
@@ -856,7 +787,7 @@
                       <tr><th class="px-3 py-2">Filename</th><th class="px-3 py-2">Size</th><th class="px-3 py-2 text-right">Download</th></tr>
                     </thead>
                     <tbody id="kernels-files-body" class="divide-y divide-[#1E1E24]">
-                      <tr><td colspan="3" class="px-3 py-6 text-center text-slate-500">No files yet — click Pull.</td></tr>
+                      <tr><td colspan="3" class="px-3 py-6 text-center text-slate-500">No files yet - click Pull.</td></tr>
                     </tbody>
                   </table>
                 </div>
@@ -867,7 +798,6 @@
               </div>
             </div>
 
-            <!-- Version History -->
             <div class="border-t border-[#1E1E24] pt-4 space-y-3">
               <div class="flex flex-wrap items-center justify-between gap-2">
                 <div>
@@ -882,7 +812,7 @@
                   <button onclick="loadKernelVersions(20)" id="btn-load-versions" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-600/20 text-amber-300 hover:bg-amber-600/30 border border-amber-500/40 transition">
                     <i data-lucide="history" class="w-3.5 h-3.5"></i><span>Load Versions</span>
                   </button>
-                  <button onclick="loadKernelVersions(50)" id="btn-load-all-versions" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-amber-400 hover:bg-slate-700 border border-slate-700 transition" title="Load up to 50 versions for kernels with extensive history">
+                  <button onclick="loadKernelVersions(50)" id="btn-load-all-versions" class="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-amber-400 hover:bg-slate-700 border border-slate-700 transition" title="Load up to 50 versions">
                     <i data-lucide="history" class="w-3.5 h-3.5"></i><span>Show All (50)</span>
                   </button>
                 </div>
@@ -902,9 +832,6 @@
         </section>
 
 
-        <!-- ============================================== -->
-        <!-- TAB 8: SETTINGS & TELEGRAM BOT                -->
-        <!-- ============================================== -->
         <section id="tab-settings" class="hidden space-y-6">
           <div class="max-w-3xl mx-auto glass-panel rounded-2xl p-5 sm:p-8 border border-[#26262E] space-y-6">
             <div class="border-b border-[#1E1E24] pb-5">
@@ -934,7 +861,7 @@
                 <input type="text" id="settings-chat-id" placeholder="e.g. 123456789 (your numeric Telegram user ID)" class="w-full bg-[#0C0C10] border border-[#26262E] rounded-xl px-4 py-2.5 text-sm text-white focus:outline-none focus:border-sky-500 font-mono">
                 <p class="text-[11px] text-slate-500 mt-1.5 leading-relaxed">
                   1. Message <code class="text-cyan-400">@userinfobot</code> on Telegram to get your numeric ID.<br>
-                  2. Open your bot and press <span class="text-slate-300 font-semibold">START</span> first — bots cannot message users who never started them.
+                  2. Open your bot and press <span class="text-slate-300 font-semibold">START</span> first so the bot can message you.
                 </p>
               </div>
 
@@ -957,7 +884,6 @@
     </main>
   </div>
 
-  <!-- Add Account Modal (click outside card or press ESC to close) -->
   <div id="modal-add-account" class="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center hidden p-4"
        onclick="if(event.target === this) closeAddAccountModal()">
     <div class="glass-card max-w-lg w-full rounded-2xl p-6 border border-[#26262E] shadow-2xl">
@@ -991,7 +917,6 @@
     </div>
   </div>
 
-  <!-- Scripts (v=4 cache-bust for kernels versioning) -->
   <script src="/static/js/app.js?v=7"></script>
   <script src="/static/js/dashboard.js?v=7"></script>
   <script src="/static/js/runner.js?v=7"></script>
@@ -1000,15 +925,13 @@
   <script src="/static/js/files.js?v=7"></script>
   <script src="/static/js/kernels.js?v=7"></script>
   <script src="/static/js/settings.js?v=7"></script>
-  <script>
-    // Initialize Lucide icons on page load
-    document.addEventListener('DOMContentLoaded', () => {
+  <script>    document.addEventListener('DOMContentLoaded', () => {
       refreshIcons();
-      // ESC closes the Add Account modal
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') closeAddAccountModal();
       });
     });
-  </script>
+
+</script>
 </body>
 </html>

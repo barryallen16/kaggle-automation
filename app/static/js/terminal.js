@@ -1,12 +1,6 @@
-// Live Logs & WebSocket Terminal Module
-
 let terminalSocket = null;
 let currentTerminalRunId = null;
 
-// Stream status line: pixel icon + text. Replaces the old "● LIVE STREAM
-// CONNECTED" bullet so every state uses the same icon set as the rest of the
-// dashboard. `tone` picks the Tailwind text colour, `iconCls` extra icon classes
-// (e.g. animate-spin on the in-progress states).
 function setStreamStatus(text, icon, tone = 'text-slate-400', iconCls = '') {
   const el = document.getElementById('terminal-stream-status');
   if (!el) return;
@@ -21,11 +15,9 @@ function updateTerminalRunDropdown() {
 
   const runs = AppState.allRuns || [];
   let html = '<option value="">-- Select a run to view output logs --</option>';
-  
+
   runs.forEach(r => {
-    // No emoji: a native <option> cannot hold markup, so the status word in the
-    // label is the only signal there.
-    const selected = r.id === currentTerminalRunId ? 'selected' : '';
+        const selected = r.id === currentTerminalRunId ? 'selected' : '';
     const label = `[${r.account_username}] ${r.title} (${r.status})`;
     html += `<option value="${esc(r.id)}" ${selected}>${esc(label)}</option>`;
   });
@@ -46,9 +38,7 @@ function handleTerminalRunSelect(e) {
 }
 
 async function viewLogsForRun(runId) {
-  // Always surface the terminal - callers may be on any tab (Run Catalog,
-  // launch success, dashboard). Without this the stream connected invisibly.
-  if (AppState.activeTab !== 'terminal') {
+      if (AppState.activeTab !== 'terminal') {
     switchTab('terminal');
   }
 
@@ -65,17 +55,12 @@ async function viewLogsForRun(runId) {
 
   setStreamStatus("Loading logs...", "loader-2", "text-amber-400", "animate-spin");
 
-  // 1. Load the stored log file over plain HTTP first - this ALWAYS works,
-  //    even behind proxies that block or mangle WebSockets.
-  await loadStoredLogs(runId);
-  if (currentTerminalRunId !== runId) return; // user switched runs meanwhile
+      await loadStoredLogs(runId);
+  if (currentTerminalRunId !== runId) return;
 
-  // 2. Only attach a live stream while the run can still produce output.
-  //    'cancelling' is finished for the run (nothing more will ever be logged),
-  //    so it correctly falls through to the stored-log state.
-  const isActive = run && (run.status === 'queued' || run.status === 'running');
+        const isActive = run && (run.status === 'queued' || run.status === 'running');
   if (isActive) {
-    connectTerminalSocket(runId, true); // stored logs already on screen
+    connectTerminalSocket(runId, true);
   } else {
     setStreamStatus("Stored Log Output", "archive", "text-slate-400");
   }
@@ -89,8 +74,7 @@ async function loadStoredLogs(runId) {
     const res = await fetch(`/api/runs/${runId}/logs`);
     if (res.status === 401) { window.location.href = '/login'; return; }
     const text = await res.text();
-    // Ignore stale responses if the user switched runs meanwhile
-    if (currentTerminalRunId !== runId) return;
+        if (currentTerminalRunId !== runId) return;
     terminalBody.textContent = text || '(log file is empty)';
     terminalBody.scrollTop = terminalBody.scrollHeight;
   } catch (err) {
@@ -102,8 +86,7 @@ function connectTerminalSocket(runId, skipInitial = false) {
   disconnectTerminalSocket();
 
   const terminalBody = document.getElementById('terminal-body');
-  // Append a separator - never wipe logs already loaded over HTTP
-  if (terminalBody) terminalBody.textContent += `\n--- Attaching live stream ---\n`;
+    if (terminalBody) terminalBody.textContent += `\n--- Attaching live stream ---\n`;
   setStreamStatus("Connecting...", "loader-2", "text-amber-400", "animate-spin");
 
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -116,28 +99,24 @@ function connectTerminalSocket(runId, skipInitial = false) {
   };
 
   terminalSocket.onmessage = (event) => {
-    if (!event.data) return; // Keepalive empty string
+    if (!event.data) return;
 
     terminalBody.textContent += event.data;
-    
-    // Auto-scroll if enabled
-    const autoscroll = document.getElementById('terminal-autoscroll')?.checked;
+
+        const autoscroll = document.getElementById('terminal-autoscroll')?.checked;
     if (autoscroll) {
       terminalBody.scrollTop = terminalBody.scrollHeight;
     }
   };
 
   terminalSocket.onclose = () => {
-    // Only report offline if we're still the active stream
-    if (currentTerminalRunId === runId) {
+        if (currentTerminalRunId === runId) {
       setStreamStatus("Stream Offline / Finished", "x", "text-slate-500");
     }
   };
 
   terminalSocket.onerror = () => {
-    // Common cause: reverse proxy without WebSocket forwarding.
-    // Stored logs are already on screen; remote fetch is the fallback.
-    if (currentTerminalRunId === runId) {
+            if (currentTerminalRunId === runId) {
       setStreamStatus("Live stream unavailable - use Fetch Full Kaggle Log", "alert-triangle", "text-rose-400");
     }
   };

@@ -1,7 +1,5 @@
-// Output Files Explorer Module (+ Merge Cart & local file deletion)
-
 let currentFilesRunId = null;
-let currentFileRows = []; // last rendered rows [{name, size, sizeBytes, isLocal}]
+let currentFileRows = [];
 
 function updateFilesRunDropdown() {
   const select = document.getElementById('files-run-select');
@@ -244,7 +242,7 @@ async function deleteAllLocalFiles() {
   }
 }
 async function clearAllNotebooks() {
-  if (!confirm('Free disk space: delete ALL local push payloads (run code + stop stubs) for every run?\n\nPushed kernels on Kaggle are NOT touched — local copies are never read back after a push.\n\nContinue?')) return;
+  if (!confirm('Free disk space: delete ALL local push payloads (run code + stop stubs) for every run?\n\nPushed kernels on Kaggle are NOT touched - local copies are never read back after a push.\n\nContinue?')) return;
   const btn = document.getElementById('btn-clear-notebooks');
   const orig = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Clearing...</span>`; try{refreshIcons()}catch(_){} }
@@ -259,7 +257,7 @@ async function clearAllNotebooks() {
   }
 }
 async function clearAllServerFiles() {
-  if (!confirm('Free disk space: delete ALL local outputs and logs for EVERY run on this server?\n\nRemote files on Kaggle are NOT touched — you can re-pull any run later.\n\nContinue?')) return;
+  if (!confirm('Free disk space: delete ALL local outputs and logs for EVERY run on this server?\n\nRemote files on Kaggle are NOT touched - you can re-pull any run later.\n\nContinue?')) return;
   const btn = document.getElementById('btn-clear-all-server');
   const orig = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = `<i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i><span>Clearing...</span>`; try{refreshIcons()}catch(_){} }
@@ -273,7 +271,7 @@ async function clearAllServerFiles() {
       if (currentFilesRunId) inspectFilesForRun(currentFilesRunId);
       else {
         const tb = document.getElementById('files-table-body');
-        if (tb) tb.innerHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-slate-500">All server files cleared — select a run to pull again.</td></tr>`;
+        if (tb) tb.innerHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-slate-500">All server files cleared - select a run to pull again.</td></tr>`;
       }
     } else {
       showToast(data.detail || 'Failed to clear server files', 'error');
@@ -285,9 +283,6 @@ async function clearAllServerFiles() {
   }
 }
 
-// ------------------------------------------------------------------
-// Merge Cart - collect individual output files across finished runs
-// ------------------------------------------------------------------
 function toggleCartFile(runId, filename, checked) {
   AppState.cartFiles = AppState.cartFiles || [];
   const exists = AppState.cartFiles.some(i => i.run_id === runId && i.filename === filename);

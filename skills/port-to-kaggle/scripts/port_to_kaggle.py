@@ -1,31 +1,3 @@
-"""Port a .py / .ipynb script to run in kaggle-automation (single + distributed).
-
-Usage:
-    python port_to_kaggle.py in.py --out out.py --title "My Job" --accelerator nvidia-tesla-t4-x2
-    python port_to_kaggle.py in.ipynb --out out.ipynb --check   # report only
-    python port_to_kaggle.py --version
-
-Errors go to stdout as {"error": ..., "help": ...} with exit code 2, so an
-agent never has to parse a traceback. The report ends with "next": ready-to-run
-commands (re-check, push, sharded push).
-
-What it does (idempotent, safe to re-run):
-  1. Normalizes notebooks via KaggleService.ensure_executable_notebook
-     (kernelspec inject, raw-py-as-ipynb wrap).
-  2. Prepends a shard-fallback header (_get_shard_var + SHARD_ID/TOTAL_SHARDS/
-     START_INDEX/END_INDEX) so code runs standalone AND when the distributor
-     prepends real values at push time (globals() wins over env/defaults).
-  3. Prepends line-buffered stdout/stderr + WORKING_DIR/SCRATCH_DIR definitions
-     when missing.
-  4. Warns (never rewrites logic) on: missing GPU guard, title >50 chars /
-     slug conflicts, unknown accelerator, hardcoded secrets, dataset landing
-     in /kaggle/working, unsharded OUTPUT_FILE, bare `pip install`.
-
-Secrets / MAX_RUNTIME_MINUTES are injected server-side at push
-(app/services/kaggle_service.py:build_env_preamble,
- app/routers/runs.py:_quota_capped_env) — this script never bakes them.
-"""
-
 import argparse
 import json
 import os
@@ -37,25 +9,17 @@ VERSION = "0.1.0"
 
 
 def _version_fast_path(argv: list[str]) -> int | None:
-    """Bare -v/-V/--version prints the version and exits 0 (AXI §10)."""
     if len(argv) == 1 and argv[0] in ("-v", "-V", "--version"):
         print(VERSION)
         return 0
     return None
 
 
-# Runs before the platform import below, so the version probe stays cheap.
 if __name__ == "__main__" and (rc := _version_fast_path(sys.argv[1:])) is not None:
     raise SystemExit(rc)
 
 
 def _platform_candidates() -> list[str]:
-    """Where the kaggle-automation platform code may live.
-
-    1. $KAGGLE_AUTOMATION_REPO (checkout root) — set this when the skill is
-       installed globally so output matches the server exactly.
-    2. Repo-checkout layout (this file at <root>/skills/port-to-kaggle/scripts/).
-    """
     cands = []
     env = (os.environ.get("KAGGLE_AUTOMATION_REPO") or "").strip().strip("\"'")
     if env:
@@ -69,12 +33,6 @@ def _platform_candidates() -> list[str]:
 
 
 def _load_platform():
-    """Import server helpers when available, else stdlib fallback (same rules).
-
-    Returns (is_gpu_accelerator, KaggleService-ish, mode) where mode is
-    "server" or "standalone". Standalone mirrors app/config.py + the pure
-    parts of app/services/kaggle_service.py so the skill works globally.
-    """
     for root in _platform_candidates():
         app_dir = os.path.join(root, "app")
         if not (
@@ -90,10 +48,9 @@ def _load_platform():
             from services.kaggle_service import KaggleService as _ks
 
             return _gpu, _ks, "server"
-        except Exception:  # noqa: S112 — tried next candidate silently by design
+        except (ImportError, OSError, AttributeError):
             continue
 
-    # --- standalone fallback: same rules, no platform checkout needed ---
     def _gpu(accelerator) -> bool:
         a = str(accelerator or "").lower()
         return bool(a) and a not in ("none", "default", "cpu")
@@ -102,9 +59,6 @@ def _load_platform():
         from typing import ClassVar
 
         DEFAULT_KERNELSPEC: ClassVar[dict] = {"name": "python3", "display_name": "Python 3", "language": "python"}
-        # Mirrors KaggleService.ACCELERATOR_MAP (app/services/kaggle_service.py).
-        # Kept inline so global installs work without the platform's deps
-        # (config.py needs python-dotenv); server mode still wins when available.
         ACCELERATOR_MAP: ClassVar[dict] = {
             "nvidia-tesla-t4": "NvidiaTeslaT4",
             "nvidia-tesla-t4-x2": "NvidiaTeslaT4",
@@ -191,10 +145,6 @@ is_gpu_accelerator, KaggleService, PLATFORM_MODE = _load_platform()
 SHARD_TAG = "kaggle-automation-shard-fallback"
 
 FALLBACK_HEADER = """\
-# ==========================================
-# AUTO-INJECTED WORKLOAD SHARD CONFIGURATION (Standalone fallback)
-# Overridden by the distributed runner at push time
-# ==========================================
 import os as _ka_os
 
 def _get_shard_var(name, default=None, cast=None):
@@ -272,7 +222,7 @@ def _prepend_cell(nb: dict, code: str, tag: str) -> dict:
     for c in _notebook_cells(nb):
         tags = (c.get("metadata") or {}).get("tags", [])
         if tag in tags:
-            return nb  # already ported — idempotent
+            return nb
     cell = {
         "cell_type": "code",
         "execution_count": None,
@@ -319,39 +269,35 @@ def port_notebook(nb_text: str, mode: str) -> tuple[str, list[str]]:
 def lint(src: str, title: str, accelerator: str) -> list[str]:
     warnings = []
     if len(title) > 50:
-        warnings.append(f"title>{len(title)}chars: Kaggle truncates to 50 and keys kernels by slug — shorten it")
+        warnings.append(f"title>{len(title)}chars: Kaggle truncates to 50 and keys kernels by slug - shorten it")
     if accelerator and is_gpu_accelerator(accelerator):
         if "cuda.device_count" not in src and "cuda.is_available" not in src:
-            warnings.append("no GPU guard: add torch.cuda.device_count()==0 → sys.exit(1) check")
+            warnings.append("no GPU guard: add torch.cuda.device_count()==0 -> sys.exit(1) check")
         if KaggleService.resolve_accelerator(accelerator) == accelerator.lower().strip() and accelerator.lower() not in ("none", "default", "cpu"):
-            pass  # custom machine_shape passthrough — allowed, no warning
+            pass
         elif "p100" in accelerator.lower():
-            warnings.append("P100 is broken with default Kaggle PyTorch (cu128) — use T4 instead")
+            warnings.append("P100 is broken with default Kaggle PyTorch (cu128) - use nvidia-tesla-t4-x2 instead")
     if "HF_TOKEN" in src and 'os.environ.get("HF_TOKEN")' not in src and "os.environ['HF_TOKEN']" not in src and "HF_TOKEN=" in src.replace(" ", ""):
         warnings.append("possible hardcoded HF_TOKEN: read it from os.environ (server injects it)")
     if "sk-" in src and "api_key" in src.lower():
         warnings.append("possible hardcoded API key: move to env vars")
     if "cd /kaggle/working" in src or '"/kaggle/working/' in src and "SCRATCH_DIR" not in src:
-        warnings.append("inputs under /kaggle/working bloat published output — download to SCRATCH_DIR (/kaggle/tmp)")
+        warnings.append("inputs under /kaggle/working bloat published output - download to SCRATCH_DIR (/kaggle/tmp)")
     if "OUTPUT_FILE" in src:
         out_lines = [ln for ln in src.splitlines() if "OUTPUT_FILE" in ln]
         if out_lines and not any("SHARD_ID" in ln for ln in out_lines):
-            warnings.append("OUTPUT_FILE ignores SHARD_ID: shards will overwrite each other — name per-shard")
+            warnings.append("OUTPUT_FILE ignores SHARD_ID: shards will overwrite each other - name per-shard")
     if "pip install" in src and "uv pip install --system" not in src:
         warnings.append("use `uv pip install --system` on Kaggle (no active venv)")
-    if "print(" in src and "flush=True" not in src and "line_buffering" not in src:
-        warnings.append("loop prints without flush: piped logs can stall for hours")
     return warnings
 
 
 def _error(message: str, help_text: str) -> int:
-    """Structured error on stdout as JSON (AXI §6) - never leak a traceback."""
     print(json.dumps({"error": message, "help": help_text}))
     return 2
 
 
 class _Parser(argparse.ArgumentParser):
-    """argparse that reports usage errors on stdout in the same JSON shape."""
 
     def error(self, message: str) -> None:
         print(json.dumps({
@@ -362,11 +308,13 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _api_base() -> str:
+    env_url = (os.environ.get("KABILA_API_URL") or "").strip().strip("\"'").rstrip("/")
+    if env_url:
+        return env_url
     return f"http://{os.environ.get('APP_HOST') or '127.0.0.1'}:{os.environ.get('APP_PORT') or '8000'}"
 
 
 def _next_hints(args, warnings: list[str], wrote: bool) -> list[str]:
-    """Actionable next steps as complete commands (AXI §9)."""
     out = args.out
     api = _api_base()
     hints: list[str] = []
@@ -380,12 +328,18 @@ def _next_hints(args, warnings: list[str], wrote: bool) -> list[str]:
         hints.append(f"re-run without --check to write {out}")
         return hints
     hints.append(
-        f"push it: curl -sS -X POST {api}/api/runs/upload-and-launch "
+        f"push it via CLI: python skills/kaggle-runner/scripts/kaggle_runner.py run {out} "
+        f"--title \"{args.title}\" --accelerator {args.accelerator}"
+    )
+    hints.append(
+        f"or curl: curl -sS -X POST {api}/api/runs/upload-and-launch "
+        f"-H \"Authorization: Bearer $KABILA_APP_AUTH_TOKEN\" "
         f"-F file=@{out} -F account_username=<account> "
         f"-F title=\"{args.title}\" -F accelerator={args.accelerator}"
     )
     hints.append(
         f"sharded run: curl -sS -X POST {api}/api/distributed/upload-and-launch "
+        f"-H \"Authorization: Bearer $KABILA_APP_AUTH_TOKEN\" "
         f"-F file=@{out} -F base_title=\"{args.title}\" "
         f"-F accounts=<account1,account2> -F total_items=10000000 "
         f"-F accelerator={args.accelerator}"

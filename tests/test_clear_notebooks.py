@@ -1,10 +1,3 @@
-"""Tests for the server-storage clear endpoints.
-
-Covers the notebook-cache clear (push payloads accumulate forever - nothing
-reads them back after a push) and pins the shared dir-clear helper behind
-all three clear endpoints.
-"""
-
 import os
 import shutil
 import sys
@@ -29,7 +22,6 @@ def tearDownModule():
 
 
 def _fresh():
-    """Reload config/database/files modules bound to the temp dir."""
     global cfg, db, files_router
     import importlib
 

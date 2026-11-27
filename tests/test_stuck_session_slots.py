@@ -1,17 +1,3 @@
-"""A kernel stuck in CANCEL_ACKNOWLEDGED still holds a Kaggle session slot.
-
-Regression cover for the wedge that blocked every push on an account showing
-zero running kernels: seven kernels were stuck in KernelWorkerStatus.
-CANCEL_ACKNOWLEDGED. normalize_kernel_status mapped "cancel*" to "stopped", so
-the runs were reaped as finished, the dashboard and the launch pre-flight both
-reported the account as free, and every push failed with
-
-    Kernel push error: Maximum batch GPU session count of 2 reached.
-
-The teardown does not clear on its own, and a stop stub cannot release it -
-only deleting the kernel frees the slot.
-"""
-
 import os
 import shutil
 import sys
@@ -86,7 +72,6 @@ class TestNormalizeKernelStatus(unittest.TestCase):
         return importlib.reload(kki)
 
     def test_cancel_acknowledged_is_not_stopped(self):
-        """The whole bug: this collapsed to 'stopped' and freed the slot."""
         kki = self._n()
         self.assertEqual(
             kki.normalize_kernel_status("KernelWorkerStatus.CANCEL_ACKNOWLEDGED"),
@@ -98,7 +83,6 @@ class TestNormalizeKernelStatus(unittest.TestCase):
         )
 
     def test_plain_cancelled_is_still_stopped(self):
-        """A fully released cancel is genuinely terminal - don't change that."""
         kki = self._n()
         self.assertEqual(kki.normalize_kernel_status("canceled"), "stopped")
         self.assertEqual(kki.normalize_kernel_status("CANCELLED"), "stopped")
@@ -113,14 +97,12 @@ class TestNormalizeKernelStatus(unittest.TestCase):
         )
 
     def test_cancelling_is_terminal_for_lifecycle(self):
-        """Otherwise a stuck kernel pins a `kaggle logs -f` subprocess forever."""
         kki = self._n()
         self.assertIn("cancelling", kki.TERMINAL_KERNEL_STATUSES)
         self.assertIn("stopped", kki.TERMINAL_KERNEL_STATUSES)
 
 
 class TestSessionHoldingRunsAreQueryable(unittest.TestCase):
-    """A finished-but-stuck run must stay visible to slot accounting."""
 
     def test_cancelling_rows_are_returned_and_active_ones_are_not(self):
         _cfg, db = _fresh()
@@ -135,7 +117,6 @@ class TestSessionHoldingRunsAreQueryable(unittest.TestCase):
 
 
 class TestCancellingOccupiesASlot(unittest.TestCase):
-    """live_busy_sessions must count a cancelling kernel as busy."""
 
     def test_stuck_session_blocks_the_account(self):
         import asyncio
@@ -196,13 +177,6 @@ class TestCancellingOccupiesASlot(unittest.TestCase):
 
 
 class TestCancellingSurvivesRestart(unittest.TestCase):
-    """init_db() must not rewrite 'cancelling' back to 'stopped'.
-
-    The startup repair migration rewrites every status matching '%cancel%' to
-    'stopped', and 'cancelling' matches it. That silently emptied
-    get_session_holding_runs() on every boot, so a capped account read as idle
-    again - the exact wedge the 'cancelling' status exists to prevent.
-    """
 
     def test_init_db_keeps_cancelling_rows(self):
         _cfg, db = _fresh()
@@ -211,7 +185,7 @@ class TestCancellingSurvivesRestart(unittest.TestCase):
             [r["status"] for r in db.get_session_holding_runs()], ["cancelling"]
         )
 
-        db.init_db()  # what main.py lifespan does on every startup
+        db.init_db()
 
         self.assertEqual(
             [r["status"] for r in db.get_session_holding_runs()],
@@ -222,8 +196,6 @@ class TestCancellingSurvivesRestart(unittest.TestCase):
         self.assertEqual(db.get_run_by_id("run_stuck_boot")["status"], "cancelling")
 
     def test_init_db_still_repairs_leaked_cli_spellings(self):
-        """The migration's original job is untouched: raw CLI cancel spellings
-        written before normalization still get collapsed to 'stopped'."""
         _cfg, db = _fresh()
         for run_id, status in (
             ("run_leaked1", "cancel_acknowledged"),
@@ -239,11 +211,6 @@ class TestCancellingSurvivesRestart(unittest.TestCase):
 
 
 class TestAccountsEndpointSeesStuckSessions(unittest.TestCase):
-    """/api/accounts feeds the browser's session-slot math (gpuSessionsBusy).
-
-    With 'cancelling' rows filtered out, an account holding two stuck sessions
-    rendered as idle and the launch button stayed enabled.
-    """
 
     def test_active_runs_include_session_holding_rows(self):
         import asyncio
@@ -266,7 +233,6 @@ class TestAccountsEndpointSeesStuckSessions(unittest.TestCase):
 
 
 class TestCapMessageNamesStuckKernels(unittest.TestCase):
-    """The rejection must name the stuck kernels, not send you hunting."""
 
     def test_message_lists_stuck_refs_and_delete_command(self):
         _cfg, db = _fresh()

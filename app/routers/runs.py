@@ -23,13 +23,6 @@ router = APIRouter(prefix="/api/runs", tags=["Runs"])
 async def _quota_capped_env(
     account_username: str, accelerator: Any, env_vars: dict[str, str] | None
 ) -> dict[str, str] | None:
-    """Merges a quota-aware MAX_RUNTIME_MINUTES into env_vars for GPU launches.
-
-    The kernel self-finishes before the account's remaining weekly GPU quota
-    runs out (Kaggle hangs spent-quota sessions instead of stopping them; a
-    stop-stub would lose the version's output). User-pinned env vars win.
-    concurrent = this kernel + currently-active GPU runs on the account.
-    """
     if not is_gpu_accelerator(accelerator):
         return env_vars
     active = AccountManager.active_gpu_runs(account_username)
@@ -44,29 +37,8 @@ async def _quota_capped_env(
 async def _session_cap_rejection(
     account_username: str, accelerator: str
 ) -> dict[str, Any] | None:
-    """Rejects a single launch when the account has no free GPU slot.
-
-    The distributed path already checks this (WorkloadDistributor builds a runner
-    plan from live slot counts) but the single-launch button did not, so it pushed
-    blind into a full account and only learned from the push rejection. That
-    error is not worth waiting out: the kernels holding the slots run for hours
-    (12h session cap), so the push retry loop just held the request open for
-    minutes with no feedback and then failed. Reusing the same helpers as the
-    distributor also means a kernel that already died gets reaped here, so a
-    stale DB row stops blocking the account.
-
-    When the account is blocked by sessions stuck in 'cancelling' (Kaggle's
-    CANCEL_ACKNOWLEDGED - the teardown finished as far as the run lifecycle is
-    concerned but the session slot is still held), the message names them and
-    gives the exact command to release them. Without that, "no free session"
-    sends you hunting for running kernels that do not exist.
-
-    Returns the rejection payload, or None to proceed. CPU launches are uncapped.
-    """
     if not is_gpu_accelerator(accelerator):
         return None
-    # Must match push_kernel's own resolution or a placeholder account name
-    # (kaggle_xxxx) counts zero busy and lets the push through.
     acc = AccountManager.resolve_effective_username(account_username)
     busy = await availability.live_busy_sessions([acc], True)
     if availability.free_slots(1, busy.get(acc, 0), True) <= 0:
@@ -81,14 +53,6 @@ async def _session_cap_rejection(
 
 
 async def _cap_error_message(account: str, busy_count: int) -> str:
-    """Names what holds an account's GPU sessions: stuck runs, then versions.
-
-    Two different things hold a slot and only the first has a run row. A kernel
-    stuck tearing down ('cancelling') is a DB problem. A kernel VERSION left in
-    'running' after its run finished is invisible to every slot-counting path -
-    this is what made 'one session active' still read as capped, so the version
-    probe runs here and names them.
-    """
     cap = KAGGLE_MAX_GPU_SESSIONS_PER_ACCOUNT
     base = f"'{account}' has no free GPU session ({busy_count} in use, limit {cap})."
     held_note = availability.format_held_sessions(
@@ -123,11 +87,11 @@ class LaunchRunJSONRequest(BaseModel):
     title: str
     code_content: str
     filename: str = "notebook.ipynb"
-    accelerator: str = "none"  # "nvidia-tesla-t4-x2", "nvidia-tesla-t4", "v3-8", "none"
+    accelerator: str = "none"
     enable_internet: bool = True
     is_trial: bool = False
     timeout_seconds: int | None = None
-    env_vars: dict[str, str] | None = None  # injected as os.environ before user code
+    env_vars: dict[str, str] | None = None
 
 
 @router.get("")

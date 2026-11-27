@@ -1,5 +1,3 @@
-// Dashboard & Accounts Module
-
 async function loadDashboardData() {
   await refreshGlobalData();
 }
@@ -60,7 +58,7 @@ function renderDashboard() {
 
     return `
       <div class="glass-card rounded-2xl p-5 border border-[#26262E] relative flex flex-col justify-between space-y-4 min-w-0">
-        <!-- Account Header -->
+
         <div class="flex items-start justify-between gap-2">
           <div class="flex items-center space-x-3 min-w-0">
             <div class="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center font-bold text-cyan-400 flex-shrink-0">
@@ -80,9 +78,9 @@ function renderDashboard() {
           </div>
         </div>
 
-        <!-- Quota Meters -->
+
         <div class="space-y-3 pt-2">
-          <!-- GPU Quota -->
+
           <div>
             <div class="flex justify-between text-xs mb-1 font-medium">
               <span class="text-slate-400 flex items-center space-x-1">
@@ -96,12 +94,12 @@ function renderDashboard() {
             </div>
           </div>
 
-          <!-- TPU Quota -->
+
           <div>
             <div class="flex justify-between text-xs mb-1 font-medium">
               <span class="text-slate-400 flex items-center space-x-1">
                 <i data-lucide="cpu" class="w-3.5 h-3.5 text-purple-400"></i>
-                <span>Weekly TPU (v3-8)</span>
+                <span>Weekly TPU (v5e-8)</span>
               </span>
               <span class="text-white font-mono text-[11px]">${tpuRemaining}h left / ${tpu.limit}h</span>
             </div>
@@ -111,10 +109,10 @@ function renderDashboard() {
           </div>
         </div>
 
-        <!-- Active Running Sessions if any -->
+
         ${activeRuns.length > 0 ? `<div><p class="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Active Execution:</p>${activeList}</div>` : ''}
 
-        <!-- Footer Actions -->
+
         <div class="pt-2 border-t border-[#1E1E24] flex items-center justify-between text-xs">
           <button onclick="refreshSingleQuota('${esc(acc.username)}')" ${AppState.ops?.refreshing_quotas ? 'disabled' : ''} class="text-slate-400 hover:text-cyan-400 flex items-center space-x-1 transition text-[11px] ${AppState.ops?.refreshing_quotas ? 'opacity-50 cursor-not-allowed' : ''}">
             <i data-lucide="rotate-cw" class="w-3 h-3 ${AppState.ops?.refreshing_quotas ? 'animate-spin' : ''}"></i>
@@ -134,8 +132,7 @@ function renderDashboard() {
 }
 
 function formatMaxRuntime(run) {
-  // Trials have short timeouts; showing "/ 12h" for them was misleading
-  const secs = run.timeout_seconds;
+    const secs = run.timeout_seconds;
   if (!secs) return '12h';
   if (secs < 3600) return `${Math.round(secs / 60)}m`;
   return `${(secs / 3600).toFixed(secs % 3600 ? 1 : 0)}h`;
@@ -188,7 +185,6 @@ function renderActiveRunsTable() {
   }).join('');
 }
 
-// Modal handling
 function openAddAccountModal() {
   const modal = document.getElementById('modal-add-account');
   if (modal) modal.classList.remove('hidden');

@@ -1,5 +1,3 @@
-"""No background download when a run finishes (server crash guard)."""
-
 import asyncio
 import os
 import shutil

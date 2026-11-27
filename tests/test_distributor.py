@@ -1,11 +1,3 @@
-"""Hermetic tests for the multi-session distributed runner.
-
-Covers: runner expansion (2 sessions/account), silent reduction when slots are
-busy, full rejection, CPU-run filter, odd-remainder splits, atomic conflict
-rejection, and the stop-workload endpoint. Uses a stub CLI + temp data dir so
-nothing touches production or real Kaggle.
-"""
-
 import os
 import shutil
 import sys
@@ -22,18 +14,6 @@ _STUB_CLI = None
 
 
 def _make_stub_cli() -> str:
-    """Writes a zero-exit stub CLI executable for the host OS.
-
-    Windows cannot exec '#!/bin/bash' scripts via CreateProcess (WinError 193),
-    so a .bat stub is used there; POSIX keeps the shell script.
-
-    Memoized on purpose. This is installed as get_kaggle_cli_path, which the
-    app calls from 12 places (every push, status probe, quota lookup), so it
-    used to re-truncate the SAME file on each call. Shards push concurrently,
-    so one push could launch the stub while another was rewriting it - the
-    process then failed to start and that shard silently came back
-    un-dispatched, making this file's counts intermittently "partial".
-    """
     global _STUB_CLI
     if _STUB_CLI and os.path.exists(_STUB_CLI):
         return _STUB_CLI
@@ -60,8 +40,6 @@ def setUpModule():
 
     ks.get_kaggle_cli_path = lambda: _make_stub_cli()
 
-    # Neutralize background log followers: with a silent stub CLI they would
-    # treat every poll as 'unknown' and reconnect forever during tests.
     async def _noop_stream(*a, **k):
         return
 
@@ -76,14 +54,12 @@ def tearDownModule():
 
 
 def _fresh():
-    """Fresh DB + modules for each test (config paths bind at import)."""
     import importlib
 
     import config as cfg
     import database as db
     import services.kaggle_service as ks
 
-    # Wipe DB files so row counts don't leak across tests
     db_file = cfg.DB_PATH
     for suffix in ("", "-wal", "-shm"):
         try:
@@ -146,7 +122,6 @@ class TestMultiSessionDistributor(unittest.TestCase):
         return wd.WorkloadDistributor, wd
 
     def test_1_expansion_two_runners_one_account(self):
-        """sessions=2 on an idle account -> 2 runners, split [0,5)/[5,10]."""
         db = _fresh()
         WD, _ = self._dist()
         res = asyncio_run(
@@ -165,7 +140,6 @@ class TestMultiSessionDistributor(unittest.TestCase):
         self.assertEqual(res["status"], "dispatched")
         ranges = sorted(tuple(s["range"]) for s in res["shards"])
         self.assertEqual(ranges[0][0], 0)
-        # remainder math over R=2 for 10 items -> 5/5
         self.assertEqual(
             [
                 tuple(s["range"])
@@ -185,7 +159,6 @@ class TestMultiSessionDistributor(unittest.TestCase):
         )
 
     def test_2_silent_reduction_when_busy(self):
-        """1 active GPU run + sessions=2 -> silently reduced to 1 runner."""
         db = _fresh()
         seed_run(
             db, "seed1", "accA", status="running", kernel_ref="accA/unrelated-kernel"
@@ -203,12 +176,11 @@ class TestMultiSessionDistributor(unittest.TestCase):
             )
         )
         self.assertTrue(res["success"])
-        self.assertEqual(res["total_shards"], 1)  # reduced from 2
+        self.assertEqual(res["total_shards"], 1)
         plan = res["runner_plan"][0]
         self.assertEqual((plan["requested"], plan["busy"], plan["slots"]), (2, 1, 1))
 
     def test_3_full_rejection_no_side_effects(self):
-        """2 active GPU runs -> zero free slots; NO workload row is created."""
         db = _fresh()
         seed_run(db, "s1", "accA", kernel_ref="accA/k1")
         seed_run(db, "s2", "accA", kernel_ref="accA/k2")
@@ -226,10 +198,9 @@ class TestMultiSessionDistributor(unittest.TestCase):
         )
         self.assertFalse(res["success"])
         self.assertIn("No free GPU session slots", res["error"])
-        self.assertEqual(len(db.get_all_workloads()), 0)  # atomic: nothing created
+        self.assertEqual(len(db.get_all_workloads()), 0)
 
     def test_4_cpu_runs_do_not_consume_gpu_slots(self):
-        """Active CPU runs must not block GPU session slots."""
         db = _fresh()
         seed_run(
             db,
@@ -260,10 +231,9 @@ class TestMultiSessionDistributor(unittest.TestCase):
             )
         )
         self.assertTrue(res["success"])
-        self.assertEqual(res["total_shards"], 2)  # CPU runs ignored
+        self.assertEqual(res["total_shards"], 2)
 
     def test_5_remainder_split_across_runners(self):
-        """7 items over 2 runners -> 4/3 with contiguous non-overlapping ranges."""
         _fresh()
         WD, _ = self._dist()
         res = asyncio_run(
@@ -284,13 +254,10 @@ class TestMultiSessionDistributor(unittest.TestCase):
         )
 
     def test_6_atomic_conflict_rejection(self):
-        """If any planned ref collides with an active run, reject BEFORE creating the workload."""
         db = _fresh()
         WD, _ = self._dist()
         from services.kaggle_service import KaggleService
 
-        # Second account holds an active run whose ref matches the runner we'd
-        # dispatch there ([Shard 2/2], since sessions=1 -> one runner each).
         colliding_ref = f"accB/{KaggleService.sanitize_slug('Timing [Shard 2/2]')}"
         seed_run(db, "blocker", "accB", kernel_ref=colliding_ref)
         res = asyncio_run(
@@ -307,10 +274,9 @@ class TestMultiSessionDistributor(unittest.TestCase):
         self.assertFalse(res["success"])
         self.assertEqual(res.get("status"), "conflict")
         self.assertIn(colliding_ref, res["error"])
-        self.assertEqual(len(db.get_all_workloads()), 0)  # no side effects
+        self.assertEqual(len(db.get_all_workloads()), 0)
 
     def test_7_stop_workload_endpoint(self):
-        """Stop endpoint kills all active shards and marks the workload stopped."""
         db = _fresh()
         WD, _ = self._dist()
         res = asyncio_run(
@@ -326,7 +292,6 @@ class TestMultiSessionDistributor(unittest.TestCase):
         )
         wid = res["workload_id"]
 
-        # Simulate the shards being actively running under this workload
         runs = db.get_active_runs()
         targets = [r for r in runs if r.get("workload_id") == wid]
         self.assertEqual(len(targets), 2)
@@ -352,10 +317,6 @@ class TestMultiSessionDistributor(unittest.TestCase):
         self.assertEqual(cm.exception.status_code, 404)
 
     def test_8b_all_shards_stuck_reports_409_and_names_them(self):
-        """A workload whose every shard went to 'cancelling' has nothing left
-        to stop, but a 404 "No active shards found" reads like a broken button.
-        It must say the shards are stuck and still hold session slots - a stop
-        stub cannot release one, only `kaggle kernels delete` does."""
         db = _fresh()
         from fastapi import HTTPException
         from routers.distributed import stop_workload
@@ -389,7 +350,6 @@ class TestMultiSessionDistributor(unittest.TestCase):
         self.assertIn("kaggle kernels delete", detail)
 
     def test_9_per_account_sessions_map(self):
-        """sessions_per_account as {accA:1, accB:2} expands 3 runners total."""
         db = _fresh()
         WD, _ = self._dist()
         res = asyncio_run(
@@ -410,12 +370,10 @@ class TestMultiSessionDistributor(unittest.TestCase):
         self.assertEqual(plan["accA"]["slots"], 1)
         self.assertEqual(plan["accB"]["requested"], 2)
         self.assertEqual(plan["accB"]["slots"], 2)
-        # workload metadata stores the per-account map
         meta = db.get_all_workloads()[0]["accounts_used"]
         self.assertEqual(meta["sessions_per_account"], {"accA": 1, "accB": 2})
 
     def test_10_per_account_map_clamped_and_missing_defaults(self):
-        """Out-of-range values clamp to 1..2; accounts absent from map default to 2."""
         _fresh()
         WD, _ = self._dist()
         res = asyncio_run(
@@ -428,15 +386,14 @@ class TestMultiSessionDistributor(unittest.TestCase):
                 accelerator="nvidia-tesla-t4-x2",
                 sessions_per_account={"accA": 99},
             )
-        )  # accB missing -> default 2
+        )
         self.assertTrue(res["success"])
         plan = {p["account"]: p for p in res["runner_plan"]}
-        self.assertEqual(plan["accA"]["requested"], 2)  # clamped from 99
-        self.assertEqual(plan["accB"]["requested"], 2)  # defaulted
+        self.assertEqual(plan["accA"]["requested"], 2)
+        self.assertEqual(plan["accB"]["requested"], 2)
         self.assertEqual(res["total_shards"], 4)
 
     def test_11_manual_shards_distribution(self):
-        """manual_shards with custom ranges and accounts launches exact partitions."""
         db = _fresh()
         WD, _ = self._dist()
         manual_shards = [
@@ -469,10 +426,8 @@ class TestMultiSessionDistributor(unittest.TestCase):
         self.assertEqual(wls[0]["total_units"], 500)
 
     def test_12_manual_shards_validation_invalids(self):
-        """Rejects inverted range start > end or missing accounts."""
         _fresh()
         WD, _ = self._dist()
-        # Inverted range
         res = asyncio_run(
             WD.distribute_and_launch(
                 base_title="InvalidRange",
@@ -488,7 +443,6 @@ class TestMultiSessionDistributor(unittest.TestCase):
         self.assertFalse(res["success"])
         self.assertIn("greater than end index", res["error"])
 
-        # Missing account
         res2 = asyncio_run(
             WD.distribute_and_launch(
                 base_title="MissingAccount",
@@ -503,26 +457,21 @@ class TestMultiSessionDistributor(unittest.TestCase):
         self.assertIn("missing a target Kaggle account", res2["error"])
 
     def test_13_accounts_descending_quota_sort(self):
-        """list_accounts returns accounts sorted descending by remaining quota."""
         db = _fresh()
         from routers.accounts import list_accounts
 
-        # Seed 3 accounts with varying GPU quotas
-        # acc_low: 5h left (used 25/30)
         db.save_account(
             "1",
             "acc_low",
             "key1",
             {"gpu": {"limit": 30, "used": 25}, "tpu": {"limit": 20, "used": 0}},
         )
-        # acc_high: 28h left (used 2/30)
         db.save_account(
             "2",
             "acc_high",
             "key2",
             {"gpu": {"limit": 30, "used": 2}, "tpu": {"limit": 20, "used": 0}},
         )
-        # acc_mid: 15h left (used 15/30)
         db.save_account(
             "3",
             "acc_mid",
@@ -536,17 +485,9 @@ class TestMultiSessionDistributor(unittest.TestCase):
         self.assertEqual(names, ["acc_high", "acc_mid", "acc_low"])
 
     def test_14_long_base_title_keeps_shards_distinct(self):
-        """A 43-char base + 2 sessions/account must still dispatch every shard.
-
-        Regression: shard titles were f"{base} [Shard i/R]" truncated to 50
-        chars by push_kernel, so the suffix was cut off, both shards on an
-        account collided to one kernel_ref and the duplicate guard rejected
-        every second shard (17 accounts -> 17 dispatched, catalog ending at
-        Shard 33/34). _shard_title now fits the suffix, keeping refs distinct.
-        """
         db = _fresh()
         WD, _ = self._dist()
-        base = "Distributed Llm extraction pipeline.kaggle"  # 42 chars
+        base = "Distributed Llm extraction pipeline.kaggle"
         self.assertEqual(len(base), 42)
         res = asyncio_run(
             WD.distribute_and_launch(
@@ -566,10 +507,10 @@ class TestMultiSessionDistributor(unittest.TestCase):
         self.assertEqual(len(pushed), 4)
         refs = [r["kernel_ref"] for r in db.get_all_runs(limit=10)]
         self.assertEqual(len(refs), 4)
-        self.assertEqual(len(set(refs)), 4)  # no intra-batch collisions
+        self.assertEqual(len(set(refs)), 4)
         titles = [r["title"] for r in db.get_all_runs(limit=10)]
         self.assertTrue(all(len(t) <= 50 for t in titles))
-        self.assertTrue(all("[Shard " in t for t in titles))  # suffix survived
+        self.assertTrue(all("[Shard " in t for t in titles))
 
 
 def asyncio_run(coro):

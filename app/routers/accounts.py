@@ -47,12 +47,8 @@ def _account_quota_left(acc: dict[str, Any]) -> tuple:
 @router.get("")
 async def list_accounts():
     accounts = get_all_accounts()
-    # Include session-holding ('cancelling') runs too. The browser's session-slot
-    # math (gpuSessionsBusy) counts acc.active_runs, so omitting stuck kernels
-    # here made a capped account render as idle while every push was rejected.
     active_runs = get_active_runs() + get_session_holding_runs()
 
-    # Map active runs to accounts
     active_by_user = {}
     for r in active_runs:
         user = r["account_username"]
@@ -67,7 +63,6 @@ async def list_accounts():
         acc_copy["active_runs"] = active_by_user.get(user, [])
         results.append(acc_copy)
 
-    # Sort descending by quota left: GPU hours first, then TPU hours, then username
     results.sort(
         key=lambda a: (
             _account_quota_left(a)[0],
@@ -127,7 +122,6 @@ async def refresh_single(username: str):
 
 @router.get("/{username}/debug")
 async def debug_account(username: str):
-    """Debug fallback usernames like kaggle_0694f485 - shows real Kaggle username via JWT and via CLI."""
     from database import get_account_by_username
     from services.account_manager import AccountManager
 
@@ -136,11 +130,9 @@ async def debug_account(username: str):
         raise HTTPException(status_code=404, detail="Account not found")
     key = acc.get("api_key", "")
     jwt_username = AccountManager.extract_username_from_token(key)
-    # Try CLI discovery (may be slow)
     cli_username = None
     cli_error = None
     try:
-        # Use a temp id to avoid colliding with real account
         import uuid
 
         temp_id = f"debug_{uuid.uuid4().hex[:4]}"
