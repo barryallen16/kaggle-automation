@@ -138,34 +138,3 @@ TOTAL_ITEMS = 10000000
 for item_id in range(START_INDEX, END_INDEX):
     process(item_id)
 ```
-
----
-
-## LLM inference benchmarks
-
-Two scripts in `benchmarks/` serve Qwen3.8-27B (Q4_K_XL, 128K context, q4_0 KV cache) through llama-server on 2x T4 GPUs and measure response times across fixed test prompts.
-Token counts are reported directly from the server via `stream_options.include_usage`.
-Each run writes a JSON summary and leaves outputs in `/kaggle/working`.
-
-The standard configuration is available as the default preset in the Single Run tab (`GET /api/presets`).
-
-> Public web tunneling scripts (`serve_qwen3_8_*.py`) were removed. Exposing a persistent model server to the public internet via third-party tunnels conflicts with Kaggle Acceptable Use policies regarding open server hosting. Use dedicated cloud instances or Kaggle Models for persistent public endpoints.
-
-Round one used a warmup prompt (8 tokens), an essay generation prompt (256 tokens), and a code task (256 tokens):
-
-| prompt | plain, v0.4.0, batch 512/256 | draft-dflash, v0.4.1, Q8_0 draft, batch 1024/512 |
-|---|---|---|
-| warmup, 8 tokens | 98.82s total (cold load) | 106.11s total (cold load) |
-| essay, 256 tokens | 11.56s to first token, 12.7s total, 20.16 t/s | 8.11s to first token, 19.26s total, 13.29 t/s |
-| code, 256 tokens | 21.99s total, 11.64 t/s | 18.31s total, 13.99 t/s |
-
-Round two evaluated code generation (synthesis, bug fixing, and completion at 256 tokens each) and recorded draft model acceptance rates:
-
-| prompt | plain, v0.4.0 | draft-dflash, v0.4.1, acceptance |
-|---|---|---|
-| warmup, 8 tokens | 99.52s total (cold load) | 106.11s total (cold load), 0.7143 |
-| code-synth, 256 tokens | 1.7s to first token (est), 23.72s total, 10.79 t/s | 29.82s total, 8.58 t/s, 0.4424 |
-| code-fix, 256 tokens | 2.36s to first token (est), 21.78s total, 11.76 t/s | 22.0s total, 11.64 t/s, 0.4641 |
-| code-complete, 256 tokens | 21.95s to first token, 21.95s total, 11.66 t/s | 17.41s total, 14.7 t/s, 0.6059 |
-
-Draft acceptance averaged 0.5567 across the round. First-token times were estimated because the model streams reasoning tokens before final output. The draft build generates initial essay tokens faster (8.11s compared to 11.56s) but requires a 28GB secondary download without yielding sustained throughput advantages, so the standard configuration remains default.
