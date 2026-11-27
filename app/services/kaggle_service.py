@@ -471,10 +471,6 @@ class KaggleService:
         return await kaggle_status.get_kernel_status(account_username, kernel_ref)
 
     @classmethod
-    async def fetch_full_logs(cls, account_username: str, kernel_ref: str) -> str:
-        return await kaggle_status.fetch_full_logs(account_username, kernel_ref)
-
-    @classmethod
     async def start_background_log_stream(
         cls, run_id: str, account_username: str, kernel_ref: str, log_file: Path
     ):
@@ -483,57 +479,10 @@ class KaggleService:
         )
 
     @classmethod
-    def ensure_log_stream(cls, run: dict[str, Any]) -> None:
-        kaggle_logs.ensure_log_stream(run)
-
-    @classmethod
-    def register_log_subscriber(cls, run_id: str) -> asyncio.Queue:
-        return kaggle_logs.register_log_subscriber(run_id)
-
-    @classmethod
-    def unregister_log_subscriber(cls, run_id: str, queue: asyncio.Queue):
-        kaggle_logs.unregister_log_subscriber(run_id, queue)
-
-    @classmethod
     async def list_output_files(
         cls, account_username: str, kernel_ref: str
     ) -> list[dict[str, Any]]:
         return await kaggle_outputs.list_output_files(account_username, kernel_ref)
-
-    @classmethod
-    async def _run_versioned_helper(
-        cls,
-        account_username: str,
-        args: list[str],
-        timeout: int = VERSIONED_FETCH_TIMEOUT_SECONDS,
-    ) -> str | None:
-        return await kaggle_outputs.run_versioned_helper(
-            account_username, args, timeout=timeout
-        )
-
-    @classmethod
-    async def list_account_kernels(
-        cls, account_username: str, search: str = "", page: int = 1, page_size: int = 20
-    ) -> dict[str, Any]:
-        return await kaggle_outputs.list_account_kernels(
-            account_username, search, page, page_size
-        )
-
-    @classmethod
-    async def list_kernel_versions(
-        cls, account_username: str, kernel_ref: str, max_versions: int = 20
-    ) -> dict[str, Any]:
-        return await kaggle_outputs.list_kernel_versions(
-            account_username, kernel_ref, max_versions
-        )
-
-    @classmethod
-    async def fetch_version_log(
-        cls, account_username: str, kernel_ref: str, version: int
-    ) -> str:
-        return await kaggle_outputs.fetch_version_log(
-            account_username, kernel_ref, version
-        )
 
     @classmethod
     async def get_kernel_current_version(
@@ -550,100 +499,6 @@ class KaggleService:
         return await kaggle_outputs.download_outputs_of_version(
             account_username, kernel_ref, version, run_id
         )
-
-    @classmethod
-    async def download_latest_outputs(
-        cls,
-        account_username: str,
-        kernel_ref: str,
-        run_id: str,
-        prefer_version: int | None = None,
-        probe_previous_for_stop: bool = False,
-    ):
-        diagnostics: list[str] = []
-        attempts: list[int] = []
-        if prefer_version:
-            attempts.append(int(prefer_version))
-        else:
-            current = await cls.get_kernel_current_version(account_username, kernel_ref)
-            if not current:
-                diagnostics.append(
-                    "meta: get_kernel_current_version returned None "
-                    "(auth failure, network error, or kernel list unavailable)"
-                )
-            else:
-                if probe_previous_for_stop and current > 1:
-                    attempts.append(current - 1)
-                attempts.append(current)
-
-        for v in attempts:
-            try:
-                got = await cls.download_outputs_of_version(
-                    account_username, kernel_ref, v, run_id
-                )
-            except Exception as e:
-                diagnostics.append(
-                    f"version {v}: download_outputs_of_version raised: {e}"
-                )
-                continue
-            if got:
-                return got, v, diagnostics
-            diagnostics.append(
-                f"version {v}: no files published (log-only or empty for every "
-                f"versionLabel tried - helper notes were logged at INFO level)"
-            )
-
-        try:
-            plain = await cls.download_outputs(account_username, kernel_ref, run_id)
-            return plain, None, diagnostics
-        except Exception as e:
-            diagnostics.append(f"plain pull failed: {e}")
-            return None, None, diagnostics
-
-    @classmethod
-    async def download_external_outputs(
-        cls, account_username: str, kernel_ref: str, version: int | None = None
-    ):
-        owner, _, slug = kernel_ref.partition("/")
-        if not owner or not slug:
-            return None, None, ["invalid kernel_ref"]
-        safe_slug = cls.sanitize_slug(slug)
-        safe_owner = (
-            "".join(c for c in owner if c.isalnum() or c in ("-", "_")).lower()
-            or "unknown"
-        )
-        run_id = f"ext_{safe_owner}_{safe_slug}"
-        if version:
-            got = await cls.download_outputs_of_version(
-                account_username, kernel_ref, int(version), run_id
-            )
-            if got:
-                return got, int(version), []
-            try:
-                cur = await cls.get_kernel_current_version(account_username, kernel_ref)
-                if cur is None or int(version) == cur:
-                    plain, _, diag = await cls.download_latest_outputs(
-                        account_username, kernel_ref, run_id
-                    )
-                    if plain:
-                        return (
-                            plain,
-                            int(version),
-                            [
-                                f"version {version}: versioned probe fell back to latest pull"
-                            ]
-                            + diag,
-                        )
-            except Exception:
-                pass
-            return (
-                None,
-                None,
-                [
-                    f"version {version}: no files published or recoverable for this specific version snapshot"
-                ],
-            )
-        return await cls.download_latest_outputs(account_username, kernel_ref, run_id)
 
     @classmethod
     async def _write_stop_stub(

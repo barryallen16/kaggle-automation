@@ -6,7 +6,7 @@ from config import LOGS_DIR
 from database import get_run_by_id
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, PlainTextResponse
-from services.kaggle_service import KaggleService
+from services import kaggle_logs, kaggle_status
 
 router = APIRouter(tags=["Logs"])
 
@@ -41,7 +41,7 @@ async def get_logs(run_id: str, fetch_remote: bool = False):
         local_log = await asyncio.to_thread(_read_log_lossy, log_path)
 
     if fetch_remote:
-        remote_logs = await KaggleService.fetch_full_logs(
+        remote_logs = await kaggle_status.fetch_full_logs(
             run["account_username"], run["kernel_ref"]
         )
         if remote_logs and not remote_logs.startswith("Error"):
@@ -88,12 +88,12 @@ async def websocket_logs(websocket: WebSocket, run_id: str, skip_initial: bool =
             except Exception:
                 pass
 
-    queue = KaggleService.register_log_subscriber(run_id)
+    queue = kaggle_logs.register_log_subscriber(run_id)
 
     try:
         run = get_run_by_id(run_id)
         if run:
-            KaggleService.ensure_log_stream(run)
+            kaggle_logs.ensure_log_stream(run)
     except Exception:
         pass
 
@@ -109,4 +109,4 @@ async def websocket_logs(websocket: WebSocket, run_id: str, skip_initial: bool =
     except Exception:
         pass
     finally:
-        KaggleService.unregister_log_subscriber(run_id, queue)
+        kaggle_logs.unregister_log_subscriber(run_id, queue)

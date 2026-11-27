@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 import re
 import tempfile
@@ -10,6 +9,7 @@ from database import get_account_by_username
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from services import kaggle_outputs, kaggle_status
 from services.kaggle_service import KaggleService
 from starlette.background import BackgroundTask
 
@@ -48,7 +48,7 @@ async def list_kernels(
     pageSize: int = Query(20, ge=1, le=100),
 ):
     _require_account(account)
-    data = await KaggleService.list_account_kernels(account, search, page, pageSize)
+    data = await kaggle_outputs.list_account_kernels(account, search, page, pageSize)
     if not (data.get("kernels") or []) and account.startswith("kaggle_"):
         try:
             from database import get_account_by_username
@@ -68,18 +68,11 @@ async def list_kernels(
                 if not real or real.startswith("kaggle_"):
                     real = None
             if real and real != account:
-                out = await KaggleService._run_versioned_helper(
-                    account,
-                    ["list", real, search or "", str(page), str(pageSize)],
-                    timeout=120,
+                d2 = await kaggle_outputs.list_account_kernels(
+                    account, search, page, pageSize, owner=real
                 )
-                if out:
-                    try:
-                        d2 = json.loads(out)
-                        if d2.get("kernels"):
-                            data = d2
-                    except Exception:
-                        pass
+                if d2.get("kernels"):
+                    data = d2
         except Exception:
             pass
     kernels = []
@@ -168,11 +161,11 @@ async def kernel_logs(
     _require_account(account)
     ref = _parse_ref(kernel_ref)
     if version is not None:
-        logs = await KaggleService.fetch_version_log(account, ref, int(version))
+        logs = await kaggle_outputs.fetch_version_log(account, ref, int(version))
         if not logs:
-            logs = await KaggleService.fetch_full_logs(account, ref)
+            logs = await kaggle_status.fetch_full_logs(account, ref)
         return {"success": True, "kernel_ref": ref, "version": version, "logs": logs}
-    logs = await KaggleService.fetch_full_logs(account, ref)
+    logs = await kaggle_status.fetch_full_logs(account, ref)
     return {"success": True, "kernel_ref": ref, "logs": logs}
 
 
@@ -190,7 +183,7 @@ async def kernel_pull(payload: PullRequest):
         target_dir,
         version_used,
         diagnostics,
-    ) = await KaggleService.download_external_outputs(
+    ) = await kaggle_outputs.download_external_outputs(
         account, ref, version=payload.version
     )
     if not target_dir or not target_dir.exists():
@@ -238,7 +231,7 @@ async def kernel_versions(
 ):
     _require_account(account)
     ref = _parse_ref(kernel_ref)
-    data = await KaggleService.list_kernel_versions(account, ref, max_versions)
+    data = await kaggle_outputs.list_kernel_versions(account, ref, max_versions)
     return {"success": True, "kernel_ref": ref, **data}
 
 
@@ -249,8 +242,8 @@ async def debug_current_version(
     _require_account(account)
     ref = _parse_ref(kernel_ref)
     _owner, _, slug = ref.partition("/")
-    cur = await KaggleService.get_kernel_current_version(account, ref)
-    raw_list = await KaggleService.list_account_kernels(account, slug, 1, 5)
+    cur = await kaggle_outputs.get_kernel_current_version(account, ref)
+    raw_list = await kaggle_outputs.list_account_kernels(account, slug, 1, 5)
     return {
         "success": True,
         "kernel_ref": ref,

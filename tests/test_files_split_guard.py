@@ -141,5 +141,45 @@ class TestPixelIcon(unittest.TestCase):
         self.assertIn("<path", snippet)
 
 
+class TestDirectVersionedCalls(unittest.TestCase):
+    def test_direct_calls_without_helper_shim(self):
+        from unittest import mock
+
+        import services.account_manager as am
+        import services.kaggle_outputs as ko
+        import services.kaggle_service as ks
+        import services.kaggle_versioned_output as vo
+
+        self.assertFalse(hasattr(ko, "run_versioned_helper"))
+        self.assertFalse(hasattr(ks.KaggleService, "_run_versioned_helper"))
+
+        seen = {}
+
+        def fake_list_kernels(owner, search, page, page_size, token=None):
+            seen["list_kernels"] = (owner, search, page, page_size, token)
+            return (
+                [
+                    {"slug": "older", "lastRunTime": "2026-01-01"},
+                    {"slug": "newer", "lastRunTime": "2026-02-01"},
+                ],
+                "tok2",
+            )
+
+        with (
+            mock.patch.object(
+                am.AccountManager, "get_account_env", return_value={"KAGGLE_API_TOKEN": "tok"}
+            ),
+            mock.patch.object(vo, "list_kernels", fake_list_kernels),
+            mock.patch.object(vo, "current_version", return_value=7),
+            mock.patch.object(vo, "fetch_version_log", return_value="hello log"),
+        ):
+            res = _run(ko.list_account_kernels("alias_acc", "q", 2, 10, owner="real_owner"))
+            self.assertEqual(seen["list_kernels"], ("real_owner", "q", 2, 10, "tok"))
+            self.assertEqual([k["slug"] for k in res["kernels"]], ["newer", "older"])
+            self.assertEqual(res["nextPageToken"], "tok2")
+            self.assertEqual(_run(ko.get_kernel_current_version("alias_acc", "o/s")), 7)
+            self.assertEqual(_run(ko.fetch_version_log("alias_acc", "o/s", 7)), "hello log")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

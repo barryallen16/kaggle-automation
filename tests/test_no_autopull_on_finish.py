@@ -20,6 +20,7 @@ def tearDownModule():
 
 class TestNoAutoPullOnFinish(unittest.TestCase):
     def test_complete_marks_done_without_downloading(self):
+        from services import kaggle_outputs as ko
         from services import session_monitor as sm
 
         run = {
@@ -46,7 +47,7 @@ class TestNoAutoPullOnFinish(unittest.TestCase):
             calls["notify"] += 1
 
         sm.KaggleService.get_kernel_status = staticmethod(fake_status)
-        sm.KaggleService.download_latest_outputs = staticmethod(fake_download)
+        ko.download_latest_outputs = fake_download
         sm.TelegramService.notify = staticmethod(fake_notify)
         sm.update_run_status = lambda **k: calls["status"].append(k)
         sm.update_run_telegram_flag = lambda *a, **k: None

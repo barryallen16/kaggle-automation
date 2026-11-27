@@ -28,6 +28,7 @@ def _fresh():
 
     import config as _cfg
     import database as _db
+    import services.kaggle_outputs as _ko
     import services.kaggle_service as _ks
     for suffix in ("", "-wal", "-shm"):
         try:
@@ -36,6 +37,7 @@ def _fresh():
             pass
     cfg = importlib.reload(_cfg)
     db = importlib.reload(_db)
+    ko = importlib.reload(_ko)
     ks = importlib.reload(_ks)
 
     async def _noop(*a, **k):
@@ -45,7 +47,7 @@ def _fresh():
     import routers.files as _files
     fr = importlib.reload(_files)
     db.init_db()
-    return cfg, db, ks, fr
+    return cfg, db, ko, fr
 
 
 def _seed_run(db, run_id, status="stopped"):
@@ -73,7 +75,7 @@ def _seed_run(db, run_id, status="stopped"):
 
 class TestStoppedRunPulls(unittest.TestCase):
     def test_1_pinned_version_wins_over_latest(self):
-        cfg, db, ks, fr = _fresh()
+        cfg, db, ko, fr = _fresh()
         _seed_run(db, "pinned", status="stopped")
         db.set_run_output_version("pinned", 3)
 
@@ -93,9 +95,9 @@ class TestStoppedRunPulls(unittest.TestCase):
         async def fake_plain(account, ref, run_id):
             calls["plain"] += 1
 
-        ks.KaggleService.get_kernel_current_version = staticmethod(fake_current)
-        ks.KaggleService.download_outputs_of_version = staticmethod(fake_versioned)
-        ks.KaggleService.download_outputs = staticmethod(fake_plain)
+        ko.get_kernel_current_version = fake_current
+        ko.download_outputs_of_version = fake_versioned
+        ko.download_outputs = fake_plain
 
         res = asyncio_run(fr.pull_files_from_kaggle("pinned"))
         self.assertTrue(res["success"])
@@ -106,7 +108,7 @@ class TestStoppedRunPulls(unittest.TestCase):
         self.assertIn("shard.jsonl", names)
 
     def test_2_legacy_unpinned_stop_rescued_via_previous_version(self):
-        cfg, db, ks, fr = _fresh()
+        cfg, db, ko, fr = _fresh()
         _seed_run(db, "legacy", status="stopped")
 
         async def fake_current(account, ref):
@@ -126,9 +128,9 @@ class TestStoppedRunPulls(unittest.TestCase):
         async def fake_plain(account, ref, run_id):
             raise AssertionError("plain fallback must not run when v8 recovers")
 
-        ks.KaggleService.get_kernel_current_version = staticmethod(fake_current)
-        ks.KaggleService.download_outputs_of_version = staticmethod(fake_versioned)
-        ks.KaggleService.download_outputs = staticmethod(fake_plain)
+        ko.get_kernel_current_version = fake_current
+        ko.download_outputs_of_version = fake_versioned
+        ko.download_outputs = fake_plain
 
         res = asyncio_run(fr.pull_files_from_kaggle("legacy"))
         self.assertTrue(res["success"])
@@ -137,7 +139,7 @@ class TestStoppedRunPulls(unittest.TestCase):
         self.assertIn("version 8", res["message"])
 
     def test_3_completed_run_pulls_its_current_version(self):
-        cfg, db, ks, fr = _fresh()
+        cfg, db, ko, fr = _fresh()
         _seed_run(db, "done", status="complete")
 
         async def fake_current(account, ref):
@@ -154,9 +156,9 @@ class TestStoppedRunPulls(unittest.TestCase):
         async def fake_plain(account, ref, run_id):
             calls["plain"] += 1
 
-        ks.KaggleService.get_kernel_current_version = staticmethod(fake_current)
-        ks.KaggleService.download_outputs_of_version = staticmethod(fake_versioned)
-        ks.KaggleService.download_outputs = staticmethod(fake_plain)
+        ko.get_kernel_current_version = fake_current
+        ko.download_outputs_of_version = fake_versioned
+        ko.download_outputs = fake_plain
 
         res = asyncio_run(fr.pull_files_from_kaggle("done"))
         self.assertTrue(res["success"])

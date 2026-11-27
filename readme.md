@@ -1,5 +1,5 @@
 # Kaggle batch runner and kernel monitor
-<img width="1875" height="998" alt="image" src="https://github.com/user-attachments/assets/e1244a55-d421-4bd4-83a8-a053556fe120" />
+<img width="1842" height="720" alt="Multi-Account Dashboard" src="assets/dashboard.png" />
 
 A FastAPI runner and web UI for long-running Kaggle notebooks.
 It divides parameter sweeps into shards, checks the 12-hour session limit, sends Telegram alerts, and pulls logs and outputs.

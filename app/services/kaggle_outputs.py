@@ -1,9 +1,10 @@
 import asyncio
 import csv
+import functools
 import io
-import json
 import logging
 import os
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,7 @@ from typing import Any
 from config import OUTPUTS_DIR, get_kaggle_cli_path
 
 from services.account_manager import AccountManager
-from services.kaggle_kernel_identity import strip_kaggle_cli_warnings
+from services.kaggle_kernel_identity import sanitize_slug, strip_kaggle_cli_warnings
 
 logger = logging.getLogger("kaggle_outputs")
 
@@ -111,13 +112,12 @@ async def list_output_files(
                     pass
 
 
-async def run_versioned_helper(
+async def _run_vo(
     account_username: str,
-    args: list[str],
+    fn: Callable[..., Any],
+    *args: Any,
     timeout: int = VERSIONED_FETCH_TIMEOUT_SECONDS,
-) -> str | None:
-    from services import kaggle_versioned_output as _vo
-
+) -> Any:
     env = AccountManager.get_account_env(account_username)
     token = (env.get("KAGGLE_API_TOKEN") or "").strip()
     if not token:
@@ -128,59 +128,19 @@ async def run_versioned_helper(
             account_username,
         )
         return None
-
-    def _call() -> str:
-        verb = args[0] if args else ""
-        if verb == "meta" and len(args) >= 3:
-            return json.dumps(
-                {
-                    "current_version_number": _vo.current_version(
-                        args[1], args[2], token=token
-                    )
-                }
-            )
-        if verb == "fetch" and len(args) >= 5:
-            saved, notes = _vo.fetch_version_output(
-                args[1], args[2], int(args[3]), args[4], token=token
-            )
-            return json.dumps({"saved": saved, "tried": notes})
-        if verb == "list" and len(args) >= 2:
-            search = args[2] if len(args) > 2 else ""
-            try:
-                page = int(args[3]) if len(args) > 3 else 1
-            except ValueError:
-                page = 1
-            try:
-                page_size = int(args[4]) if len(args) > 4 else 20
-            except ValueError:
-                page_size = 20
-            kernels, next_token = _vo.list_kernels(
-                args[1], search, page, page_size, token=token
-            )
-            return json.dumps({"kernels": kernels, "nextPageToken": next_token})
-        if verb == "versions" and len(args) >= 3:
-            try:
-                max_v = int(args[3]) if len(args) > 3 else 20
-            except ValueError:
-                max_v = 20
-            vers = _vo.list_versions(args[1], args[2], max_v, token=token)
-            cur_v = vers[0]["version"] if vers else None
-            return json.dumps({"versions": vers, "current_version": cur_v})
-        if verb == "log" and len(args) >= 4:
-            log = _vo.fetch_version_log(args[1], args[2], int(args[3]), token=token)
-            return json.dumps({"log": log})
-        raise ValueError(f"unknown versioned-output verb: {args}")
-
     try:
         loop = asyncio.get_running_loop()
         return await asyncio.wait_for(
-            loop.run_in_executor(_versioned_executor(), _call), timeout=timeout
+            loop.run_in_executor(
+                _versioned_executor(), functools.partial(fn, *args, token=token)
+            ),
+            timeout=timeout,
         )
     except TimeoutError:
         logger.warning(
             "Versioned-output call timed out for @%s (%s)",
             account_username,
-            args,
+            getattr(fn, "__name__", str(fn)),
         )
         return None
     except Exception as e:
@@ -189,125 +149,212 @@ async def run_versioned_helper(
 
 
 async def list_account_kernels(
-    account_username: str, search: str = "", page: int = 1, page_size: int = 20
+    account_username: str,
+    search: str = "",
+    page: int = 1,
+    page_size: int = 20,
+    owner: str | None = None,
 ) -> dict[str, Any]:
+    from services import kaggle_versioned_output as _vo
+
     page = max(1, int(page or 1))
     page_size = max(1, min(100, int(page_size or 20)))
-    out = await run_versioned_helper(
+    res = await _run_vo(
         account_username,
-        ["list", account_username, search or "", str(page), str(page_size)],
+        _vo.list_kernels,
+        owner or account_username,
+        search or "",
+        page,
+        page_size,
         timeout=120,
     )
-    if not out:
+    if not res:
         return {"kernels": [], "nextPageToken": ""}
+    kernels_raw, next_token = res
+    kernels = list(kernels_raw or [])
+
+    def _time_key(k):
+        return (
+            k.get("lastRunTime")
+            or k.get("last_run_time")
+            or k.get("creationTime")
+            or ""
+        )
+
     try:
-        data = json.loads(out)
-        kernels = data.get("kernels") or []
-
-        def _time_key(k):
-            return (
-                k.get("lastRunTime")
-                or k.get("last_run_time")
-                or k.get("creationTime")
-                or ""
-            )
-
-        try:
-            kernels.sort(key=_time_key, reverse=True)
-        except Exception:
-            pass
-        return {
-            "kernels": kernels,
-            "nextPageToken": data.get("nextPageToken") or "",
-        }
+        kernels.sort(key=_time_key, reverse=True)
     except Exception:
-        return {"kernels": [], "nextPageToken": ""}
+        pass
+    return {"kernels": kernels, "nextPageToken": next_token or ""}
 
 
 async def list_kernel_versions(
     account_username: str, kernel_ref: str, max_versions: int = 20
 ) -> dict[str, Any]:
+    from services import kaggle_versioned_output as _vo
+
     owner, _, slug = kernel_ref.partition("/")
     if not owner or not slug:
         return {"versions": [], "current_version": None}
-    out = await run_versioned_helper(
-        account_username, ["versions", owner, slug, str(max_versions)], timeout=180
+    vers = await _run_vo(
+        account_username, _vo.list_versions, owner, slug, max_versions, timeout=180
     )
-    if not out:
+    if not vers:
         return {"versions": [], "current_version": None}
-    try:
-        data = json.loads(out)
-        return {
-            "versions": data.get("versions") or [],
-            "current_version": data.get("current_version"),
-        }
-    except Exception:
-        return {"versions": [], "current_version": None}
+    return {
+        "versions": vers,
+        "current_version": vers[0]["version"] if vers else None,
+    }
 
 
 async def fetch_version_log(
     account_username: str, kernel_ref: str, version: int
 ) -> str:
+    from services import kaggle_versioned_output as _vo
+
     owner, _, slug = kernel_ref.partition("/")
     if not owner or not slug:
         return ""
-    out = await run_versioned_helper(
-        account_username, ["log", owner, slug, str(version)], timeout=60
+    log = await _run_vo(
+        account_username, _vo.fetch_version_log, owner, slug, int(version), timeout=60
     )
-    if not out:
-        return ""
-    try:
-        return json.loads(out).get("log") or ""
-    except Exception:
-        return ""
+    return log or ""
 
 
 async def get_kernel_current_version(
     account_username: str, kernel_ref: str
 ) -> int | None:
+    from services import kaggle_versioned_output as _vo
+
     owner, _, slug = kernel_ref.partition("/")
     if not owner or not slug:
         return None
-    out = await run_versioned_helper(
-        account_username, ["meta", owner, slug], timeout=120
-    )
-    if not out:
-        return None
-    try:
-        v = json.loads(out).get("current_version_number")
-        return int(v) if v else None
-    except Exception:
-        return None
+    v = await _run_vo(account_username, _vo.current_version, owner, slug, timeout=120)
+    return int(v) if v else None
 
 
 async def download_outputs_of_version(
     account_username: str, kernel_ref: str, version: int, run_id: str
 ) -> Path | None:
+    from services import kaggle_versioned_output as _vo
+
     owner, _, slug = kernel_ref.partition("/")
     if not owner or not slug:
         return None
     target_dir = OUTPUTS_DIR / str(run_id)
     target_dir.mkdir(parents=True, exist_ok=True)
-    out = await run_versioned_helper(
+    res = await _run_vo(
         account_username,
-        ["fetch", owner, slug, str(version), str(target_dir)],
+        _vo.fetch_version_output,
+        owner,
+        slug,
+        int(version),
+        str(target_dir),
     )
-    if not out:
+    if not res:
         return None
-    try:
-        parsed = json.loads(out)
-        saved = parsed.get("saved", [])
-        notes = parsed.get("tried") or []
-        if notes:
-            logger.info(
-                f"Version {version} output probe for {run_id}: " + "; ".join(notes)
-            )
-    except Exception:
-        saved = []
+    saved, notes = res
+    if notes:
+        logger.info(
+            f"Version {version} output probe for {run_id}: " + "; ".join(notes)
+        )
     if not saved:
         return None
     logger.info(f"Version {version} output for {run_id}: saved {len(saved)} file(s).")
     return target_dir
+
+
+async def download_latest_outputs(
+    account_username: str,
+    kernel_ref: str,
+    run_id: str,
+    prefer_version: int | None = None,
+    probe_previous_for_stop: bool = False,
+):
+    diagnostics: list[str] = []
+    attempts: list[int] = []
+    if prefer_version:
+        attempts.append(int(prefer_version))
+    else:
+        current = await get_kernel_current_version(account_username, kernel_ref)
+        if not current:
+            diagnostics.append(
+                "meta: get_kernel_current_version returned None "
+                "(auth failure, network error, or kernel list unavailable)"
+            )
+        else:
+            if probe_previous_for_stop and current > 1:
+                attempts.append(current - 1)
+            attempts.append(current)
+
+    for v in attempts:
+        try:
+            got = await download_outputs_of_version(
+                account_username, kernel_ref, v, run_id
+            )
+        except Exception as e:
+            diagnostics.append(
+                f"version {v}: download_outputs_of_version raised: {e}"
+            )
+            continue
+        if got:
+            return got, v, diagnostics
+        diagnostics.append(
+            f"version {v}: no files published (log-only or empty for every "
+            f"versionLabel tried - helper notes were logged at INFO level)"
+        )
+
+    try:
+        plain = await download_outputs(account_username, kernel_ref, run_id)
+        return plain, None, diagnostics
+    except Exception as e:
+        diagnostics.append(f"plain pull failed: {e}")
+        return None, None, diagnostics
+
+
+async def download_external_outputs(
+    account_username: str, kernel_ref: str, version: int | None = None
+):
+    owner, _, slug = kernel_ref.partition("/")
+    if not owner or not slug:
+        return None, None, ["invalid kernel_ref"]
+    safe_slug = sanitize_slug(slug)
+    safe_owner = (
+        "".join(c for c in owner if c.isalnum() or c in ("-", "_")).lower()
+        or "unknown"
+    )
+    run_id = f"ext_{safe_owner}_{safe_slug}"
+    if version:
+        got = await download_outputs_of_version(
+            account_username, kernel_ref, int(version), run_id
+        )
+        if got:
+            return got, int(version), []
+        try:
+            cur = await get_kernel_current_version(account_username, kernel_ref)
+            if cur is None or int(version) == cur:
+                plain, _, diag = await download_latest_outputs(
+                    account_username, kernel_ref, run_id
+                )
+                if plain:
+                    return (
+                        plain,
+                        int(version),
+                        [
+                            f"version {version}: versioned probe fell back to latest pull"
+                        ]
+                        + diag,
+                    )
+        except Exception:
+            pass
+        return (
+            None,
+            None,
+            [
+                f"version {version}: no files published or recoverable for this specific version snapshot"
+            ],
+        )
+    return await download_latest_outputs(account_username, kernel_ref, run_id)
 
 
 async def download_outputs(account_username: str, kernel_ref: str, run_id: str) -> Path:

@@ -11,6 +11,7 @@ from database import get_run_by_id
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from services import kaggle_outputs
 from services.kaggle_service import KaggleService
 from starlette.background import BackgroundTask
 
@@ -99,7 +100,7 @@ async def pull_files_from_kaggle(run_id: str):
             target_dir,
             used_version,
             diagnostics,
-        ) = await KaggleService.download_latest_outputs(
+        ) = await kaggle_outputs.download_latest_outputs(
             run["account_username"],
             run["kernel_ref"],
             run_id,
@@ -148,7 +149,7 @@ async def download_single_file(run_id: str, filename: str):
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
         try:
-            _target_dir, _ver, _diag = await KaggleService.download_latest_outputs(
+            _target_dir, _ver, _diag = await kaggle_outputs.download_latest_outputs(
                 run["account_username"],
                 run["kernel_ref"],
                 run_id,
@@ -176,7 +177,7 @@ async def download_all_zip(run_id: str):
     target_dir = OUTPUTS_DIR / run_id
     if not target_dir.exists() or not any(target_dir.iterdir()):
         try:
-            pulled, _ver, _diag = await KaggleService.download_latest_outputs(
+            pulled, _ver, _diag = await kaggle_outputs.download_latest_outputs(
                 run["account_username"],
                 run["kernel_ref"],
                 run_id,
@@ -330,7 +331,7 @@ async def merge_selected_files(request: MergeRequest):
                     status_code=404, detail=f"Run {item.run_id} not found"
                 )
             try:
-                pulled, _ver, _diag = await KaggleService.download_latest_outputs(
+                pulled, _ver, _diag = await kaggle_outputs.download_latest_outputs(
                     run["account_username"],
                     run["kernel_ref"],
                     item.run_id,
