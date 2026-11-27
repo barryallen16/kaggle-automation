@@ -11,8 +11,6 @@ from config import (
     is_gpu_accelerator,
 )
 
-# Throttle parallel status checks - 32 runs checking status at once is the same
-# OOM spike as pushes (each `kaggle kernels status` is a CLI process).
 MONITOR_CONCURRENCY = max(1, int(os.getenv("MONITOR_CONCURRENCY", "3")))
 from database import (
     get_active_runs,
@@ -34,8 +32,6 @@ class SessionMonitor:
     _is_running: bool = False
     _monitor_task: asyncio.Task = None
 
-    # Live-quota lookups are expensive CLI calls - cache per account so a busy
-    # dashboard with many shards queries each account at most once per TTL.
     QUOTA_CACHE_TTL_SECONDS = 300
     _quota_cache: ClassVar[dict[str, tuple[float, dict[str, Any]]]] = {}
     CANCELLING_REAP_INTERVAL_SECONDS = 120
@@ -46,16 +42,11 @@ class SessionMonitor:
     def _parse_start(value: str) -> datetime:
         dt = datetime.fromisoformat(value)
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=UTC)  # legacy rows were stored as naive UTC
+            dt = dt.replace(tzinfo=UTC)
         return dt
 
     @classmethod
     async def _gpu_quota_exhausted(cls, account_username: str) -> bool:
-        """True only when Kaggle reports the account's weekly GPU quota FULLY spent.
-
-        Unknown/unparsable quota data returns False - we never force-stop a run
-        based on missing information.
-        """
         now = time.monotonic()
         cached = cls._quota_cache.get(account_username)
         if cached and (now - cached[0]) < cls.QUOTA_CACHE_TTL_SECONDS:
@@ -96,13 +87,10 @@ class SessionMonitor:
                 await cls._monitor_task
             except asyncio.CancelledError:
                 pass
-        for proc in list(kaggle_logs._active_stream_processes.values()):
-            if getattr(proc, "returncode", None) is None:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-        kaggle_logs._active_stream_processes.clear()
+        for rid in set(kaggle_logs._active_stream_tasks) | set(
+            kaggle_logs._active_stream_processes
+        ):
+            kaggle_logs.stop_log_stream(rid)
         logger.info("Background Kaggle Session Monitor stopped.")
 
     @classmethod
@@ -140,13 +128,6 @@ class SessionMonitor:
 
     @classmethod
     async def reap_stale_cancelling_runs(cls, now: datetime | None = None):
-        """Releases 'cancelling' rows once Kaggle actually freed their session slot.
-
-        12h-expired kernels stay in CANCEL_ACKNOWLEDGED permanently on Kaggle
-        even after the slot is released (timeReserved == 0s). Without reaping
-        them here, those runs remain 'Stuck' forever in the UI and block new
-        launches.
-        """
         holding = get_session_holding_runs()
         if not holding:
             return
@@ -157,7 +138,6 @@ class SessionMonitor:
             by_account.setdefault(r["account_username"], []).append(r)
 
         for acc, rows in by_account.items():
-            # Refresh quota once per account to read live gpu.reserved_seconds
             try:
                 quota = await AccountManager.refresh_account_quota(acc)
             except Exception:
@@ -232,7 +212,6 @@ class SessionMonitor:
         except Exception:
             elapsed_seconds = 0
 
-        # 1. Check Kaggle kernel status via CLI
         status_resp = await KaggleService.get_kernel_status(
             account_username, kernel_ref
         )
@@ -240,14 +219,12 @@ class SessionMonitor:
 
         is_trial = bool(run.get("is_trial"))
 
-        # 2. Start ping (sent only in full mode; filtered inside notify)
         if (remote_status == "running" or elapsed_seconds > 60) and run.get(
             "telegram_notified_start"
         ) == 0:
             await TelegramService.notify("started", run)
             update_run_telegram_flag(run_id, "telegram_notified_start", 1)
 
-        # 3. 11h warning only (12h cutoff deleted as redundant; full runs only, never trials)
         if (
             not is_trial
             and elapsed_seconds
@@ -257,10 +234,6 @@ class SessionMonitor:
             await TelegramService.notify("11h", run)
             update_run_telegram_flag(run_id, "telegram_notified_11h", 1)
 
-        # 5. Quota-exhaustion guard: Kaggle keeps reporting the kernel as
-        #    "running" even after the account's weekly GPU quota is fully
-        #    spent (nothing progresses, no completion ever arrives). A run
-        #    must end on script completion, the 12h limit - or quota gone.
         terminal = ("complete", "error", "stopped", "canceled", "cancelling")
         if (
             remote_status not in terminal
@@ -288,13 +261,7 @@ class SessionMonitor:
                 )
             return
 
-        # 6. Handle completion, error, or stop
         if remote_status in TERMINAL_KERNEL_STATUSES:
-            # 'cancelling' is recorded AS ITSELF, not collapsed to "stopped":
-            # the run is finished, but Kaggle still holds its session slot and
-            # get_session_holding_runs() must keep finding it so the account
-            # stops reading as free. Collapsing it here is what let seven
-            # stuck sessions hide behind an "idle" dashboard.
             db_status = (
                 "cancelling"
                 if remote_status == "cancelling"
@@ -310,10 +277,6 @@ class SessionMonitor:
                 status_message=status_resp.get("raw", ""),
                 end_time=now.isoformat(),
             )
-            # No auto-pull here: downloading every finished run's outputs in
-            # the background crashes the server when many shards finish
-            # together. Files stay on Kaggle - pull them manually per run
-            # with "Pull Output Files from Kaggle" when you need them.
             if run.get("telegram_notified_end") == 0:
                 event = (
                     "failed"

@@ -1,9 +1,6 @@
-// Distributed Workload Runner Module
-
 let distUploadedFileContent = null;
 let distUploadedFileName = "notebook.ipynb";
 
-// Renders GPU hours without float noise (17.399999 -> "17.4", 30 -> "30")
 function fmtHours(value) {
   const n = Math.max(0, Number(value) || 0);
   return (Math.round(n * 10) / 10).toLocaleString('en-US', { maximumFractionDigits: 1 });
@@ -18,7 +15,6 @@ function renderDistributedAccountCheckboxes() {
     return;
   }
 
-  // Preserve user selections across re-renders (refreshGlobalData polls every 8s and would otherwise reset to all checked)
   const prevChecked = new Set();
   container.querySelectorAll('input[name="dist-acc"]').forEach(cb => {
     if (cb.checked) prevChecked.add(cb.value);
@@ -30,10 +26,6 @@ function renderDistributedAccountCheckboxes() {
     prevSessions[sel.dataset.acc] = sel.value;
   });
   const globalSessions = document.getElementById('dist-sessions-per-account')?.value || '2';
-  // Quota pool the selected accelerator burns (null = CPU, no quota needed).
-  // Zero-quota accounts stay selectable (CPU runs need no quota) but start
-  // unchecked so auto-partition never silently feeds them GPU shards that
-  // would stall until force-stopped.
   const quotaKind = QuotaAdapter.kindFor(document.getElementById('dist-accelerator')?.value);
 
   container.innerHTML = AppState.accounts.map((acc) => {
@@ -42,14 +34,12 @@ function renderDistributedAccountCheckboxes() {
     const hasQuota = !quotaKind || left > 0;
     const prevSess = prevSessions[acc.username];
     const sessVal = prevSess ? prevSess : globalSessions;
-    // No free slot for the chosen session count = not an option while capped
-    // (a shard there cannot land). CPU needs no slot and is never capped.
     const busy = QuotaAdapter.busy(acc);
     const capped = !!quotaKind && Math.max(0, (parseInt(sessVal, 10) || 1) - busy) <= 0;
     const quotaLabel = !quotaKind
-      ? 'CPU — no quota needed'
+      ? 'CPU - no quota needed'
       : (quotaKind === 'tpu' ? `${fmtHours(q.tpuLeft)}h TPU left` : `${fmtHours(q.gpuLeft)}h GPU left`)
-        + (capped ? ' · capped' : (hasQuota ? '' : ' — CPU only'));
+        + (capped ? ' · capped' : (hasQuota ? '' : ' - CPU only'));
     const wasChecked = prevChecked.has(acc.username);
     const shouldChecked = capped ? false : (isFirstRender ? hasQuota : wasChecked);
     const rowTone = capped
@@ -57,8 +47,8 @@ function renderDistributedAccountCheckboxes() {
       : (hasQuota ? 'border-[#1E1E24] hover:border-purple-500/50' : 'border-amber-800/50 opacity-75');
     const subTone = capped ? 'text-rose-400/90' : (hasQuota ? 'text-slate-400' : 'text-amber-400/90');
     const tip = capped
-      ? `All sessions busy (${busy} active) — stop a run to free a slot`
-      : (hasQuota ? '' : 'No ' + (quotaKind === 'tpu' ? 'TPU' : 'GPU') + ' quota left — fine for CPU runs');
+      ? `All sessions busy (${busy} active) - stop a run to free a slot`
+      : (hasQuota ? '' : 'No ' + (quotaKind === 'tpu' ? 'TPU' : 'GPU') + ' quota left - fine for CPU runs');
     return `
     <div class="flex items-center space-x-2.5 p-2.5 rounded-lg bg-[#070709] border ${rowTone} transition">
       <label class="flex items-center space-x-2.5 flex-1 min-w-0 ${capped ? 'cursor-not-allowed' : 'cursor-pointer'}" title="${tip}">
@@ -82,8 +72,6 @@ function renderDistributedAccountCheckboxes() {
   updateShardsPreview();
 }
 
-// Global "GPU Sessions / Account" applies to every account row at once;
-// individual rows can then be tweaked independently afterwards.
 function applyGlobalSessionsToAll() {
   const globalVal = document.getElementById('dist-sessions-per-account')?.value || '2';
   document.querySelectorAll('.dist-session-select').forEach(sel => { sel.value = globalVal; });
@@ -117,10 +105,6 @@ function updateShardsPreview() {
 
   const sessionsMap = getPerAccountSessions();
 
-  // Mirror of the server-side runner plan: each account gets min(chosen, free
-  // GPU slots) runners. GPU = anything that isn't none/default/cpu.
-  const isGpuAcc = (acc) => busyForAccount(acc);
-
   const runnerList = [];
   const perAccount = [];
   const previewKind = QuotaAdapter.kindFor(document.getElementById('dist-accelerator')?.value);
@@ -132,7 +116,7 @@ function updateShardsPreview() {
     return previewKind === 'tpu' ? q.tpuLeft : q.gpuLeft;
   };
   selectedAccounts.forEach(acc => {
-    const { busy } = isGpuAcc(acc);
+    const { busy } = previewKind ? busyForAccount(acc) : { busy: 0 };
     const chosen = sessionsMap[acc] || 1;
     let slots = Math.max(0, chosen - busy);
     perAccount.push({ acc, chosen, busy, slots, noQuota: previewQuotaLeft(acc) <= 0 });
@@ -157,7 +141,7 @@ function updateShardsPreview() {
     html += `
       <div class="flex items-center justify-between text-[11px] px-1">
         <span>@${esc(p.acc)}: ${p.slots} runner${p.slots !== 1 ? 's' : ''} (${p.chosen}x requested)${quotaTag}</span>
-        <span class="${reduced ? 'text-amber-400' : 'text-purple-400/70'}">${reduced ? `capped - ${p.busy} GPU session(s) already active` : `${p.busy} active`}</span>
+        <span class="${reduced ? 'text-amber-400' : 'text-purple-400/70'}">${reduced ? `capped - ${p.busy} GPU session(s) already active` : (previewKind ? `${p.busy} active` : 'CPU')}</span>
       </div>`;
   });
 
@@ -181,8 +165,7 @@ function updateShardsPreview() {
   refreshIcons();
 }
 
-let distShardingMode = 'auto'; // 'auto' | 'manual'
-let manualShardsList = []; // { id: number, account: string, startIndex: number, endIndex: number }
+let distShardingMode = 'auto'; let manualShardsList = [];
 let manualShardSeq = 0;
 
 function setDistShardingMode(mode) {
@@ -202,8 +185,7 @@ function setDistShardingMode(mode) {
     if (autoPanel) autoPanel.classList.add('hidden');
     if (manualPanel) manualPanel.classList.remove('hidden');
 
-    // If manual shards list is currently empty, prefill from auto partitions as sensible default (UX Law 13)
-    if (manualShardsList.length === 0) {
+        if (manualShardsList.length === 0) {
       populateManualFromAuto(false);
     }
   } else {
@@ -223,7 +205,7 @@ function setDistShardingMode(mode) {
 function addManualShardRow(account, start, end) {
   manualShardSeq++;
   const defaultAcc = account || (AppState.accounts.length > 0 ? AppState.accounts[0].username : '');
-  
+
   let defStart = start;
   let defEnd = end;
   if (defStart === undefined || defStart === null) {
@@ -267,19 +249,10 @@ function populateManualFromAuto(notify = true) {
   const totalItems = parseInt(document.getElementById('dist-total-items')?.value || '10000000', 10);
   const sessionsMap = getPerAccountSessions();
 
-  const isGpuAcc = (acc) => {
-    const info = (AppState.accounts || []).find(a => a.username === acc);
-    if (!info) return { busy: 0 };
-    const gpuRuns = (info.active_runs || []).filter(r => {
-      const a = (r.accelerator || 'none').toLowerCase();
-      return a !== 'none' && a !== 'default' && a !== 'cpu';
-    });
-    return { busy: gpuRuns.length };
-  };
-
+  const kind = QuotaAdapter.kindFor(document.getElementById('dist-accelerator')?.value);
   const runnerList = [];
   selectedAccounts.forEach(acc => {
-    const { busy } = isGpuAcc(acc);
+    const { busy } = kind ? busyForAccount(acc) : { busy: 0 };
     const chosen = sessionsMap[acc] || 1;
     let slots = Math.max(0, chosen - busy);
     for (let i = 0; i < slots; i++) runnerList.push(acc);
@@ -349,26 +322,26 @@ function renderManualShards() {
       const busy = manualKind ? QuotaAdapter.busy(a) : 0;
       const optCapped = !!manualKind && busy >= QuotaAdapter.MAX_SESSIONS;
       const label = !manualKind
-        ? `@${esc(a.username)} (CPU — no quota needed)`
-        : `@${esc(a.username)} (${(manualKind === 'tpu' ? q.tpuLeft : q.gpuLeft).toFixed(1)}h ${manualKind === 'tpu' ? 'TPU' : 'GPU'} left${optCapped ? ' — capped' : (left <= 0 ? ' — empty' : '')})`;
+        ? `@${esc(a.username)} (CPU - no quota needed)`
+        : `@${esc(a.username)} (${(manualKind === 'tpu' ? q.tpuLeft : q.gpuLeft).toFixed(1)}h ${manualKind === 'tpu' ? 'TPU' : 'GPU'} left${optCapped ? ' - capped' : (left <= 0 ? ' - empty' : '')})`;
       return `<option value="${esc(a.username)}" ${a.username === row.account ? 'selected' : ''}${optCapped ? ' disabled' : ''}>${label}</option>`;
     }).join('');
 
     return `
       <div class="flex items-center gap-2 sm:gap-3 p-2.5 rounded-xl bg-[#0D0D12] border ${isInvalid ? 'border-amber-600/60' : 'border-[#1E1E24]'} hover:border-purple-600/50 transition flex-wrap sm:flex-nowrap" data-row-id="${row.id}">
-        <!-- Shard Badge -->
+
         <span class="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-purple-950/80 text-purple-300 font-bold text-xs flex-shrink-0 border border-purple-800/60">
           #${idx + 1}
         </span>
 
-        <!-- Account Selector -->
+
         <div class="w-full sm:w-56 flex-shrink-0">
           <select onchange="updateManualRowAccount(${row.id}, this.value)" class="w-full bg-[#08080B] border border-[#26262E] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-purple-500">
             ${accountOptions}
           </select>
         </div>
 
-        <!-- Range Inputs -->
+
         <div class="flex items-center space-x-2 flex-1 min-w-[200px]">
           <div class="relative flex-1">
             <span class="absolute left-2.5 top-1.5 text-[10px] text-slate-500 uppercase font-mono pointer-events-none">Start</span>
@@ -381,12 +354,12 @@ function renderManualShards() {
           </div>
         </div>
 
-        <!-- Items Badge -->
+
         <div class="text-right w-28 flex-shrink-0">
           <span class="text-xs font-mono font-bold ${isInvalid ? 'text-amber-400' : 'text-cyan-300'}">${isInvalid ? 'Invalid Range' : itemCount.toLocaleString() + ' items'}</span>
         </div>
 
-        <!-- Remove Button -->
+
         <button type="button" onclick="removeManualShardRow(${row.id})" class="p-1.5 text-slate-500 hover:text-rose-400 hover:bg-rose-950/40 rounded-lg transition flex-shrink-0" title="Delete Shard #${idx + 1}">
           <i data-lucide="x" class="w-4 h-4"></i>
         </button>
@@ -417,8 +390,7 @@ function updateManualRowRange(rowId, field, valStr) {
     row.endIndex = Math.max(0, val);
   }
 
-  // Update item badge for this row immediately (Doherty Threshold <400ms)
-  const rowEl = document.querySelector(`[data-row-id="${rowId}"]`);
+    const rowEl = document.querySelector(`[data-row-id="${rowId}"]`);
   if (rowEl) {
     const isInvalid = row.startIndex >= row.endIndex;
     const badge = rowEl.querySelector('.font-mono.font-bold');
@@ -448,8 +420,7 @@ function updateManualShardsSummary() {
 
   const hasInvalidRange = manualShardsList.some(r => r.startIndex >= r.endIndex);
   const hasMissingAccount = manualShardsList.some(r => !r.account);
-  // Advisory: shards aimed at quota-empty accounts stall until force-stopped.
-  const quotaKind = QuotaAdapter.kindFor(document.getElementById('dist-accelerator')?.value);
+    const quotaKind = QuotaAdapter.kindFor(document.getElementById('dist-accelerator')?.value);
   const emptyQuotaShard = quotaKind ? manualShardsList.findIndex((r) => {
     const info = (AppState.accounts || []).find(a => a.username === r.account);
     if (!info) return false;
@@ -457,9 +428,7 @@ function updateManualShardsSummary() {
     return (quotaKind === 'tpu' ? q.tpuLeft : q.gpuLeft) <= 0;
   }) : -1;
 
-  // Hard stop: shards aimed past the 2-session cap cannot land at all
-  // (mirrors the server's assigned + active > 2 reject).
-  const overCapShard = quotaKind ? manualShardsList.findIndex((r) => {
+      const overCapShard = quotaKind ? manualShardsList.findIndex((r) => {
     const assigned = manualShardsList.filter(x => x.account && x.account === r.account).length;
     const info = (AppState.accounts || []).find(a => a.username === r.account);
     const busy = info ? QuotaAdapter.busy(info) : 0;
@@ -472,10 +441,10 @@ function updateManualShardsSummary() {
     statusEl.innerHTML = `<span class="inline-flex items-center text-rose-400 font-semibold"><i data-lucide="alert-circle" class="w-3.5 h-3.5 mr-1"></i>Every shard must have an assigned account</span>`;
   } else if (overCapShard !== -1) {
     const r = manualShardsList[overCapShard];
-    statusEl.innerHTML = `<span class="inline-flex items-center text-rose-400 font-semibold"><i data-lucide="alert-circle" class="w-3.5 h-3.5 mr-1"></i>Shard #${overCapShard + 1} → @${esc(r.account)} exceeds the 2-session cap — free a slot or move it</span>`;
+    statusEl.innerHTML = `<span class="inline-flex items-center text-rose-400 font-semibold"><i data-lucide="alert-circle" class="w-3.5 h-3.5 mr-1"></i>Shard #${overCapShard + 1} → @${esc(r.account)} exceeds the 2-session cap - free a slot or move it</span>`;
   } else if (emptyQuotaShard !== -1) {
     const r = manualShardsList[emptyQuotaShard];
-    statusEl.innerHTML = `<span class="inline-flex items-center text-amber-400 font-semibold"><i data-lucide="alert-triangle" class="w-3.5 h-3.5 mr-1"></i>Shard #${emptyQuotaShard + 1} targets @${esc(r.account)} (0h ${quotaKind === 'tpu' ? 'TPU' : 'GPU'} left) — switch it to CPU or another account</span>`;
+    statusEl.innerHTML = `<span class="inline-flex items-center text-amber-400 font-semibold"><i data-lucide="alert-triangle" class="w-3.5 h-3.5 mr-1"></i>Shard #${emptyQuotaShard + 1} targets @${esc(r.account)} (0h ${quotaKind === 'tpu' ? 'TPU' : 'GPU'} left) - switch it to CPU or another account</span>`;
   } else {
     statusEl.innerHTML = `<span class="inline-flex items-center text-emerald-400 font-semibold"><i data-lucide="check-circle-2" class="w-3.5 h-3.5 mr-1"></i>All ${manualShardsList.length} manual shards valid</span>`;
   }
@@ -488,14 +457,14 @@ function handleDistFileInputChange(e) {
 
   distUploadedFileName = file.name;
   const label = document.getElementById('dist-file-upload-label');
-  if (label) label.innerHTML = `Base Template: <strong class="text-purple-400 font-mono">${file.name}</strong> (${(file.size / 1024).toFixed(1)} KB)`;
+  if (label) label.innerHTML = `Base Template: <strong class="text-purple-400 font-mono">${esc(file.name)}</strong> (${(file.size / 1024).toFixed(1)} KB)`;
 
   const reader = new FileReader();
   reader.onload = (event) => {
     distUploadedFileContent = event.target.result;
     const textarea = document.getElementById('dist-code-textarea');
     if (textarea) textarea.value = distUploadedFileContent;
-    
+
     const titleInput = document.getElementById('dist-title');
     if (titleInput && !titleInput.value) {
       const baseName = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
@@ -516,7 +485,7 @@ async function handleDistributedSubmit(e) {
 
   let code = document.getElementById('dist-code-textarea').value;
   if (!code.trim()) {
-    code = `import time\nimport sys\n\n# Note: SHARD_ID, TOTAL_SHARDS, START_INDEX, END_INDEX are auto-injected above!\nprint(f"[WORKER] Running Shard {SHARD_ID+1} of {TOTAL_SHARDS}")\nprint(f"Range: [{START_INDEX} -> {END_INDEX}]")\n\n# Simulated heavy distributed computation\nfor idx in range(START_INDEX, min(START_INDEX + 50, END_INDEX)):\n    if idx % 10 == 0:\n        print(f"Processed item: {idx}")\n    time.sleep(0.1)\n\nprint("[KAGGLE] Shard processing complete.")\n`;
+    code = `import time\nimport sys\n\nprint(f"[WORKER] Running Shard {SHARD_ID+1} of {TOTAL_SHARDS}")\nprint(f"Range: [{START_INDEX} -> {END_INDEX}]")\n\nfor idx in range(START_INDEX, min(START_INDEX + 50, END_INDEX)):\n    if idx % 10 == 0:\n        print(f"Processed item: {idx}")\n    time.sleep(0.1)\n\nprint("[KAGGLE] Shard processing complete.")\n`;
     distUploadedFileName = "distributed_worker.py";
   }
 
@@ -565,8 +534,7 @@ async function handleDistributedSubmit(e) {
       manual_shards: manualShardsPayload
     };
   } else {
-    // Auto partition mode
-    if (selectedAccounts.length === 0) {
+        if (selectedAccounts.length === 0) {
       showToast('Select at least one Kaggle account for distribution', 'warning');
       return;
     }
@@ -582,8 +550,7 @@ async function handleDistributedSubmit(e) {
       accelerator: accelerator,
       enable_internet: enableInternet,
       is_trial: false,
-      sessions_per_account: getPerAccountSessions(), // per-account overrides {username: 1|2}
-      timeout_seconds: 43200
+      sessions_per_account: getPerAccountSessions(),       timeout_seconds: 43200
     };
   }
 
@@ -596,7 +563,7 @@ async function handleDistributedSubmit(e) {
 
   try {
     showToast(`Distributing workload across ${targetAccountsCount} Kaggle accounts...`, 'info');
-    
+
     const res = await fetch('/api/distributed/launch-json', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -608,12 +575,12 @@ async function handleDistributedSubmit(e) {
       const pushed = data.shards_pushed ?? data.total_shards;
       const total = data.total_shards ?? pushed;
       if (data.status === 'partial' || pushed !== total) {
-        showToast(`Partial launch: ${pushed}/${total} shards dispatched — see Recent Workloads for failed shards.`, 'warning');
+        showToast(`Partial launch: ${pushed}/${total} shards dispatched - see Recent Workloads for failed shards.`, 'warning');
       } else {
         showToast(`Workload successfully partitioned & launched across ${total} shard${total !== 1 ? 's' : ''}!`, 'success');
       }
       await refreshGlobalData();
-      
+
       setTimeout(() => {
         switchTab('history');
       }, 600);
@@ -627,10 +594,9 @@ async function handleDistributedSubmit(e) {
   }
 }
 
-// Hook into tab activation
 const originalSwitchTab = window.switchTab;
-window.switchTab = function(tabId) {
-  if (originalSwitchTab) originalSwitchTab(tabId);
+window.switchTab = function(tabId, push = true) {
+  if (originalSwitchTab) originalSwitchTab(tabId, push);
   if (tabId === 'distributed') {
     renderDistributedAccountCheckboxes();
     loadWorkloadsData();
@@ -640,14 +606,10 @@ window.switchTab = function(tabId) {
 function updateQuotaHint() {
   const hint = document.getElementById('dist-quota-hint');
   if (!hint) return;
-  // Warn whenever ANY selected account is set to 2 sessions (global or override)
-  const anyDouble = Object.values(getPerAccountSessions()).some(v => v >= 2);
+    const anyDouble = Object.values(getPerAccountSessions()).some(v => v >= 2);
   hint.classList.toggle('hidden', !anyDouble);
 }
 
-// ------------------------------------------------------------------
-// Recent Workloads panel + Stop-Workload
-// ------------------------------------------------------------------
 async function loadWorkloadsData() {
   const tbody = document.getElementById('workloads-table-body');
   if (!tbody) return;
@@ -707,8 +669,7 @@ async function stopWorkload(workloadId) {
   }
   if (!confirm('Stop ALL active shards of this workload on Kaggle?')) return;
   markWorkloadStopping(workloadId, true);
-  await loadWorkloadsData(); // flip the Stop All row to its busy state immediately
-  showToast('Stopping all workload shards...', 'warning');
+  await loadWorkloadsData();   showToast('Stopping all workload shards...', 'warning');
   try {
     const res = await fetch(`/api/distributed/${workloadId}/stop`, { method: 'POST' });
     const data = await res.json();

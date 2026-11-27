@@ -105,7 +105,7 @@ function renderHistory() {
       cancelling: '<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-950 text-amber-300 border border-amber-800" title="CANCEL_ACKNOWLEDGED - still holds a GPU session slot until the kernel is deleted">CANCELLING</span>'
     };
 
-    const badge = statusBadges[r.status] || `<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-300">${r.status.toUpperCase()}</span>`;
+    const badge = statusBadges[r.status] || `<span class="px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-800 text-slate-300">${esc(String(r.status || 'unknown').toUpperCase())}</span>`;
 
     const stopButton = (r.status === 'running' || r.status === 'queued') 
       ? stoppingRunButtonHtml(r.id, 'px-2.5 py-1 rounded text-xs font-semibold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 border border-rose-500/30 transition inline-flex items-center space-x-1')

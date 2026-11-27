@@ -356,12 +356,37 @@ function renderKernelsFiles(data) {
   if (!tbody) return;
   const local = data.local_files || [];
   const remote = data.remote_files || [];
-  // Prefer local if exists, else show remote as hint
-  const rows = (local.length ? local : remote.map(r => {
-    const n = String(r.name || r.fileName || r.file_name || r.filename || '').trim();
-    if (!n) return null;
-    return { name: n, size: r.size || '—', rel_path: n, isRemote: true };
-  })).filter(Boolean).filter(f => String(f.name || f.fileName || f.rel_path || '').trim());
+  const byKey = new Map();
+  const rows = [];
+  remote.forEach(r => {
+    const rel = String(r.rel_path || r.name || r.fileName || r.file_name || r.filename || '').trim();
+    if (!rel || byKey.has(rel)) return;
+    const leaf = rel.split('/').pop();
+    const row = { name: leaf, size: r.size || '-', rel_path: rel, isRemote: true };
+    byKey.set(rel, row);
+    rows.push(row);
+  });
+  local.forEach(l => {
+    const n = String(l.name || l.fileName || '').trim();
+    if (!n) return;
+    const lRel = String(l.rel_path || n).trim();
+    const byRel = byKey.get(lRel);
+    const byLeaf = byKey.get(n);
+    const existing = byRel || (byLeaf && byLeaf.isRemote ? byLeaf : null);
+    if (existing) {
+      existing.isRemote = false;
+      existing.size = l.size;
+      existing.rel_path = lRel;
+      if (lRel !== n) {
+        byKey.delete(n);
+        byKey.set(lRel, existing);
+      }
+    } else {
+      const row = { name: n, size: l.size, rel_path: lRel, isRemote: false };
+      byKey.set(lRel, row);
+      rows.push(row);
+    }
+  });
   if (!rows.length) {
     tbody.innerHTML = `<tr><td colspan="3" class="px-3 py-6 text-center text-slate-500">No output files yet. If it just finished, click Pull.</td></tr>`;
     return;
@@ -370,12 +395,13 @@ function renderKernelsFiles(data) {
   tbody.innerHTML = rows.map(f => {
     const name = String(f.name || f.fileName || f.rel_path || '').trim();
     if (!name) return '';
-    const size = f.size != null ? (typeof f.size === 'number' ? fmt(f.size) : esc(String(f.size))) : '—';
+    const filePath = String(f.rel_path || name);
+    const size = f.size != null ? (typeof f.size === 'number' ? fmt(f.size) : esc(String(f.size))) : '-';
     const isRemote = !!f.isRemote;
-    const dlUrl = `/api/kernels/files/download/${encodeURIComponent(name)}?account=${encodeURIComponent(kernelsState.selected.account)}&kernel_ref=${encodeURIComponent(kernelsState.selected.ref)}`;
+    const dlUrl = `/api/kernels/files/download/${encodeURIComponent(filePath)}?account=${encodeURIComponent(kernelsState.selected.account)}&kernel_ref=${encodeURIComponent(kernelsState.selected.ref)}`;
     return `
       <tr class="hover:bg-slate-800/30">
-        <td class="px-3 py-2 font-mono text-xs text-white truncate max-w-[200px]">${esc(name)} ${isRemote ? '<span class="text-[9px] px-1 py-0.5 rounded bg-sky-900/50 text-sky-300 border border-sky-800">REMOTE</span>' : '<span class="text-[9px] px-1 py-0.5 rounded bg-emerald-900/50 text-emerald-300 border border-emerald-800">LOCAL</span>'}</td>
+        <td class="px-3 py-2 font-mono text-xs text-white truncate max-w-[200px]" title="${esc(filePath)}">${esc(filePath)} ${isRemote ? '<span class="text-[9px] px-1 py-0.5 rounded bg-sky-900/50 text-sky-300 border border-sky-800">REMOTE</span>' : '<span class="text-[9px] px-1 py-0.5 rounded bg-emerald-900/50 text-emerald-300 border border-emerald-800">LOCAL</span>'}</td>
         <td class="px-3 py-2 text-xs font-mono text-slate-400">${size}</td>
         <td class="px-3 py-2 text-right">
           ${isRemote ? '<span class="text-[10px] text-slate-500">pull to download</span>' : `<a href="${dlUrl}" download class="inline-flex items-center px-2 py-1 rounded text-xs bg-cyan-600/20 text-cyan-300 hover:bg-cyan-600/30 border border-cyan-700/50">Download</a>`}

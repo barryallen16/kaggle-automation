@@ -113,6 +113,9 @@ class KaggleService:
     _active_stream_processes: ClassVar[dict[str, asyncio.subprocess.Process]] = (
         kaggle_logs._active_stream_processes
     )
+    _active_stream_tasks: ClassVar[dict[str, asyncio.Task]] = (
+        kaggle_logs._active_stream_tasks
+    )
     _log_subscribers: ClassVar[dict[str, list[asyncio.Queue]]] = (
         kaggle_logs._log_subscribers
     )
@@ -930,12 +933,7 @@ class KaggleService:
         title = run["title"]
 
         # Kill local follow stream process if active
-        if run_id in cls._active_stream_processes:
-            try:
-                cls._active_stream_processes[run_id].kill()
-            except Exception:
-                pass
-            del cls._active_stream_processes[run_id]
+        kaggle_logs.stop_log_stream(run_id)
 
         # CRITICAL: snapshot outputs around stopping. The stop mechanism pushes
         # a new (stub) VERSION, and Kaggle publishes output per VERSION - once

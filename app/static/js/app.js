@@ -460,7 +460,9 @@ async function refreshGlobalData() {
       if (kar) kar.innerText = AppState.activeRuns.length;
       const ktr = document.getElementById('kpi-total-runs');
       if (ktr) ktr.innerText = runsRes.total ?? AppState.allRuns.length;
-      const gpuH = totalGpuHours(AppState.allRuns);
+      const gpuH = typeof runsRes.total_gpu_hours === 'number'
+        ? runsRes.total_gpu_hours
+        : totalGpuHours(AppState.allRuns);
       const kgh = document.getElementById('kpi-gpu-hours');
       if (kgh) kgh.innerText = `${gpuH.toFixed(1)} GPU-hours`;
       const ksw = document.getElementById('kpi-single-weeks');

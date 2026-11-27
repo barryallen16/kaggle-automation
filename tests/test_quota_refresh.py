@@ -1,13 +1,3 @@
-"""Regression tests for quota-refresh resource safety.
-
-With many Kaggle accounts, 'Refresh Quotas' used to spawn one kaggle CLI
-process PER ACCOUNT simultaneously - the RAM spike OOM-killed the server.
-These tests prove:
-  1. Quota lookups never exceed the global concurrency cap.
-  2. Overlapping refresh-all calls share a single batch (single-flight).
-  3. A hung lookup surfaces as a graceful error dict, not a crash.
-"""
-
 import os
 import shutil
 import sys
@@ -33,7 +23,6 @@ def tearDownModule():
 
 
 def _fresh_am():
-    """Fresh config + database + AccountManager bound to the temp data dir."""
     import importlib
 
     import config as cfg
@@ -76,7 +65,7 @@ class TestQuotaRefreshSafety(unittest.TestCase):
             AM._fetch_quota_unthrottled = staticmethod(fake_lookup)
             asyncio.run(AM.refresh_all_quotas())
 
-            self.assertEqual(state["max_active"], AM.QUOTA_CONCURRENCY_LIMIT)  # capped exactly at the limit
+            self.assertEqual(state["max_active"], AM.QUOTA_CONCURRENCY_LIMIT)
         finally:
             os.environ.pop("QUOTA_REFRESH_CONCURRENCY", None)
 
@@ -84,24 +73,31 @@ class TestQuotaRefreshSafety(unittest.TestCase):
         _cfg, db, AM = _fresh_am()
         _seed_accounts(db, 4)
 
-        batches = {"peak": 0}
+        batches = {"calls": 0, "active": 0, "peak": 0}
 
         async def fake_lookup(username):
-            await asyncio.sleep(0.15)  # long enough for caller 2 to overlap
-            return {"gpu": {"used": 0, "limit": 30}}
+            batches["calls"] += 1
+            batches["active"] += 1
+            batches["peak"] = max(batches["peak"], batches["active"])
+            try:
+                await asyncio.sleep(0.15)
+                return {"gpu": {"used": 0, "limit": 30}}
+            finally:
+                batches["active"] -= 1
 
         AM._fetch_quota_unthrottled = staticmethod(fake_lookup)
 
         async def scenario():
             t1 = asyncio.create_task(AM.refresh_all_quotas())
-            await asyncio.sleep(0.03)  # let run 1 acquire the lock & start
+            await asyncio.sleep(0.03)
             t2 = asyncio.create_task(AM.refresh_all_quotas())
-            await asyncio.gather(t1, t2)
+            return await asyncio.gather(t1, t2)
 
-        asyncio.run(scenario())
-        # Both callers satisfied; the underlying lookup batch never stacked a
-        # second wave on top of the first (would peak at 8 with 2x4 accounts).
-        self.assertLessEqual(batches["peak"], 4)
+        res1, res2 = asyncio.run(scenario())
+        self.assertEqual(batches["calls"], 4)
+        self.assertLessEqual(batches["peak"], AM.QUOTA_CONCURRENCY_LIMIT)
+        self.assertEqual(len(res1), 4)
+        self.assertEqual(len(res2), 4)
 
     def test_3_timeout_returns_graceful_error(self):
         _cfg, _db, AM = _fresh_am()
@@ -120,7 +116,27 @@ class TestQuotaRefreshSafety(unittest.TestCase):
         result = asyncio.run(scenario())
         self.assertIn("error", result)
         self.assertIn("timed out", result["error"])
-        self.assertIn("gpu", result)  # default shape preserved for the UI
+        self.assertIn("gpu", result)
+
+    def test_4_lock_and_semaphore_isolated_across_event_loops(self):
+        _cfg, _db, AM = _fresh_am()
+
+        async def use_lock_only():
+            async with AM._get_lock():
+                return AM._lock_loop_id
+
+        async def use_both():
+            async with AM._get_lock(), AM._get_quota_semaphore():
+                return AM._lock_loop_id, AM._quota_semaphore_loop_id
+
+        loop1_lock_id, loop1_sem_id = asyncio.run(use_both())
+        loop2_lock_id = asyncio.run(use_lock_only())
+
+        self.assertEqual(loop1_lock_id, loop1_sem_id)
+        self.assertEqual(AM._quota_semaphore_loop_id, loop1_sem_id)
+        self.assertEqual(AM._lock_loop_id, loop2_lock_id)
+        self.assertIsNotNone(loop2_lock_id)
+
 
 
 import asyncio

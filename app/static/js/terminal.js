@@ -158,13 +158,27 @@ async function fetchRemoteLogs() {
 
   showToast('Fetching complete logs directly from Kaggle CLI...', 'info');
   try {
-    const res = await fetch(`/api/runs/${currentTerminalRunId}/logs?fetch_remote=true`);
+    const res = await fetch(`/api/runs/${encodeURIComponent(currentTerminalRunId)}/logs?fetch_remote=true`);
+    if (res.status === 401) { window.location.href = '/login'; return; }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const logs = await res.text();
-    document.getElementById('terminal-body').innerText = logs;
+    const terminalBody = document.getElementById('terminal-body');
+    if (terminalBody) terminalBody.textContent = logs;
     showToast('Fetched latest logs from Kaggle', 'success');
   } catch (err) {
     showToast('Failed to fetch remote logs: ' + err.message, 'error');
   }
+}
+
+function goToFilesForTerminalRun() {
+  if (!currentTerminalRunId) {
+    showToast('Select a run first to inspect output files', 'warning');
+    return;
+  }
+  if (typeof inspectFilesForRun === 'function') {
+    inspectFilesForRun(currentTerminalRunId);
+  }
+  switchTab('files');
 }
 
 function downloadCurrentLogFile() {
@@ -172,10 +186,10 @@ function downloadCurrentLogFile() {
     showToast('Select a run first to download logs', 'warning');
     return;
   }
-  window.open(`/api/runs/${currentTerminalRunId}/logs/download`, '_blank');
+  window.open(`/api/runs/${encodeURIComponent(currentTerminalRunId)}/logs/download`, '_blank');
 }
 
 function clearTerminal() {
   const terminalBody = document.getElementById('terminal-body');
-  if (terminalBody) terminalBody.innerText = '';
+  if (terminalBody) terminalBody.textContent = '';
 }

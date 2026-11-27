@@ -47,10 +47,10 @@ async function inspectFilesForRun(runId) {
     if (data.success) {
       renderFilesTable(data);
     } else {
-      tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-rose-400">Failed to load files: ${data.detail || 'Unknown error'}</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-rose-400">Failed to load files: ${esc(data.detail || 'Unknown error')}</td></tr>`;
     }
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-rose-400">Error: ${err.message}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="5" class="px-6 py-8 text-center text-rose-400">Error: ${esc(err.message)}</td></tr>`;
   }
 }
 
@@ -64,32 +64,48 @@ function renderFilesTable(data) {
   const localFiles = data.local_files || [];
 
   const combined = [];
-  const seen = new Set();
+  const byName = new Map();
 
   remoteFiles.forEach(rf => {
     const raw = rf.name || rf.fileName || rf.file_name || rf.filename || '';
     const name = String(raw || '').trim();
-    if (!name) return;
-    seen.add(name);
-    combined.push({
+    if (!name || byName.has(name)) return;
+    const row = {
       name,
       size: rf.size || 'N/A',
       sizeBytes: Number(rf.size) || 0,
       isLocal: false
-    });
+    };
+    byName.set(name, row);
+    combined.push(row);
   });
 
   localFiles.forEach(lf => {
     const lname = String(lf.name || '').trim();
     if (!lname) return;
-    if (!seen.has(lname)) {
-      combined.push({
+    const lRel = String(lf.rel_path || lname).trim();
+    const byRel = byName.get(lRel);
+    const byLeaf = byName.get(lname);
+    const existing = byRel || (byLeaf && !byLeaf.isLocal ? byLeaf : null);
+    if (existing) {
+      existing.isLocal = true;
+      existing.relPath = lRel;
+      existing.size = formatBytes(lf.size);
+      existing.sizeBytes = lf.size;
+      if (lRel !== lname) {
+        byName.delete(lname);
+        byName.set(lRel, existing);
+      }
+    } else {
+      const row = {
         name: lname,
-        relPath: lf.rel_path,
+        relPath: lRel,
         size: formatBytes(lf.size),
         sizeBytes: lf.size,
         isLocal: true
-      });
+      };
+      byName.set(lRel, row);
+      combined.push(row);
     }
   });
   currentFileRows = combined;
@@ -109,36 +125,37 @@ function renderFilesTable(data) {
 
   tbody.innerHTML = combined.map(f => {
     const safeName = String(f.name || '');
-    const ext = safeName.includes('.') ? safeName.split('.').pop().toUpperCase() : '—';
-    const checked = isInCart(currentFilesRunId, f.name);
+    const fileKey = f.relPath || f.name;
+    const ext = safeName.includes('.') ? esc(safeName.split('.').pop().toUpperCase()) : '-';
+    const checked = isInCart(currentFilesRunId, fileKey);
     return `
       <tr class="hover:bg-slate-800/30 transition">
         <td class="px-4 py-3.5 align-middle">
-          <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleCartFile('${esc(currentFilesRunId)}', '${esc(f.name)}', this.checked)"
+          <input type="checkbox" ${checked ? 'checked' : ''} data-run-id="${esc(currentFilesRunId)}" data-file-key="${esc(fileKey)}" onchange="toggleCartFile(this.dataset.runId, this.dataset.fileKey, this.checked)"
                  class="w-4 h-4 text-emerald-500 rounded bg-slate-900 border-slate-700 align-middle cursor-pointer"
                  title="Add to Merge Cart">
         </td>
         <td class="px-6 py-3.5 font-mono text-xs font-semibold text-white">
           <div class="flex items-center space-x-2 min-w-0">
             <i data-lucide="file" class="w-4 h-4 text-amber-400 flex-shrink-0"></i>
-            <span class="truncate">${esc(f.name)}</span>
+            <span class="truncate" title="${esc(fileKey)}">${esc(fileKey)}</span>
             ${!f.isLocal
               ? '<span class="text-[9px] px-1.5 py-0.5 rounded bg-sky-900/60 text-sky-300 border border-sky-800 flex-shrink-0" title="Listed on Kaggle - not downloaded yet">REMOTE</span>'
               : '<span class="text-[9px] px-1.5 py-0.5 rounded bg-emerald-900/60 text-emerald-300 border border-emerald-800 flex-shrink-0" title="Stored on this server (pulled manually with Pull Output Files, or snapshotted at stop)">LOCAL</span>'}
           </div>
         </td>
-        <td class="px-6 py-3.5 text-xs text-slate-400 font-mono whitespace-nowrap">${f.size}</td>
+        <td class="px-6 py-3.5 text-xs text-slate-400 font-mono whitespace-nowrap">${esc(String(f.size))}</td>
         <td class="px-6 py-3.5">
           <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700">${ext}</span>
         </td>
         <td class="px-6 py-3.5">
           <div class="flex items-center justify-end gap-2 flex-wrap">
-            <a href="/api/runs/${currentFilesRunId}/files/download/${encodeURIComponent(f.name)}" download class="inline-flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-semibold bg-cyan-600/20 text-cyan-400 hover:bg-cyan-600/30 transition">
+            <a href="/api/runs/${encodeURIComponent(currentFilesRunId)}/files/download/${encodeURIComponent(fileKey)}" download class="inline-flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-semibold bg-cyan-600/20 text-cyan-400 hover:bg-cyan-600/30 transition">
               <i data-lucide="download" class="w-3.5 h-3.5"></i>
               <span>Download</span>
             </a>
             ${f.isLocal ? `
-            <button onclick="deleteSingleOutputFile('${esc(f.name)}')" title="Delete from server storage"
+            <button data-file-key="${esc(fileKey)}" onclick="deleteSingleOutputFile(this.dataset.fileKey)" title="Delete from server storage"
                     class="inline-flex items-center space-x-1 px-2.5 py-1 rounded text-xs font-semibold bg-rose-600/20 text-rose-400 hover:bg-rose-600/40 transition">
               <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
               <span>Delete</span>
@@ -296,7 +313,7 @@ function removeFromCart(runId, filename, rerenderRows = true) {
 
 function toggleSelectAllFiles(checked) {
   currentFileRows.forEach(f => {
-    if (currentFilesRunId) toggleCartFile(currentFilesRunId, f.name, checked);
+    if (currentFilesRunId) toggleCartFile(currentFilesRunId, f.relPath || f.name, checked);
   });
 }
 
@@ -329,7 +346,7 @@ function renderMergeCart() {
         <p class="text-xs font-mono font-semibold text-white truncate">${esc(item.filename)}</p>
         <p class="text-[10px] text-slate-400 truncate">${esc(item.label)}</p>
       </div>
-      <button onclick="removeFromCart('${esc(item.run_id)}', '${esc(item.filename)}')" class="text-slate-500 hover:text-rose-400 transition flex-shrink-0 p-1">
+      <button data-run-id="${esc(item.run_id)}" data-filename="${esc(item.filename)}" onclick="removeFromCart(this.dataset.runId, this.dataset.filename)" class="text-slate-500 hover:text-rose-400 transition flex-shrink-0 p-1">
         <i data-lucide="x" class="w-3.5 h-3.5"></i>
       </button>
     </div>

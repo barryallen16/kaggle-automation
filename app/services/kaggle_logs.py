@@ -1,11 +1,3 @@
-"""Live log-stream hub (extracted from KaggleService).
-
-Owns the follower-process registry and subscriber queues: one seam for
-starting, ensuring, and broadcasting live kernel logs. Status checks go
-through kaggle_status directly; the KaggleService facade keeps aliases so
-existing callers and test patches keep working.
-"""
-
 import asyncio
 import logging
 from pathlib import Path
@@ -15,28 +7,25 @@ from config import get_kaggle_cli_path
 from database import utcnow_iso
 
 from services.account_manager import AccountManager
-from services.kaggle_kernel_identity import TERMINAL_KERNEL_STATUSES
+from services.kaggle_kernel_identity import (
+    TERMINAL_KERNEL_STATUSES,
+    strip_kaggle_cli_warnings,
+)
 from services.kaggle_status import get_kernel_status
 
 logger = logging.getLogger("kaggle_logs")
 
-# Active log stream processes: run_id -> asyncio.subprocess.Process
 _active_stream_processes: dict[str, asyncio.subprocess.Process] = {}
-# Subscribers for live log broadcasting: run_id -> List[asyncio.Queue]
+_active_stream_tasks: dict[str, asyncio.Task] = {}
 _log_subscribers: dict[str, list[asyncio.Queue]] = {}
 
 
 async def start_background_log_stream(
     run_id: str, account_username: str, kernel_ref: str, log_file: Path
 ):
-    """Follows kernel logs and survives follower failures until the run ends.
-
-    Two failure modes used to kill logging silently:
-    1. stderr was piped but never drained - a full OS pipe buffer blocks the
-       kaggle CLI mid-write and stdout falls silent forever. Now drained.
-    2. A dead follower (API throttle/error) ended streaming permanently.
-       Now restarted with backoff until the kernel reaches a terminal state.
-    """
+    task = asyncio.current_task()
+    if task is not None:
+        _active_stream_tasks[run_id] = task
     RETRY_DELAYS = [3, 5, 10, 20, 30, 60]
     failure_count = 0
 
@@ -76,7 +65,6 @@ async def start_background_log_stream(
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     env=env,
-                    # 64KB default kills the follower on long tqdm bars.
                     limit=8 * 1024 * 1024,
                 )
                 _active_stream_processes[run_id] = proc
@@ -96,8 +84,13 @@ async def start_background_log_stream(
                     line = await proc.stdout.readline()
                     if not line:
                         break
+                    text = strip_kaggle_cli_warnings(
+                        line.decode("utf-8", errors="ignore")
+                    )
+                    if not text:
+                        continue
                     produced = True
-                    append_and_broadcast(line.decode("utf-8", errors="ignore"))
+                    append_and_broadcast(text)
                 rc = await proc.wait()
             finally:
                 if drainer:
@@ -110,9 +103,6 @@ async def start_background_log_stream(
                     except Exception:
                         pass
 
-            # Terminal kernel state? Nothing more will ever arrive. A kernel
-            # stuck in 'cancelling' will never log again either, so end the
-            # follower rather than hold a subprocess (and its slot) forever.
             status_resp = await get_kernel_status(account_username, kernel_ref)
             status = status_resp.get("status", "unknown")
             if status in TERMINAL_KERNEL_STATUSES:
@@ -136,31 +126,43 @@ async def start_background_log_stream(
         append_and_broadcast(f"\n[STREAM] terminated with error: {e}\n")
     finally:
         _active_stream_processes.pop(run_id, None)
+        if task is None or _active_stream_tasks.get(run_id) is task:
+            _active_stream_tasks.pop(run_id, None)
+
+
+def stop_log_stream(run_id: str) -> None:
+    task = _active_stream_tasks.pop(run_id, None)
+    if task is not None and not task.done():
+        task.cancel()
+    proc = _active_stream_processes.pop(run_id, None)
+    if proc is not None and getattr(proc, "returncode", None) is None:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
 
 def ensure_log_stream(run: dict[str, Any]) -> None:
-    """(Re)starts the background log follower for an active run if none is alive.
-
-    Self-healing for streamers lost to server restarts or crashes: opening
-    the Logs view (or the WebSocket) on an active run revives the producer
-    without re-pushing anything.
-    """
     run_id = run.get("id")
     if not run_id:
         return
+    existing_task = _active_stream_tasks.get(run_id)
+    if existing_task is not None and not existing_task.done():
+        return
     existing = _active_stream_processes.get(run_id)
     if existing is not None and existing.returncode is None:
-        return  # a follower is already alive
+        return
     if run.get("status") not in ("queued", "running"):
-        return  # finished runs have no live output
+        return
     log_file = run.get("log_file")
     if not log_file:
         return
-    asyncio.create_task(
+    task = asyncio.create_task(
         start_background_log_stream(
             run_id, run["account_username"], run["kernel_ref"], Path(log_file)
         )
     )
+    _active_stream_tasks[run_id] = task
 
 
 def register_log_subscriber(run_id: str) -> asyncio.Queue:
